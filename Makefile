@@ -1,8 +1,21 @@
+BINARY    := pika
+MAIN_FILE := cmd/$(BINARY)/main.go
+
+BUILD_DATE := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
+BUILD_COMMIT := $(shell git rev-parse --short HEAD)
+VERSION := $(or $(IMAGE_TAG),$(shell git describe --tags --first-parent --match "v*" 2> /dev/null || echo v0.0.0))
+PKG := $(shell go list -m | head -n 1)
+
 .DEFAULT_GOAL := help
+
+.PHONY: build
+build: CGO_ENABLED ?= 0
+build: ## Build the binary
+	go build -trimpath -ldflags="-s -w -X $(PKG)/internal/config.version=$(VERSION) -X main.commit=$(BUILD_COMMIT) -X main.date=$(BUILD_DATE)" -o bin/$(BINARY_NAME) $(MAIN_FILE)
 
 .PHONY: lint
 lint: ## Lint Go files
-	@GOPATH="$(shell dirname $(PWD))" golangci-lint run ./...
+	@golangci-lint run ./...
 
 .PHONY: test
 test: ## Run unit tests

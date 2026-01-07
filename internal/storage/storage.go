@@ -1,14 +1,26 @@
 package storage
 
-type Storage interface {
-	// Get retrieves the value for the given key.
-	Get(key string) ([]byte, error)
-	// Set stores the key-value pair.
-	Set(key string, value []byte) error
-}
+import (
+	"context"
+	"errors"
+
+	"github.com/rakunlabs/pika/internal/service"
+	"github.com/rakunlabs/pika/internal/storage/sqlite"
+)
+
+var (
+	ErrNoStorageBackend = errors.New("no storage backend configured")
+)
 
 type Config struct {
-	Name  string `cfg:"name"`
-	Type  string `db:"type"`
-	Value []byte `db:"value"`
+	SQLite *sqlite.Config `cfg:"sqlite"`
+}
+
+func New(ctx context.Context, cfg *Config) (service.Storage, error) {
+	switch {
+	case cfg.SQLite != nil:
+		return sqlite.New(ctx, cfg.SQLite)
+	default:
+		return nil, ErrNoStorageBackend
+	}
 }
