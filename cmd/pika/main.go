@@ -1,4 +1,4 @@
-package pika
+package main
 
 import (
 	"context"
@@ -42,12 +42,16 @@ func run(ctx context.Context) error {
 	defer collector.Shutdown()
 
 	// //////////////////////////////////////
-	// Initialize service
+	// Initialize storage
 	store, err := storage.New(ctx, &cfg.Storage)
 	if err != nil {
 		return fmt.Errorf("init storage; %w", err)
 	}
 
+	defer store.Close()
+
+	// //////////////////////////////////////
+	// Initialize service
 	svc := service.New(store)
 
 	// //////////////////////////////////////

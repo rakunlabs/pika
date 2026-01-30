@@ -21,6 +21,13 @@ type Config struct {
 	MaxIdleConns    *int           `cfg:"max_idle_conns"`
 	MaxOpenConns    *int           `cfg:"max_open_conns"`
 	ConnMaxIdleTime *time.Duration `cfg:"conn_max_idle_time"`
+
+	Migration Migration `cfg:"migration"`
+}
+
+type Migration struct {
+	Enabled bool   `cfg:"enabled" default:"true"`
+	DSN     string `cfg:"dsn"`
 }
 
 func (c *Config) GetConfig() Config {
@@ -54,6 +61,17 @@ type Sqlite struct {
 func New(ctx context.Context, cfg *Config) (*Sqlite, error) {
 	c := cfg.GetConfig()
 
+	// migration
+	if cfg.Migration.Enabled {
+		migCfg := cfg.Migration
+		if migCfg.DSN == "" {
+			migCfg.DSN = c.DSN
+		}
+		if err := migration(ctx, migCfg.DSN); err != nil {
+			return nil, err
+		}
+	}
+
 	db, err := sql.Open("sqlite", c.DSN)
 	if err != nil {
 		return nil, err
@@ -83,6 +101,10 @@ func (m *Sqlite) Get(key string) ([]byte, error) {
 }
 
 func (m *Sqlite) Set(key string, value []byte) error {
+	return nil
+}
+
+func (m *Sqlite) Delete(key string) error {
 	return nil
 }
 

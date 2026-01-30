@@ -19,6 +19,10 @@ build-frontend: ## Build the frontend assets
 	@rm -rf internal/server/dist && mv _ui/dist internal/server/dist
 	@echo > internal/server/dist/.gitkeep
 
+.PHONY: run
+run: ## Run the application
+	go run $(MAIN_FILE)
+
 .PHONY: lint
 lint: ## Lint Go files
 	@golangci-lint run ./...

@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS pika (
+    key TEXT NOT NULL PRIMARY KEY,
+    value BLOB NOT NULL
+);
