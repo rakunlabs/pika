@@ -10,7 +10,7 @@ import (
 
 var (
 	DefaultDSN             = "file:pika.db?cache=shared"
-	DefaultMaxIdleConns    = 2
+	DefaultMaxIdleConns    = 3
 	DefaultMaxOpenConns    = 5
 	DefaultConnMaxIdleTime = 15 * time.Minute
 )
@@ -23,17 +23,38 @@ type Config struct {
 	ConnMaxIdleTime *time.Duration `cfg:"conn_max_idle_time"`
 }
 
+func (c *Config) GetConfig() Config {
+	cfg := Config{
+		DSN:             DefaultDSN,
+		MaxIdleConns:    &DefaultMaxIdleConns,
+		MaxOpenConns:    &DefaultMaxOpenConns,
+		ConnMaxIdleTime: &DefaultConnMaxIdleTime,
+	}
+
+	if c.DSN != "" {
+		cfg.DSN = c.DSN
+	}
+	if c.MaxIdleConns != nil {
+		cfg.MaxIdleConns = c.MaxIdleConns
+	}
+	if c.MaxOpenConns != nil {
+		cfg.MaxOpenConns = c.MaxOpenConns
+	}
+	if c.ConnMaxIdleTime != nil {
+		cfg.ConnMaxIdleTime = c.ConnMaxIdleTime
+	}
+
+	return cfg
+}
+
 type Sqlite struct {
 	db *sql.DB
 }
 
 func New(ctx context.Context, cfg *Config) (*Sqlite, error) {
-	dsn := DefaultDSN
-	if cfg.DSN != "" {
-		dsn = cfg.DSN
-	}
+	c := cfg.GetConfig()
 
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite", c.DSN)
 	if err != nil {
 		return nil, err
 	}
@@ -42,22 +63,16 @@ func New(ctx context.Context, cfg *Config) (*Sqlite, error) {
 		return nil, err
 	}
 
-	if cfg.MaxIdleConns != nil {
-		db.SetMaxIdleConns(*cfg.MaxIdleConns)
-	} else {
-		db.SetMaxIdleConns(DefaultMaxIdleConns)
+	if c.MaxIdleConns != nil {
+		db.SetMaxIdleConns(*c.MaxIdleConns)
 	}
 
-	if cfg.MaxOpenConns != nil {
-		db.SetMaxOpenConns(*cfg.MaxOpenConns)
-	} else {
-		db.SetMaxOpenConns(DefaultMaxOpenConns)
+	if c.MaxOpenConns != nil {
+		db.SetMaxOpenConns(*c.MaxOpenConns)
 	}
 
-	if cfg.ConnMaxIdleTime != nil {
-		db.SetConnMaxIdleTime(*cfg.ConnMaxIdleTime)
-	} else {
-		db.SetConnMaxIdleTime(DefaultConnMaxIdleTime)
+	if c.ConnMaxIdleTime != nil {
+		db.SetConnMaxIdleTime(*c.ConnMaxIdleTime)
 	}
 
 	return &Sqlite{db: db}, nil

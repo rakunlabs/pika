@@ -1,0 +1,29 @@
+{
+  "name": "_~vitesse-template~_",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@tailwindcss/vite": "^4.1.18",
+    "@tsconfig/svelte": "^5.0.6",
+    "axios": "^1.13.2",
+    "lucide-svelte": "^0.562.0",
+    "oxlint": "^1.35.0",
+    "stylelint": "^16.26.0",
+    "stylelint-config-sass-guidelines": "^12.1.0",
+    "stylelint-config-standard": "^39.0.1",
+    "stylelint-scss": "6.13.0",
+    "svelte": "^5.46.1",
+    "svelte-check": "^4.3.5",
+    "svelte-spa-router": "^4.0.1",
+    "tailwindcss": "^4.1.18",
+    "typescript": "^5.9.3",
+    "vite": "^6.3.0"
+  }
+}

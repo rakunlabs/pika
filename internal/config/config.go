@@ -24,6 +24,8 @@ type Config struct {
 type Server struct {
 	Host string `cfg:"host"`
 	Port string `cfg:"port" default:"8080"`
+
+	BasePath string `cfg:"base_path"`
 }
 
 func Load(ctx context.Context) (*Config, error) {

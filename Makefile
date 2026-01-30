@@ -9,9 +9,15 @@ PKG := $(shell go list -m | head -n 1)
 .DEFAULT_GOAL := help
 
 .PHONY: build
-build: CGO_ENABLED ?= 0
+build: CGO_ENABLED = 0
 build: ## Build the binary
 	go build -trimpath -ldflags="-s -w -X $(PKG)/internal/config.version=$(VERSION) -X main.commit=$(BUILD_COMMIT) -X main.date=$(BUILD_DATE)" -o bin/$(BINARY_NAME) $(MAIN_FILE)
+
+.PHONY: build-frontend
+build-frontend: ## Build the frontend assets
+	@cd _ui && pnpm run build
+	@rm -rf internal/server/dist && mv _ui/dist internal/server/dist
+	@echo > internal/server/dist/.gitkeep
 
 .PHONY: lint
 lint: ## Lint Go files

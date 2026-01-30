@@ -3,14 +3,15 @@ module github.com/rakunlabs/pika
 go 1.25
 
 require (
-	github.com/rakunlabs/ada v0.2.7
+	github.com/rakunlabs/ada v0.2.10
+	github.com/rakunlabs/ada/handler/folder v0.1.1
 	github.com/rakunlabs/ada/middleware/cors v0.1.3
 	github.com/rakunlabs/ada/middleware/log v0.1.7
 	github.com/rakunlabs/ada/middleware/recover v0.1.3
 	github.com/rakunlabs/ada/middleware/requestid v0.1.3
 	github.com/rakunlabs/ada/middleware/server v0.1.0
 	github.com/rakunlabs/ada/middleware/telemetry v0.1.0
-	github.com/rakunlabs/chu v0.3.0
+	github.com/rakunlabs/chu v0.4.0
 	github.com/rakunlabs/into v0.4.2
 	github.com/rakunlabs/logi v0.4.3
 	github.com/rakunlabs/tell v0.1.1
@@ -36,11 +37,11 @@ require (
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/rs/zerolog v1.33.0 // indirect
+	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/twmb/tlscfg v1.2.1 // indirect
-	github.com/worldline-go/klient v0.9.13 // indirect
-	github.com/worldline-go/logz v0.5.1 // indirect
+	github.com/worldline-go/klient v0.9.16 // indirect
+	github.com/worldline-go/logz v0.5.5 // indirect
 	github.com/worldline-go/struct2 v1.4.0 // indirect
 	github.com/xhit/go-str2duration/v2 v2.1.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
@@ -57,7 +58,7 @@ require (
 	go.opentelemetry.io/proto/otlp v1.7.1 // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
 	golang.org/x/net v0.43.0 // indirect
-	golang.org/x/sys v0.36.0 // indirect
+	golang.org/x/sys v0.37.0 // indirect
 	golang.org/x/text v0.28.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250825161204-c5933d9347a5 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250825161204-c5933d9347a5 // indirect

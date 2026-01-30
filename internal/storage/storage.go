@@ -16,7 +16,14 @@ type Config struct {
 	SQLite *sqlite.Config `cfg:"sqlite"`
 }
 
-func New(ctx context.Context, cfg *Config) (service.Storage, error) {
+type Storage interface {
+	service.Storage
+
+	// Close closes the storage connection.
+	Close() error
+}
+
+func New(ctx context.Context, cfg *Config) (Storage, error) {
 	switch {
 	case cfg.SQLite != nil:
 		return sqlite.New(ctx, cfg.SQLite)

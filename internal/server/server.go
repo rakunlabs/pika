@@ -28,5 +28,11 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service) error 
 		mtelemetry.Middleware(),
 	)
 
+	m := server.Group(cfg.Server.BasePath)
+
+	if err := folderHandler(m); err != nil {
+		return err
+	}
+
 	return server.StartWithContext(ctx, net.JoinHostPort(cfg.Server.Host, cfg.Server.Port))
 }

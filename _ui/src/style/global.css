@@ -1,0 +1,7 @@
+/* stylelint-disable-next-line import-notation */
+@import 'tailwindcss';
+
+html,
+body {
+  @apply h-full w-full;
+}
