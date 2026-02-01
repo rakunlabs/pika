@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/rakunlabs/chu"
+	"github.com/rakunlabs/pika/internal/secret/crypto"
+	"github.com/rakunlabs/pika/internal/secret/kms"
 	"github.com/rakunlabs/pika/internal/storage"
 	"github.com/rakunlabs/tell"
 )
@@ -18,7 +20,15 @@ type Config struct {
 	Storage storage.Config `cfg:"storage"`
 	Server  Server         `cfg:"server"`
 
+	Secret Secret `cfg:"secret"`
+
 	Telemetry tell.Config `cfg:"telemetry"`
+}
+
+type Secret struct {
+	Enabled bool          `cfg:"enabled" default:"false"`
+	Crypto  crypto.Config `cfg:"crypto"`
+	KMS     kms.Config    `cfg:"kms"`
 }
 
 type Server struct {

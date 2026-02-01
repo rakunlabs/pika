@@ -2,20 +2,16 @@ package storage
 
 import (
 	"context"
-	"errors"
 
 	"github.com/rakunlabs/pika/internal/service"
 	"github.com/rakunlabs/pika/internal/storage/sqlite"
 )
 
-var (
-	ErrNoStorageBackend = errors.New("no storage backend configured")
-)
-
 type Config struct {
-	SQLite *sqlite.Config `cfg:"sqlite"`
+	SQLite sqlite.Config `cfg:"sqlite"`
 }
 
+// Storage extends service.Storage with Close functionality.
 type Storage interface {
 	service.Storage
 
@@ -25,9 +21,9 @@ type Storage interface {
 
 func New(ctx context.Context, cfg *Config) (Storage, error) {
 	switch {
-	case cfg.SQLite != nil:
-		return sqlite.New(ctx, cfg.SQLite)
+	case cfg.SQLite.Enabled:
+		return sqlite.New(ctx, &cfg.SQLite)
 	default:
-		return nil, ErrNoStorageBackend
+		return nil, service.ErrNoStorageBackend
 	}
 }

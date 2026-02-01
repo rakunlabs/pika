@@ -14,6 +14,7 @@ import (
 	mtelemetry "github.com/rakunlabs/ada/middleware/telemetry"
 
 	"github.com/rakunlabs/pika/internal/config"
+	"github.com/rakunlabs/pika/internal/server/api"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -29,6 +30,10 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service) error 
 	)
 
 	m := server.Group(cfg.Server.BasePath)
+
+	if err := api.Handle(m, svc); err != nil {
+		return err
+	}
 
 	if err := folderHandler(m); err != nil {
 		return err
