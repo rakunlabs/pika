@@ -3,12 +3,11 @@ package service
 import (
 	"context"
 	"errors"
-
-	"github.com/rakunlabs/pika/internal/external"
 )
 
 var (
 	ErrNotFound         = errors.New("not found")
+	ErrBadRequest       = errors.New("bad request")
 	ErrNoStorageBackend = errors.New("no storage backend configured")
 )
 
@@ -49,8 +48,4 @@ type Folder struct {
 type SearchResult struct {
 	Path string `json:"path"`
 	File *File  `json:"file"`
-}
-
-type Settings struct {
-	External map[string]external.Storage `json:"external,omitempty"`
 }

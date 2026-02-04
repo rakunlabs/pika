@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { link, location } from 'svelte-spa-router';
+  import { link, location } from "svelte-spa-router";
 </script>
 
 <div class="sidebar-bg border-r border-black">
@@ -9,25 +9,31 @@
         href="/"
         use:link
         class={[
-          'block h-full hover:bg-slate-700 hover:text-white',
-          $location === '/' ? 'bg-black text-white' : 'bg-white text-black'
+          "block h-full hover:bg-slate-700 hover:text-white",
+          $location === "/" ? "bg-black text-white" : "bg-white text-black",
         ]}
       >
         <span class="block px-2">Main</span>
       </a>
     </div>
-    <div class="border-b border-black h-7">
-      <a
-        href="/test"
-        use:link
-        class={[
-          'block h-full hover:bg-slate-700 hover:text-white',
-          $location === '/test' ? 'bg-black text-white' : 'bg-white text-black'
-        ]}
-      >
-        <span class="block px-2">Test</span>
-      </a>
-    </div>
+        {#each ["configurations", "test", "settings"] as page}
+      <div class="border-b border-black h-7">
+        <a
+          href={`/${page}`}
+          use:link
+          class={[
+            "block h-full hover:bg-slate-700 hover:text-white",
+            $location === `/${page}`
+              ? "bg-black text-white"
+              : "bg-white text-black",
+          ]}
+        >
+          <span class="block px-2"
+            >{page.charAt(0).toUpperCase() + page.slice(1)}</span
+          >
+        </a>
+      </div>
+    {/each}
   </div>
 </div>
 

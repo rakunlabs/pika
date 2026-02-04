@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path"
+	"slices"
 )
 
 // Folder retrieves the folder structure at the given path.
@@ -23,11 +24,22 @@ func (s *Service) Folder(ctx context.Context, folderPath string) (*Folder, error
 	return &folder, nil
 }
 
+func (s *Service) SetFolder(ctx context.Context, folderPath string) error {
+	return s.store.Tx(ctx, func(ctx context.Context, tx Storage) error {
+		return s.ensureFolderExists(ctx, tx, folderPath)
+	})
+}
+
 func (s *Service) addFileToFolder(ctx context.Context, tx Storage, filePath string) error {
 	folderPath := path.Dir(filePath)
 	fileName := path.Base(filePath)
 
-	// Ensure all parent folders exist
+	// Normalize root folder path
+	if folderPath == "." || folderPath == "/" {
+		folderPath = ""
+	}
+
+	// Ensure all parent folders exist (this also creates root if needed)
 	if err := s.ensureFolderExists(ctx, tx, folderPath); err != nil {
 		return err
 	}
@@ -70,13 +82,16 @@ func (s *Service) addFileToFolder(ctx context.Context, tx Storage, filePath stri
 
 // ensureFolderExists creates the folder and all parent folders if they don't exist.
 func (s *Service) ensureFolderExists(ctx context.Context, tx Storage, folderPath string) error {
-	if folderPath == "" || folderPath == "." || folderPath == "/" {
-		return nil
+	// Normalize root folder representations
+	isRoot := folderPath == "" || folderPath == "." || folderPath == "/"
+	if isRoot {
+		folderPath = ""
 	}
 
-	// First ensure parent folder exists
+	// First ensure parent folder exists (only if not root)
 	parentPath := path.Dir(folderPath)
-	if parentPath != folderPath && parentPath != "." && parentPath != "/" {
+	parentIsRoot := parentPath == "" || parentPath == "." || parentPath == "/"
+	if !isRoot && parentPath != folderPath && !parentIsRoot {
 		if err := s.ensureFolderExists(ctx, tx, parentPath); err != nil {
 			return err
 		}
@@ -110,10 +125,16 @@ func (s *Service) ensureFolderExists(ctx context.Context, tx Storage, folderPath
 		return err
 	}
 
-	// Add this folder to parent's folder list
-	if parentPath != folderPath && parentPath != "." && parentPath != "/" && parentPath != "" {
+	// Add this folder to parent's folder list (skip if this is root)
+	if !isRoot && parentPath != folderPath {
 		folderName := path.Base(folderPath)
-		parentKeyPath := path.Join(keyFolder, parentPath)
+
+		// Normalize parent path for root
+		normalizedParentPath := ""
+		if !parentIsRoot {
+			normalizedParentPath = parentPath
+		}
+		parentKeyPath := path.Join(keyFolder, normalizedParentPath)
 
 		var parentFolder Folder
 		parentData, err := tx.Get(ctx, parentKeyPath)
@@ -129,13 +150,7 @@ func (s *Service) ensureFolderExists(ctx context.Context, tx Storage, folderPath
 		}
 
 		// Check if folder already exists in parent
-		exists := false
-		for _, f := range parentFolder.Folders {
-			if f == folderName {
-				exists = true
-				break
-			}
-		}
+		exists := slices.Contains(parentFolder.Folders, folderName)
 
 		if !exists {
 			parentFolder.Folders = append(parentFolder.Folders, folderName)
@@ -155,6 +170,11 @@ func (s *Service) ensureFolderExists(ctx context.Context, tx Storage, folderPath
 func (s *Service) removeFileFromFolder(ctx context.Context, tx Storage, filePath string) error {
 	folderPath := path.Dir(filePath)
 	fileName := path.Base(filePath)
+
+	// Normalize root folder path
+	if folderPath == "." || folderPath == "/" {
+		folderPath = ""
+	}
 
 	// Get the current folder data
 	keyPath := path.Join(keyFolder, folderPath)
