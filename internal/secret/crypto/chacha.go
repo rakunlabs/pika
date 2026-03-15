@@ -3,121 +3,76 @@ package crypto
 import (
 	"crypto/cipher"
 	"crypto/rand"
-	"encoding/binary"
 	"fmt"
+	"sync"
 
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
 const (
-	// KeySize is the size of ChaCha20-Poly1305 key (256 bits).
+	// KeySize is the required key size (256 bits / 32 bytes).
 	KeySize = chacha20poly1305.KeySize
 
-	// NonceSize is the size of XChaCha20-Poly1305 nonce (24 bytes).
+	// NonceSize is the XChaCha20-Poly1305 nonce size (24 bytes).
 	NonceSize = chacha20poly1305.NonceSizeX
-
-	// VersionSize is the size of the key version in bytes (uint32).
-	VersionSize = 4
-
-	// HeaderSize is the total header size (version + nonce).
-	HeaderSize = VersionSize + NonceSize
 )
 
-// ChaCha20Poly1305 implements Encryptor using XChaCha20-Poly1305.
-type ChaCha20Poly1305 struct {
-	keyStore KeyStore
-	aead     cipher.AEAD
-	version  uint32
+// ChaCha20Encryptor implements Encryptor using XChaCha20-Poly1305.
+type ChaCha20Encryptor struct {
+	mu   sync.RWMutex
+	key  []byte
+	aead cipher.AEAD
 }
 
-// NewChaCha20Poly1305 creates a new ChaCha20-Poly1305 encryptor.
-func NewChaCha20Poly1305(keyStore KeyStore) (*ChaCha20Poly1305, error) {
-	// Get the active key
-	key, version, err := keyStore.GetActiveKey()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get active key: %w", err)
-	}
-
+// NewChaCha20(key) creates a new encryptor with the given 32-byte key.
+func NewChaCha20(key []byte) (*ChaCha20Encryptor, error) {
 	if len(key) != KeySize {
 		return nil, ErrInvalidKeySize
 	}
 
 	aead, err := chacha20poly1305.NewX(key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cipher: %w", err)
+		return nil, fmt.Errorf("creating cipher: %w", err)
 	}
 
-	// Parse version as uint32
-	var v uint32
-	if _, err := fmt.Sscanf(version, "v%d", &v); err != nil {
-		v = 1
-	}
+	keyCopy := make([]byte, KeySize)
+	copy(keyCopy, key)
 
-	return &ChaCha20Poly1305{
-		keyStore: keyStore,
-		aead:     aead,
-		version:  v,
+	return &ChaCha20Encryptor{
+		key:  keyCopy,
+		aead: aead,
 	}, nil
 }
 
-// Encrypt encrypts plaintext using XChaCha20-Poly1305.
-// Ciphertext format: [version:4bytes][nonce:24bytes][ciphertext+tag]
-func (c *ChaCha20Poly1305) Encrypt(plaintext []byte) ([]byte, error) {
+// Encrypt encrypts plaintext. Format: [nonce:24][ciphertext+tag].
+func (c *ChaCha20Encryptor) Encrypt(plaintext []byte) ([]byte, error) {
+	c.mu.RLock()
+	aead := c.aead
+	c.mu.RUnlock()
+
 	nonce := make([]byte, NonceSize)
 	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+		return nil, fmt.Errorf("generating nonce: %w", err)
 	}
 
-	// Create ciphertext buffer: version + nonce + ciphertext
-	ciphertext := make([]byte, HeaderSize, HeaderSize+len(plaintext)+c.aead.Overhead())
-
-	// Write version
-	binary.BigEndian.PutUint32(ciphertext[:VersionSize], c.version)
-
-	// Write nonce
-	copy(ciphertext[VersionSize:HeaderSize], nonce)
-
-	// Encrypt and append
-	ciphertext = c.aead.Seal(ciphertext, nonce, plaintext, nil)
-
+	ciphertext := aead.Seal(nonce, nonce, plaintext, nil)
 	return ciphertext, nil
 }
 
-// Decrypt decrypts ciphertext using XChaCha20-Poly1305.
-// It automatically retrieves the correct key based on the embedded version.
-func (c *ChaCha20Poly1305) Decrypt(ciphertext []byte) ([]byte, error) {
-	if len(ciphertext) < HeaderSize+c.aead.Overhead() {
+// Decrypt decrypts ciphertext.
+func (c *ChaCha20Encryptor) Decrypt(ciphertext []byte) ([]byte, error) {
+	c.mu.RLock()
+	aead := c.aead
+	c.mu.RUnlock()
+
+	if len(ciphertext) < NonceSize+aead.Overhead() {
 		return nil, ErrInvalidCiphertext
 	}
 
-	// Extract version
-	version := binary.BigEndian.Uint32(ciphertext[:VersionSize])
+	nonce := ciphertext[:NonceSize]
+	data := ciphertext[NonceSize:]
 
-	// Extract nonce
-	nonce := ciphertext[VersionSize:HeaderSize]
-
-	// Get encrypted data
-	encryptedData := ciphertext[HeaderSize:]
-
-	// Get the key for this version
-	versionStr := fmt.Sprintf("v%d", version)
-	key, err := c.keyStore.GetKey(versionStr)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrKeyNotFound, versionStr)
-	}
-
-	if len(key) != KeySize {
-		return nil, ErrInvalidKeySize
-	}
-
-	// Create AEAD for this key
-	aead, err := chacha20poly1305.NewX(key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create cipher: %w", err)
-	}
-
-	// Decrypt
-	plaintext, err := aead.Open(nil, nonce, encryptedData, nil)
+	plaintext, err := aead.Open(nil, nonce, data, nil)
 	if err != nil {
 		return nil, ErrDecryptionFailed
 	}
@@ -125,16 +80,46 @@ func (c *ChaCha20Poly1305) Decrypt(ciphertext []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// CurrentKeyVersion returns the current active key version.
-func (c *ChaCha20Poly1305) CurrentKeyVersion() string {
-	return fmt.Sprintf("v%d", c.version)
+// RotateTo creates a new encryptor with the new key while keeping
+// the old key for decryption of existing data. Returns a RotatedEncryptor.
+func (c *ChaCha20Encryptor) RotateTo(newKey []byte) (*RotatedEncryptor, error) {
+	newEnc, err := NewChaCha20(newKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return &RotatedEncryptor{
+		current: newEnc,
+		old:     c,
+	}, nil
 }
 
-// GenerateKey generates a new random key suitable for ChaCha20-Poly1305.
+// RotatedEncryptor encrypts with the new key but can decrypt with both old and new.
+type RotatedEncryptor struct {
+	current *ChaCha20Encryptor
+	old     *ChaCha20Encryptor
+}
+
+func (r *RotatedEncryptor) Encrypt(plaintext []byte) ([]byte, error) {
+	return r.current.Encrypt(plaintext)
+}
+
+func (r *RotatedEncryptor) Decrypt(ciphertext []byte) ([]byte, error) {
+	// Try new key first
+	plaintext, err := r.current.Decrypt(ciphertext)
+	if err == nil {
+		return plaintext, nil
+	}
+
+	// Fall back to old key
+	return r.old.Decrypt(ciphertext)
+}
+
+// GenerateKey generates a new random 32-byte key.
 func GenerateKey() ([]byte, error) {
 	key := make([]byte, KeySize)
 	if _, err := rand.Read(key); err != nil {
-		return nil, fmt.Errorf("failed to generate key: %w", err)
+		return nil, fmt.Errorf("generating key: %w", err)
 	}
 	return key, nil
 }

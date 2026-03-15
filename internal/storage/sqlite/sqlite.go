@@ -108,6 +108,11 @@ func New(ctx context.Context, cfg *Config) (*Sqlite, error) {
 	return &Sqlite{db: db, q: db}, nil
 }
 
+// DB exposes the underlying database connection.
+func (m *Sqlite) DB() *sql.DB {
+	return m.db
+}
+
 func (m *Sqlite) Tx(ctx context.Context, fn func(ctx context.Context, tx service.Storage) error) error {
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -118,7 +123,7 @@ func (m *Sqlite) Tx(ctx context.Context, fn func(ctx context.Context, tx service
 
 	if err := fn(ctx, sqliteTx); err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil {
-			return rbErr
+			return errors.Join(err, rbErr)
 		}
 		return err
 	}

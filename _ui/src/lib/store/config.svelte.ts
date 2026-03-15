@@ -1,38 +1,42 @@
-import type { Tab, TreeNode, SearchResult, FileFormat, FileVersion, FileMeta, Settings } from '@/lib/types/config';
+import type {
+  Tab, TreeNode, SearchResult, FileFormat, FileVersion, FileMeta,
+  Settings, TokenInfo, CreateTokenRequest, CreateTokenResponse,
+  PatchTokenRequest
+} from '@/lib/types/config';
 import { addToast } from '@/lib/store/toast.svelte';
 import axios from 'axios';
 
-// Helper to detect format from file extension
-function detectFormat(filename: string): FileFormat {
-  const ext = filename.split('.').pop()?.toLowerCase();
-  switch (ext) {
-    case 'json':
-      return 'json';
-    case 'yaml':
-    case 'yml':
-      return 'yaml';
-    case 'toml':
-      return 'toml';
-    default:
-      return 'raw';
-  }
-}
-
-// Helper to decode base64 data
+// Helper to decode base64 data (supports Unicode)
 function decodeContent(data: string): string {
+  if (!data) return '';
   try {
-    return atob(data);
+    const binaryStr = atob(data);
+    const bytes = Uint8Array.from(binaryStr, c => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
   } catch {
     return data;
   }
 }
 
-// Helper to encode content to base64
+// Helper to encode content to base64 (supports Unicode)
 function encodeContent(content: string): string {
+  if (!content) return '';
   try {
-    return btoa(content);
+    const bytes = new TextEncoder().encode(content);
+    const binaryStr = Array.from(bytes, b => String.fromCharCode(b)).join('');
+    return btoa(binaryStr);
   } catch {
     return content;
+  }
+}
+
+// Helper to get default content for a given format
+function defaultContentForFormat(format: FileFormat): string {
+  switch (format) {
+    case 'json': return '{\n  \n}';
+    case 'yaml': return '';
+    case 'toml': return '';
+    default: return '';
   }
 }
 
@@ -46,6 +50,7 @@ function createConfigStore() {
   let searchResults = $state<SearchResult[]>([]);
   let isSearching = $state(false);
   let settings = $state<Settings | null>(null);
+  let tokens = $state<TokenInfo[]>([]);
   let isLoading = $state(false);
   let leftPanelWidth = $state(250);
   let rightPanelWidth = $state(280);
@@ -67,44 +72,62 @@ function createConfigStore() {
     }
   }
 
-  async function fetchFile(path: string, version: number = 0): Promise<{ meta: FileMeta; data: string; versions: FileVersion[] }> {
-    const response = await axios.get(`/api/v1/file/${path}`, {
-      params: { version }
-    });
-    
-    // Also fetch version info
-    let versions: FileVersion[] = [];
-    try {
-      // For now, we'll extract version from the response if available
-      // The backend might need an endpoint for this
-      versions = [];
-    } catch {
-      // Ignore version fetch errors
-    }
+  async function fetchFile(path: string, version: number = 0, variantKey?: string): Promise<{
+    meta: FileMeta;
+    data: string;
+    versions: FileVersion[];
+  }> {
+    const params: any = {};
+    if (version) params.version = version;
+    if (variantKey) params.variant = variantKey;
+
+    const versionsParams: any = {};
+    if (variantKey) versionsParams.variant = variantKey;
+
+    // Fetch file data and versions in parallel
+    const [response, versionsResult] = await Promise.all([
+      axios.get(`/api/v1/file/${path}`, { params }),
+      axios.get(`/api/v1/versions/${path}`, { params: versionsParams }).catch(() => ({ data: [] }))
+    ]);
 
     return {
       meta: response.data.meta || {},
       data: response.data.data || '',
-      versions
+      versions: versionsResult.data || [],
     };
   }
 
-  async function saveFile(path: string, content: string, meta: FileMeta): Promise<void> {
-    await axios.post(`/api/v1/file/${path}`, {
+  async function saveFile(path: string, content: string, meta: FileMeta, expectedVersion?: number, constraint?: string, variantKey?: string): Promise<{ version: number }> {
+    const body: any = {
       meta,
-      data: encodeContent(content)
-    });
+      data: encodeContent(content),
+    };
+    if (expectedVersion !== undefined && expectedVersion > 0) {
+      body.expected_version = expectedVersion;
+    }
+    if (constraint) {
+      body.constraint = constraint;
+    }
+
+    const params: any = {};
+    if (variantKey) params.variant = variantKey;
+
+    const response = await axios.post(`/api/v1/file/${path}`, body, { params });
+    return { version: response.data.version };
   }
 
   async function createFolder(path: string): Promise<void> {
     await axios.post(`/api/v1/folder/${path}`);
   }
 
-  async function createFile(path: string, content: string = '', meta: FileMeta = {}): Promise<void> {
+  async function createFile(path: string, content: string = '', meta: FileMeta = {}, variantKey?: string): Promise<void> {
+    const params: any = {};
+    if (variantKey) params.variant = variantKey;
+
     await axios.post(`/api/v1/file/${path}`, {
       meta,
-      data: encodeContent(content)
-    });
+      data: encodeContent(content),
+    }, { params });
   }
 
   async function fetchSettings(): Promise<Settings> {
@@ -123,6 +146,7 @@ function createConfigStore() {
       const rootData = await fetchFolder('');
       const folders = rootData.folders || [];
       const files = rootData.files || [];
+      const variants = rootData.variants || {};
       tree = {
         name: 'root',
         path: '',
@@ -141,7 +165,14 @@ function createConfigStore() {
           ...files.map(name => ({
             name,
             path: name,
-            type: 'file' as const
+            type: 'file' as const,
+            children: (variants[name] || []).map((vk: string) => ({
+              name: '?' + vk,
+              path: name,
+              type: 'variant' as const,
+              variantKey: vk,
+              parentPath: name
+            }))
           }))
         ]
       };
@@ -171,6 +202,7 @@ function createConfigStore() {
       const data = await fetchFolder(node.path);
       const folders = data.folders || [];
       const files = data.files || [];
+      const variants = data.variants || {};
       node.children = [
         ...folders.map(name => ({
           name,
@@ -183,7 +215,14 @@ function createConfigStore() {
         ...files.map(name => ({
           name,
           path: `${node.path}/${name}`,
-          type: 'file' as const
+          type: 'file' as const,
+          children: (variants[name] || []).map((vk: string) => ({
+            name: '?' + vk,
+            path: `${node.path}/${name}`,
+            type: 'variant' as const,
+            variantKey: vk,
+            parentPath: `${node.path}/${name}`
+          }))
         }))
       ];
       node.loaded = true;
@@ -219,12 +258,16 @@ function createConfigStore() {
       return;
     }
 
-    isLoading = true;
     try {
       const fileData = await fetchFile(path);
       const content = decodeContent(fileData.data);
       const name = path.split('/').pop() || path;
-      const format = fileData.meta.format || detectFormat(name);
+      const format = fileData.meta.format || 'yaml';
+
+      // Determine the latest version number from version history
+      const latestVersion = fileData.versions.length > 0
+        ? Math.max(...fileData.versions.map(v => v.version))
+        : 0;
 
       const newTab: Tab = {
         id: path,
@@ -235,6 +278,7 @@ function createConfigStore() {
         format,
         version: 0, // Latest
         versions: fileData.versions,
+        latestVersion,
         meta: fileData.meta,
         isDirty: false,
         size: new Blob([content]).size,
@@ -247,8 +291,61 @@ function createConfigStore() {
       console.error('Failed to open file:', error);
       addToast(`Failed to open file: ${path}`, 'alert');
       throw error;
-    } finally {
-      isLoading = false;
+    }
+  }
+
+  async function openVariant(filePath: string, variantKey: string): Promise<void> {
+    const tabId = `${filePath}@${variantKey}`;
+
+    // Check if already open
+    const existingTab = openTabs.find(t => t.id === tabId);
+    if (existingTab) {
+      activeTabId = existingTab.id;
+      return;
+    }
+
+    try {
+      const fileData = await fetchFile(filePath, 0, variantKey);
+      const content = decodeContent(fileData.data);
+      const name = `${filePath.split('/').pop() || filePath}?${variantKey}`;
+      const format = fileData.meta.format || 'yaml';
+
+      const latestVersion = fileData.versions.length > 0
+        ? Math.max(...fileData.versions.map(v => v.version))
+        : 0;
+
+      const newTab: Tab = {
+        id: tabId,
+        path: filePath,
+        name,
+        variantKey,
+        content,
+        originalContent: content,
+        format,
+        version: 0,
+        versions: fileData.versions,
+        latestVersion,
+        meta: fileData.meta,
+        isDirty: false,
+        size: new Blob([content]).size,
+        modifiedAt: Date.now()
+      };
+
+      openTabs = [...openTabs, newTab];
+      activeTabId = newTab.id;
+    } catch (error: any) {
+      if (error.response?.status === 404) {
+        // Variant doesn't exist yet — create it
+        const format: FileFormat = 'yaml';
+        const defaultContent = '';
+
+        await createFile(filePath, defaultContent, { format }, variantKey);
+        // Retry open
+        return openVariant(filePath, variantKey);
+      }
+      console.error('Failed to open variant:', error);
+      addToast(`Failed to open variant: ?${variantKey}`, 'alert');
+      throw error;
     }
   }
 
@@ -300,19 +397,80 @@ function createConfigStore() {
     }
   }
 
-  async function saveTab(tabId: string): Promise<void> {
+  // Variant operations
+  async function createVariant(filePath: string, variantKey: string): Promise<void> {
+    try {
+      const format: FileFormat = 'yaml';
+      await createFile(filePath, '', { format }, variantKey);
+      addToast(`Created variant: ?${variantKey}`, 'success');
+
+      // Refresh parent folder to show the new variant
+      const parts = filePath.split('/');
+      parts.pop();
+      await refreshFolder(parts.join('/'));
+
+      // Open the new variant
+      await openVariant(filePath, variantKey);
+    } catch (error) {
+      console.error('Failed to create variant:', error);
+      addToast(`Failed to create variant: ?${variantKey}`, 'alert');
+      throw error;
+    }
+  }
+
+  async function deleteVariant(filePath: string, variantKey: string): Promise<void> {
+    try {
+      await axios.delete(`/api/v1/file/${filePath}`, {
+        params: { variant: variantKey, version: 0 }
+      });
+
+      // Close tab if open
+      const tabId = `${filePath}@${variantKey}`;
+      const tab = openTabs.find(t => t.id === tabId);
+      if (tab) closeTab(tab.id);
+
+      // Refresh parent folder
+      const parts = filePath.split('/');
+      parts.pop();
+      await refreshFolder(parts.join('/'));
+
+      addToast(`Deleted variant: ?${variantKey}`, 'success');
+    } catch (error) {
+      console.error('Failed to delete variant:', error);
+      addToast('Failed to delete variant', 'alert');
+      throw error;
+    }
+  }
+
+  async function saveTab(tabId: string, constraint?: string): Promise<void> {
     const tab = openTabs.find(t => t.id === tabId);
     if (!tab) return;
 
     try {
-      await saveFile(tab.path, tab.content, tab.meta);
+      const result = await saveFile(tab.path, tab.content, tab.meta, tab.latestVersion, constraint, tab.variantKey);
       tab.originalContent = tab.content;
       tab.isDirty = false;
       tab.modifiedAt = Date.now();
-      addToast(`Saved: ${tab.name}`, 'info');
-    } catch (error) {
-      console.error('Failed to save file:', error);
-      addToast(`Failed to save: ${tab.name}`, 'alert');
+      tab.version = 0; // Reset to latest after save
+      tab.latestVersion = result.version; // Track the new version we just created
+
+      // Refresh version list
+      try {
+        const params: any = {};
+        if (tab.variantKey) params.variant = tab.variantKey;
+        const versionsResponse = await axios.get(`/api/v1/versions/${tab.path}`, { params });
+        tab.versions = versionsResponse.data || [];
+      } catch {
+        // Ignore version refresh errors
+      }
+
+      addToast(`Saved: ${tab.name}`, 'success');
+    } catch (error: any) {
+      if (error.response?.status === 409) {
+        addToast(`Conflict: "${tab.name}" was modified by another user. Reload to get the latest version.`, 'alert', 8000);
+      } else {
+        addToast(`Failed to save: ${tab.name}`, 'alert');
+      }
       throw error;
     }
   }
@@ -321,15 +479,19 @@ function createConfigStore() {
     const tab = openTabs.find(t => t.id === tabId);
     if (!tab) return;
 
-    isLoading = true;
     try {
-      const fileData = await fetchFile(tab.path, version);
+      const fileData = await fetchFile(tab.path, version, tab.variantKey);
       const content = decodeContent(fileData.data);
-      
+
       tab.content = content;
       tab.originalContent = content;
       tab.version = version;
+      tab.versions = fileData.versions;
+      tab.latestVersion = fileData.versions.length > 0
+        ? Math.max(...fileData.versions.map(v => v.version))
+        : 0;
       tab.meta = fileData.meta;
+      tab.variants = fileData.variants;
       tab.isDirty = false;
       tab.size = new Blob([content]).size;
       addToast(`Loaded version ${version === 0 ? 'latest' : version}`, 'info');
@@ -337,52 +499,72 @@ function createConfigStore() {
       console.error('Failed to load version:', error);
       addToast(`Failed to load version ${version}`, 'alert');
       throw error;
-    } finally {
-      isLoading = false;
     }
   }
 
   // Search operations
-  function searchInContent(query: string): void {
+  let searchAbortController: AbortController | null = null;
+
+  function search(query: string): void {
+    // Cancel any ongoing search
+    cancelSearch();
+
     searchQuery = query;
-    
+
     if (!query.trim()) {
       searchResults = [];
+      isSearching = false;
       return;
     }
 
     isSearching = true;
-    const results: SearchResult[] = [];
-    const lowerQuery = query.toLowerCase();
+    searchResults = [];
 
-    // Search in all open tabs
-    for (const tab of openTabs) {
-      const lines = tab.content.split('\n');
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const lowerLine = line.toLowerCase();
-        let searchIndex = 0;
-        
-        searchIndex = lowerLine.indexOf(lowerQuery, searchIndex);
-        while (searchIndex !== -1) {
-          results.push({
-            path: tab.path,
-            line: i + 1,
-            content: line.trim(),
-            matchStart: searchIndex,
-            matchEnd: searchIndex + query.length
-          });
-          searchIndex += query.length;
-          searchIndex = lowerLine.indexOf(lowerQuery, searchIndex);
-        }
+    const controller = new AbortController();
+    searchAbortController = controller;
+
+    const eventSource = new EventSource(`/api/v1/search?q=${encodeURIComponent(query.trim())}`);
+
+    // Handle abort — close the connection
+    controller.signal.addEventListener('abort', () => {
+      eventSource.close();
+      isSearching = false;
+    });
+
+    eventSource.onmessage = (event) => {
+      if (controller.signal.aborted) return;
+
+      try {
+        const result: SearchResult = JSON.parse(event.data);
+        searchResults = [...searchResults, result];
+      } catch {
+        // skip bad data
       }
-    }
+    };
 
-    searchResults = results;
+    eventSource.addEventListener('done', () => {
+      eventSource.close();
+      isSearching = false;
+      searchAbortController = null;
+    });
+
+    eventSource.onerror = () => {
+      eventSource.close();
+      isSearching = false;
+      searchAbortController = null;
+    };
+  }
+
+  function cancelSearch(): void {
+    if (searchAbortController) {
+      searchAbortController.abort();
+      searchAbortController = null;
+    }
     isSearching = false;
   }
 
   function clearSearch(): void {
+    cancelSearch();
     searchQuery = '';
     searchResults = [];
   }
@@ -392,14 +574,58 @@ function createConfigStore() {
     settings = await fetchSettings();
   }
 
+  async function saveSettings(updatedSettings: Settings): Promise<void> {
+    try {
+      // Use patch endpoint to set external resources
+      await axios.post('/api/v1/settings', {
+        action: 'set',
+        external: updatedSettings.external || {}
+      });
+      settings = updatedSettings;
+      addToast('Settings saved', 'success');
+    } catch (error) {
+      console.error('Failed to save settings:', error);
+      addToast('Failed to save settings', 'alert');
+      throw error;
+    }
+  }
+
+  // Token operations
+  async function loadTokens(): Promise<void> {
+    try {
+      const response = await axios.get('/api/v1/tokens');
+      tokens = response.data || [];
+    } catch {
+      tokens = [];
+    }
+  }
+
+  async function createToken(req: CreateTokenRequest): Promise<CreateTokenResponse> {
+    const response = await axios.post('/api/v1/tokens', req);
+    await loadTokens();
+    return response.data;
+  }
+
+  async function deleteToken(id: string): Promise<void> {
+    await axios.delete(`/api/v1/tokens/${id}`);
+    await loadTokens();
+    addToast('Token deleted', 'success');
+  }
+
+  async function patchToken(id: string, req: PatchTokenRequest): Promise<void> {
+    await axios.patch(`/api/v1/tokens/${id}`, req);
+    await loadTokens();
+    addToast('Token updated', 'success');
+  }
+
   // Create operations
   async function createNewFolder(parentPath: string, name: string): Promise<void> {
     const fullPath = parentPath ? `${parentPath}/${name}` : name;
-    
+
     try {
       await createFolder(fullPath);
-      addToast(`Created folder: ${name}`, 'info');
-      
+      addToast(`Created folder: ${name}`, 'success');
+
       // Refresh the parent folder in the tree
       await refreshFolder(parentPath);
     } catch (error) {
@@ -409,19 +635,17 @@ function createConfigStore() {
     }
   }
 
-  async function createNewFile(parentPath: string, name: string): Promise<void> {
+  async function createNewFile(parentPath: string, name: string, format: FileFormat = 'yaml'): Promise<void> {
     const fullPath = parentPath ? `${parentPath}/${name}` : name;
-    // Default to JSON format - user can change in Settings panel
-    const format: FileFormat = 'json';
-    const defaultContent = '{\n  \n}';
-    
+    const defaultContent = defaultContentForFormat(format);
+
     try {
       await createFile(fullPath, defaultContent, { format });
-      addToast(`Created file: ${name}`, 'info');
-      
+      addToast(`Created file: ${name}`, 'success');
+
       // Refresh the parent folder in the tree
       await refreshFolder(parentPath);
-      
+
       // Open the newly created file
       await openFile(fullPath);
     } catch (error) {
@@ -433,13 +657,13 @@ function createConfigStore() {
 
   async function refreshFolder(folderPath: string): Promise<void> {
     if (!tree) return;
-    
+
     if (folderPath === '' || folderPath === '/') {
       // Refresh root
       await loadTree();
       return;
     }
-    
+
     // Find the folder node and refresh it
     const node = findNodeByPath(tree, folderPath);
     if (node && node.type === 'folder') {
@@ -455,14 +679,14 @@ function createConfigStore() {
     if (node.path === path) {
       return node;
     }
-    
+
     if (node.children) {
       for (const child of node.children) {
         const found = findNodeByPath(child, path);
         if (found) return found;
       }
     }
-    
+
     return null;
   }
 
@@ -472,19 +696,19 @@ function createConfigStore() {
       await axios.delete(`/api/v1/file/${path}`, {
         params: { version: 0 } // Delete all versions
       });
-      
+
       // Close the tab if it's open
       const tab = openTabs.find(t => t.path === path);
       if (tab) {
         closeTab(tab.id);
       }
-      
+
       // Get parent folder path and refresh
       const parts = path.split('/');
       parts.pop();
       const parentPath = parts.join('/');
-      
-      addToast(`Deleted file: ${path.split('/').pop()}`, 'info');
+
+      addToast(`Deleted file: ${path.split('/').pop()}`, 'success');
       await refreshFolder(parentPath);
     } catch (error) {
       console.error('Failed to delete file:', error);
@@ -496,19 +720,19 @@ function createConfigStore() {
   async function deleteFolder(path: string): Promise<void> {
     try {
       await axios.delete(`/api/v1/folder/${path}`);
-      
+
       // Close any tabs that are within this folder
       const tabsToClose = openTabs.filter(t => t.path.startsWith(path + '/') || t.path === path);
       for (const tab of tabsToClose) {
         closeTab(tab.id);
       }
-      
+
       // Get parent folder path and refresh
       const parts = path.split('/');
       parts.pop();
       const parentPath = parts.join('/');
-      
-      addToast(`Deleted folder: ${path.split('/').pop()}`, 'info');
+
+      addToast(`Deleted folder: ${path.split('/').pop()}`, 'success');
       await refreshFolder(parentPath);
     } catch (error) {
       console.error('Failed to delete folder:', error);
@@ -536,6 +760,7 @@ function createConfigStore() {
     get searchResults() { return searchResults; },
     get isSearching() { return isSearching; },
     get settings() { return settings; },
+    get tokens() { return tokens; },
     get isLoading() { return isLoading; },
     get hasUnsavedChanges() { return hasUnsavedChanges; },
     get leftPanelWidth() { return leftPanelWidth; },
@@ -557,12 +782,25 @@ function createConfigStore() {
     saveTab,
     loadVersion,
 
+    // Variant operations
+    openVariant,
+    createVariant,
+    deleteVariant,
+
     // Search operations
-    searchInContent,
+    search,
+    cancelSearch,
     clearSearch,
 
     // Settings operations
     loadSettings,
+    saveSettings,
+
+    // Token operations
+    loadTokens,
+    createToken,
+    deleteToken,
+    patchToken,
 
     // Create operations
     createNewFolder,

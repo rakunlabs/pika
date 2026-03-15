@@ -56,15 +56,21 @@
     error = null;
 
     try {
-      // Call the render endpoint (you'll need to implement this on the backend)
-      const response = await axios.post(`/api/v1/file/${activeTab.path}/render`, {
+      // Call the render endpoint
+      const response = await axios.post(`/api/v1/render/${activeTab.path}`, {
         content: activeTab.content,
         meta: activeTab.meta
       });
       
-      // If the backend returns raw bytes, decode them
+      // If the backend returns raw bytes, decode them (Unicode-safe)
       if (response.data.data) {
-        renderedContent = atob(response.data.data);
+        try {
+          const binaryStr = atob(response.data.data);
+          const bytes = Uint8Array.from(binaryStr, (c: string) => c.charCodeAt(0));
+          renderedContent = new TextDecoder().decode(bytes);
+        } catch {
+          renderedContent = response.data.data;
+        }
       } else if (typeof response.data === 'string') {
         renderedContent = response.data;
       } else {
@@ -207,8 +213,11 @@
 
       <div class="flex items-center justify-between px-5 py-3 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900">
         <span class="text-xs text-slate-500 dark:text-slate-400">
-          {#if activeTab?.meta.inherit}
-            Inheriting from: <strong class="text-blue-500">{activeTab.meta.inherit}</strong>
+          {#if activeTab?.meta.inherits?.length}
+            Inheriting from:
+            {#each activeTab.meta.inherits as entry, i}
+              <strong class="text-blue-500">{entry.source}</strong>{#if entry.inject}<span class="text-emerald-500 ml-0.5">->{entry.inject}</span>{/if}{#if i < activeTab.meta.inherits.length - 1}<span class="text-slate-400">,</span>{/if}
+            {/each}
           {:else}
             No inheritance configured
           {/if}

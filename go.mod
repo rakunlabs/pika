@@ -3,18 +3,21 @@ module github.com/rakunlabs/pika
 go 1.25
 
 require (
-	github.com/rakunlabs/ada v0.2.10
+	github.com/BurntSushi/toml v1.5.0
+	github.com/goccy/go-yaml v1.18.0
+	github.com/rakunlabs/ada v0.2.12
 	github.com/rakunlabs/ada/handler/folder v0.1.1
 	github.com/rakunlabs/ada/middleware/cors v0.1.3
+	github.com/rakunlabs/ada/middleware/forwardauth v0.1.2
 	github.com/rakunlabs/ada/middleware/log v0.1.7
 	github.com/rakunlabs/ada/middleware/recover v0.1.3
 	github.com/rakunlabs/ada/middleware/requestid v0.1.3
 	github.com/rakunlabs/ada/middleware/server v0.1.0
 	github.com/rakunlabs/ada/middleware/telemetry v0.1.0
-	github.com/rakunlabs/chu v0.4.0
-	github.com/rakunlabs/into v0.4.2
-	github.com/rakunlabs/logi v0.4.3
-	github.com/rakunlabs/muz v0.2.2
+	github.com/rakunlabs/chu v0.4.2
+	github.com/rakunlabs/into v0.5.3
+	github.com/rakunlabs/logi v0.4.5
+	github.com/rakunlabs/muz v0.2.4
 	github.com/rakunlabs/tell v0.1.1
 	github.com/rakunlabs/tummy v0.1.2
 	github.com/worldline-go/klient v0.9.16
@@ -23,7 +26,6 @@ require (
 )
 
 require (
-	github.com/BurntSushi/toml v1.5.0 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.2 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -31,7 +33,6 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/goccy/go-yaml v1.18.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.2 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect

@@ -9,6 +9,9 @@ var (
 	ErrNotFound         = errors.New("not found")
 	ErrBadRequest       = errors.New("bad request")
 	ErrNoStorageBackend = errors.New("no storage backend configured")
+	ErrUnauthorized     = errors.New("unauthorized")
+	ErrForbidden        = errors.New("forbidden")
+	ErrConflict         = errors.New("conflict")
 )
 
 // KeyValue represents a key-value pair for search results.
@@ -40,12 +43,26 @@ type Storage interface {
 
 // Folder represents a directory containing folders and files.
 type Folder struct {
-	Folders []string `json:"folders"`
-	Files   []string `json:"files"`
+	Folders  []string            `json:"folders"`
+	Files    []string            `json:"files"`
+	Variants map[string][]string `json:"variants,omitempty"` // file name -> variant keys
 }
 
-// SearchResult represents a search result item.
+// SearchResult represents a single search match.
 type SearchResult struct {
-	Path string `json:"path"`
-	File *File  `json:"file"`
+	Path    string `json:"path"`              // config path
+	Type    string `json:"type"`              // "name" or "content"
+	Line    int    `json:"line,omitempty"`    // line number (content match)
+	Snippet string `json:"snippet,omitempty"` // matching line text (content match)
+}
+
+// DataResult holds the resolved configuration data returned by GetData.
+type DataResult struct {
+	Data   []byte `json:"data"`
+	Format string `json:"format"`
+}
+
+// RenderResult holds the rendered configuration for preview.
+type RenderResult struct {
+	Data string `json:"data"` // base64 encoded
 }

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { storeNavbar } from "@/lib/store/store.svelte";
   import { configStore } from "@/lib/store/config.svelte";
   import FileTree from "@/lib/components/config/FileTree.svelte";
   import TabBar from "@/lib/components/config/TabBar.svelte";
@@ -7,8 +6,6 @@
   import SettingsPanel from "@/lib/components/config/SettingsPanel.svelte";
   import RenderPreview from "@/lib/components/config/RenderPreview.svelte";
   import ResizablePanel from "@/lib/components/config/ResizablePanel.svelte";
-
-  storeNavbar.title = "Configurations";
 
   let showRenderPreview = $state(false);
 

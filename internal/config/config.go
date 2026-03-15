@@ -3,9 +3,8 @@ package config
 import (
 	"context"
 
+	mforwardauth "github.com/rakunlabs/ada/middleware/forwardauth"
 	"github.com/rakunlabs/chu"
-	"github.com/rakunlabs/pika/internal/secret/crypto"
-	"github.com/rakunlabs/pika/internal/secret/kms"
 	"github.com/rakunlabs/pika/internal/storage"
 	"github.com/rakunlabs/tell"
 )
@@ -26,9 +25,12 @@ type Config struct {
 }
 
 type Secret struct {
-	Enabled bool          `cfg:"enabled" default:"false"`
-	Crypto  crypto.Config `cfg:"crypto"`
-	KMS     kms.Config    `cfg:"kms"`
+	// Enabled enables encryption of stored values.
+	Enabled bool `cfg:"enabled" default:"false"`
+	// EncryptionKey is the encryption key (any string, hashed with SHA-256 to derive 32 bytes).
+	EncryptionKey string `cfg:"encryption_key"`
+	// AdminSecret is required to perform key rotation via the API.
+	AdminSecret string `cfg:"admin_secret"`
 }
 
 type Server struct {
@@ -36,6 +38,8 @@ type Server struct {
 	Port string `cfg:"port" default:"8080"`
 
 	BasePath string `cfg:"base_path"`
+
+	ForwardAuth *mforwardauth.ForwardAuth `cfg:"forward_auth"`
 }
 
 func Load(ctx context.Context) (*Config, error) {

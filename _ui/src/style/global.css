@@ -5,3 +5,31 @@ html,
 body {
   @apply h-full w-full;
 }
+
+/* Scrollbar styling */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #555 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #777;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}

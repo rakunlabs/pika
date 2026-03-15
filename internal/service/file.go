@@ -3,11 +3,33 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path"
 	"strconv"
 
 	"github.com/rakunlabs/tummy"
 )
+
+// InheritEntry defines a single inheritance source.
+type InheritEntry struct {
+	// Source is the path to the parent config (internal path or external resource name).
+	Source string `json:"source"`
+	// Paths selectively includes only these fields from the source.
+	// Supports dot-notation (e.g., "database.host") and wildcards ("logging.*").
+	// If empty, all fields are included.
+	Paths []string `json:"paths,omitempty"`
+	// Inject places the inherited data under this key path in the config.
+	// Supports dot-notation (e.g., "database.auth" injects under config.database.auth).
+	// If empty, data is merged at the root level.
+	Inject string `json:"inject,omitempty"`
+}
+
+// FileMeta holds metadata about a configuration file.
+type FileMeta struct {
+	Description string         `json:"description,omitempty"`
+	Format      string         `json:"format,omitempty"`
+	Inherits    []InheritEntry `json:"inherits,omitempty"`
+}
 
 // File represents a configuration file with metadata and data.
 type File struct {
@@ -15,14 +37,12 @@ type File struct {
 	Data []byte   `json:"data"`
 }
 
-type FileMeta struct {
-}
-
 type FileVersions []FileVersion
 
 type FileVersion struct {
-	Version int64        `json:"version"`
-	Status  []FileStatus `json:"status"`
+	Version    int64        `json:"version"`
+	Status     []FileStatus `json:"status"`
+	Constraint string       `json:"constraint,omitempty"` // semver constraint, e.g., ">= 0.2.5"
 }
 
 type FileStatus struct {
@@ -73,6 +93,40 @@ func (s *Service) File(ctx context.Context, filePath string, version int64) (*Fi
 	return &file, nil
 }
 
+// FileByVersion retrieves a file using a version string.
+// The version can be:
+//   - "" or "0": latest version
+//   - A plain integer (e.g., "7"): exact internal version
+//   - A semver string (e.g., "0.2.4"): resolve using semver constraints
+func (s *Service) FileByVersion(ctx context.Context, filePath string, versionStr string) (*File, error) {
+	if versionStr == "" || versionStr == "0" {
+		return s.File(ctx, filePath, 0)
+	}
+
+	// Try plain integer first
+	if v, err := strconv.ParseInt(versionStr, 10, 64); err == nil {
+		return s.File(ctx, filePath, v)
+	}
+
+	// Must be a semver string
+	if !IsSemverString(versionStr) {
+		return nil, fmt.Errorf("invalid version %q: %w", versionStr, ErrBadRequest)
+	}
+
+	keyPath := path.Join(keyFile, filePath)
+	fileVersions, err := s.FileInfo(ctx, keyPath)
+	if err != nil {
+		return nil, err
+	}
+
+	resolved, err := ResolveVersionBySemver(fileVersions, versionStr)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.File(ctx, filePath, resolved.Version)
+}
+
 func (s *Service) fileGetLatestValidVersion(versions FileVersions) (*FileVersion, error) {
 	for i := len(versions) - 1; i >= 0; i-- {
 		v := versions[i]
@@ -100,13 +154,25 @@ func (s *Service) FileInfo(ctx context.Context, keyPath string) (FileVersions, e
 	return versions, nil
 }
 
+// FileVersionsList returns the version history for a file at the given path.
+func (s *Service) FileVersionsList(ctx context.Context, filePath string) (FileVersions, error) {
+	keyPath := path.Join(keyFile, filePath)
+	return s.FileInfo(ctx, keyPath)
+}
+
 // SetFile saves a file to storage at the given path.
-func (s *Service) SetFile(ctx context.Context, key string, data *File) error {
+// If expectedVersion is not nil, the save is rejected with ErrConflict
+// when the current latest version doesn't match (optimistic concurrency).
+// constraint is an optional semver constraint for this version (e.g., ">= 0.2.5").
+// Returns the version number that was created.
+func (s *Service) SetFile(ctx context.Context, key string, data *File, expectedVersion *int64, constraint string) (int64, error) {
 	// 1- create folder
-	// 2- file versioning create
+	// 2- file versioning create (with concurrency check)
 	// 3- save file data at versioned key
 
-	return s.store.Tx(ctx, func(ctx context.Context, tx Storage) error {
+	var createdVersion int64
+
+	err := s.store.Tx(ctx, func(ctx context.Context, tx Storage) error {
 
 		if err := s.addFileToFolder(ctx, tx, key); err != nil {
 			return err
@@ -114,33 +180,43 @@ func (s *Service) SetFile(ctx context.Context, key string, data *File) error {
 
 		// file versioning
 		keyPath := path.Join(keyFile, key)
-		fileVersionsData, err := tx.Get(ctx, keyPath)
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return err
-		}
-
 		var fileVersions FileVersions
-		if err := s.decodeBytes(fileVersionsData, &fileVersions); err != nil {
+
+		fileVersionsData, err := tx.Get(ctx, keyPath)
+		if err != nil {
 			if !errors.Is(err, ErrNotFound) {
 				return err
 			}
-
 			// no versions yet
 			fileVersions = FileVersions{}
+		} else {
+			if err := s.decodeBytes(fileVersionsData, &fileVersions); err != nil {
+				return err
+			}
 		}
 
 		var newVersion int64 = 1
 		if len(fileVersions) > 0 {
-			newVersion = fileVersions[len(fileVersions)-1].Version + 1
+			latestVersion := fileVersions[len(fileVersions)-1].Version
+			newVersion = latestVersion + 1
+
+			// Optimistic concurrency check
+			if expectedVersion != nil && latestVersion != *expectedVersion {
+				return fmt.Errorf("expected version %d but latest is %d: %w",
+					*expectedVersion, latestVersion, ErrConflict)
+			}
 		}
 
+		createdVersion = newVersion
+
 		newFileVersion := FileVersion{
-			Version: newVersion,
+			Version:    newVersion,
+			Constraint: constraint,
 			Status: []FileStatus{
 				{
 					Status:    FileStatusTypeCreated,
 					Timestamp: tummy.Now().Unix(),
-					Author:    "system", // TODO: get author from context
+					Author:    UserFromContext(ctx),
 				},
 			},
 		}
@@ -166,6 +242,8 @@ func (s *Service) SetFile(ctx context.Context, key string, data *File) error {
 
 		return tx.Set(ctx, keyPath, encodedData)
 	})
+
+	return createdVersion, err
 }
 
 // DeleteFile deletes a file from storage at the given path.
@@ -224,7 +302,7 @@ func (s *Service) DeleteFile(ctx context.Context, key string, version int64) err
 				versions[i].Status = append(versions[i].Status, FileStatus{
 					Status:    FileStatusTypeDeleted,
 					Timestamp: tummy.Now().Unix(),
-					Author:    "system", // TODO: get author from context
+					Author:    UserFromContext(ctx),
 				})
 				break
 			}

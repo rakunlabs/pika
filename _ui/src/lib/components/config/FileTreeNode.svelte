@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronRight, ChevronDown, Folder, FolderOpen, File, FileJson, FileCode, FilePlus, FolderPlus, RefreshCw } from 'lucide-svelte';
+  import { ChevronRight, ChevronDown, Folder, FolderOpen, FileText, FilePlus, FolderPlus, RefreshCw, Layers } from 'lucide-svelte';
   import type { TreeNode } from '@/lib/types/config';
   import { configStore } from '@/lib/store/config.svelte';
   import FileTreeNode from './FileTreeNode.svelte';
@@ -14,24 +14,15 @@
   let { node, level = 0, onCreateFile, onCreateFolder }: Props = $props();
 
   let isHovered = $state(false);
-
-  function getFileIcon(filename: string) {
-    const ext = filename.split('.').pop()?.toLowerCase();
-    switch (ext) {
-      case 'json':
-        return FileJson;
-      case 'yaml':
-      case 'yml':
-      case 'toml':
-        return FileCode;
-      default:
-        return File;
-    }
-  }
+  let showVariants = $state(true);
 
   function handleClick() {
     if (node.type === 'folder') {
       configStore.toggleFolder(node);
+    } else if (node.type === 'variant') {
+      if (node.parentPath && node.variantKey) {
+        configStore.openVariant(node.parentPath, node.variantKey);
+      }
     } else {
       configStore.openFile(node.path);
     }
@@ -66,17 +57,28 @@
     }
   }
 
-  const isActive = $derived(configStore.activeTabId === node.path);
-  const isOpen = $derived(configStore.openTabs.some(t => t.path === node.path));
-  const FileIcon = $derived(getFileIcon(node.name));
+  function toggleVariants(e: MouseEvent) {
+    e.stopPropagation();
+    showVariants = !showVariants;
+  }
+
+  // Determine active/open state based on node type
+  const tabId = $derived(
+    node.type === 'variant' && node.parentPath && node.variantKey
+      ? `${node.parentPath}@${node.variantKey}`
+      : node.path
+  );
+  const isActive = $derived(configStore.activeTabId === tabId);
+  const isOpen = $derived(configStore.openTabs.some(t => t.id === tabId));
+  const hasVariants = $derived(node.type === 'file' && node.children && node.children.length > 0);
 </script>
 
 <div class="select-none">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="flex items-center gap-1 py-0.5 pr-2 cursor-pointer rounded text-[13px] text-gray-700 hover:bg-gray-200
-      {isActive ? 'bg-blue-500 text-white' : ''} 
-      {isOpen && !isActive ? 'text-blue-500' : ''}"
+    class="flex items-center gap-1 py-0.5 pr-2 cursor-pointer text-[13px]
+      {isActive ? 'bg-blue-500 text-white hover:bg-blue-600' : 'text-gray-700 hover:bg-gray-200'} 
+      {isOpen && !isActive ? 'text-blue-600' : ''}"
     style="padding-left: {level * 12 + 4}px"
     onclick={handleClick}
     onkeydown={handleKeyDown}
@@ -102,13 +104,31 @@
           <Folder size={14} />
         {/if}
       </span>
-    {:else}
+    {:else if node.type === 'variant'}
       <span class="w-3.5 shrink-0"></span>
+      <span class="flex items-center justify-center shrink-0 {isActive ? 'text-white' : 'text-purple-500'}">
+        <Layers size={13} />
+      </span>
+    {:else}
+      {#if hasVariants}
+        <button
+          class="flex items-center justify-center shrink-0 w-3.5 opacity-60 bg-transparent border-none p-0 cursor-pointer"
+          onclick={toggleVariants}
+        >
+          {#if showVariants}
+            <ChevronDown size={14} />
+          {:else}
+            <ChevronRight size={14} />
+          {/if}
+        </button>
+      {:else}
+        <span class="w-3.5 shrink-0"></span>
+      {/if}
       <span class="flex items-center justify-center shrink-0 {isActive ? 'text-white' : 'text-gray-500'}">
-        <FileIcon size={14} />
+        <FileText size={14} />
       </span>
     {/if}
-    <span class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap" title={node.path}>{node.name}</span>
+    <span class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap {node.type === 'variant' ? 'text-[12px] font-mono' : ''}" title={node.type === 'variant' ? `${node.parentPath}?${node.variantKey}` : node.path}>{node.name}</span>
     
     {#if node.type === 'folder' && isHovered}
       <span class="flex gap-0.5 shrink-0">
@@ -146,7 +166,16 @@
 
   {#if node.type === 'folder' && node.expanded && node.children}
     <div role="group">
-      {#each node.children as child (child.path)}
+      {#each node.children as child (child.type === 'variant' ? `${child.path}@${child.variantKey}` : child.path)}
+        <FileTreeNode node={child} level={level + 1} {onCreateFile} {onCreateFolder} />
+      {/each}
+    </div>
+  {/if}
+
+  <!-- Show variant children under file nodes -->
+  {#if node.type === 'file' && hasVariants && showVariants}
+    <div role="group">
+      {#each node.children || [] as child (`${child.path}@${child.variantKey}`)}
         <FileTreeNode node={child} level={level + 1} {onCreateFile} {onCreateFolder} />
       {/each}
     </div>

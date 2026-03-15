@@ -6,8 +6,10 @@
   import { toml } from '@codemirror/legacy-modes/mode/toml';
   import { oneDark } from '@codemirror/theme-one-dark';
   import { configStore } from '@/lib/store/config.svelte';
+  import { addToast } from '@/lib/store/toast.svelte';
   import type { FileFormat } from '@/lib/types/config';
-  import { Save } from 'lucide-svelte';
+  import { Save, Sparkles, ArrowRightLeft } from 'lucide-svelte';
+  import axios from 'axios';
 
   function getLanguageExtension(format: FileFormat): LanguageSupport | undefined {
     switch (format) {
@@ -22,8 +24,65 @@
     }
   }
 
+  // Beautify content based on format
+  function beautify(content: string, format: FileFormat): string | null {
+    try {
+      switch (format) {
+        case 'json': {
+          const parsed = JSON.parse(content);
+          return JSON.stringify(parsed, null, 2);
+        }
+        case 'yaml': {
+          // YAML beautification: normalize indentation
+          // Trim trailing whitespace per line, ensure final newline, collapse blank lines
+          const lines = content.split('\n');
+          const cleaned = lines
+            .map(line => line.trimEnd())
+            .join('\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+          return cleaned + '\n';
+        }
+        case 'toml': {
+          // TOML beautification: normalize spacing around = signs and trim
+          const lines = content.split('\n');
+          const cleaned = lines
+            .map(line => {
+              const trimmed = line.trimEnd();
+              // Normalize key = value spacing (but not inside strings or section headers)
+              if (trimmed.startsWith('[') || trimmed.startsWith('#') || trimmed === '') {
+                return trimmed;
+              }
+              const eqIndex = trimmed.indexOf('=');
+              if (eqIndex > 0) {
+                const key = trimmed.slice(0, eqIndex).trimEnd();
+                const value = trimmed.slice(eqIndex + 1).trimStart();
+                return `${key} = ${value}`;
+              }
+              return trimmed;
+            })
+            .join('\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+          return cleaned + '\n';
+        }
+        default:
+          return null;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  const allFormats: FileFormat[] = ['json', 'yaml', 'toml'];
+
   const activeTab = $derived(configStore.activeTab);
   const languageExtension = $derived(activeTab ? getLanguageExtension(activeTab.format) : undefined);
+  const convertTargets = $derived(
+    activeTab ? allFormats.filter(f => f !== activeTab.format) : []
+  );
+  let isConverting = $state(false);
+  let saveConstraint = $state('');
 
   function handleChange(value: string) {
     if (activeTab) {
@@ -34,11 +93,57 @@
   async function handleSave() {
     if (activeTab && activeTab.isDirty) {
       try {
-        await configStore.saveTab(activeTab.id);
+        const constraint = saveConstraint.trim() || undefined;
+        await configStore.saveTab(activeTab.id, constraint);
+        saveConstraint = '';
       } catch (error) {
         console.error('Failed to save:', error);
-        alert('Failed to save file');
       }
+    }
+  }
+
+  function handleBeautify() {
+    if (!activeTab) return;
+
+    const result = beautify(activeTab.content, activeTab.format);
+    if (result === null) {
+      addToast(`Could not beautify — check ${activeTab.format.toUpperCase()} syntax`, 'alert');
+      return;
+    }
+
+    if (result === activeTab.content) {
+      addToast('Already formatted', 'info');
+      return;
+    }
+
+    configStore.updateTabContent(activeTab.id, result);
+    addToast('Formatted', 'success');
+  }
+
+  async function handleConvert(targetFormat: FileFormat) {
+    if (!activeTab || isConverting) return;
+    if (activeTab.format === targetFormat) return;
+    if (activeTab.format === 'raw') {
+      addToast('Cannot convert from raw format', 'alert');
+      return;
+    }
+
+    isConverting = true;
+    try {
+      const response = await axios.post('/api/v1/convert', {
+        content: activeTab.content,
+        from: activeTab.format,
+        to: targetFormat
+      });
+
+      configStore.updateTabContent(activeTab.id, response.data.content);
+      configStore.updateTabFormat(activeTab.id, targetFormat);
+      addToast(`Converted to ${targetFormat.toUpperCase()}`, 'success');
+    } catch (error: any) {
+      const msg = error.response?.data?.message || 'Conversion failed';
+      addToast(msg, 'alert');
+    } finally {
+      isConverting = false;
     }
   }
 
@@ -47,6 +152,11 @@
       e.preventDefault();
       handleSave();
     }
+    // Ctrl/Cmd + Shift + F to beautify
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'F') {
+      e.preventDefault();
+      handleBeautify();
+    }
   }
 </script>
 
@@ -54,7 +164,60 @@
 
 <div class="flex flex-col h-full bg-[#1e1e1e]">
   {#if activeTab}
-    <div class="flex-1 overflow-hidden [&_.cm-editor]:h-full">
+    <!-- Editor toolbar -->
+    <div class="flex items-center justify-between px-3 py-1.5 bg-[#252526] border-b border-[#3c3c3c] text-xs text-gray-400 shrink-0">
+      <div class="flex items-center gap-2 min-w-0">
+        <span class="px-1.5 py-0.5 bg-blue-500 text-white rounded text-[10px] font-semibold shrink-0">{activeTab.format.toUpperCase()}</span>
+        {#if activeTab.format !== 'raw'}
+          <div class="flex items-center gap-1 shrink-0">
+            <ArrowRightLeft size={11} class="text-gray-600" />
+            {#each convertTargets as target}
+              <button
+                class="px-1.5 py-0.5 text-[10px] font-medium rounded border border-[#3c3c3c] text-gray-500 bg-transparent cursor-pointer transition-colors hover:bg-[#333] hover:text-gray-200 hover:border-gray-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                onclick={() => handleConvert(target)}
+                disabled={isConverting}
+                title="Convert to {target.toUpperCase()}"
+              >
+                {target.toUpperCase()}
+              </button>
+            {/each}
+          </div>
+        {/if}
+        <span class="text-gray-600 shrink-0">|</span>
+        <span class="text-gray-500 overflow-hidden text-ellipsis whitespace-nowrap" title={activeTab.path}>{activeTab.path}</span>
+      </div>
+      <div class="flex items-center gap-1.5 shrink-0">
+        <button
+          class="flex items-center gap-1 px-2 py-1 text-gray-400 bg-transparent border border-[#3c3c3c] rounded text-[11px] cursor-pointer transition-colors hover:bg-[#333] hover:text-gray-200"
+          onclick={handleBeautify}
+          title="Beautify (Ctrl+Shift+F)"
+        >
+          <Sparkles size={12} />
+          <span>Beautify</span>
+        </button>
+        {#if activeTab.isDirty}
+          <input
+            type="text"
+            bind:value={saveConstraint}
+            placeholder=">= 0.0.0"
+            title="Semver constraint for this version (optional)"
+            class="w-20 px-1.5 py-0.5 text-[10px] font-mono bg-[#1e1e1e] border border-[#3c3c3c] rounded text-gray-400 placeholder:text-gray-600 focus:outline-none focus:border-amber-500"
+          />
+          <button
+            class="flex items-center gap-1 px-2.5 py-1 bg-green-600 text-white border-none rounded text-[11px] font-medium cursor-pointer transition-colors hover:bg-green-500"
+            onclick={handleSave}
+            title="Save (Ctrl+S)"
+          >
+            <Save size={12} />
+            <span>Save</span>
+          </button>
+        {:else}
+          <span class="px-2 py-1 text-[11px] text-green-500">Saved</span>
+        {/if}
+      </div>
+    </div>
+
+    <div class="flex-1 min-h-0 overflow-auto">
       <CodeMirror
         value={activeTab.content}
         onchange={handleChange}
@@ -63,9 +226,7 @@
         styles={{
           '&': {
             height: '100%',
-            fontSize: '13px'
-          },
-          '.cm-scroller': {
+            fontSize: '13px',
             overflow: 'auto'
           },
           '.cm-content': {
@@ -78,28 +239,6 @@
           }
         }}
       />
-    </div>
-    
-    <!-- Editor footer/status bar -->
-    <div class="flex items-center justify-between px-3 py-1 bg-[#252526] border-t border-[#3c3c3c] text-xs text-gray-400">
-      <div class="flex items-center gap-2">
-        <span class="px-1.5 py-0.5 bg-blue-500 text-white rounded text-[10px] font-semibold">{activeTab.format.toUpperCase()}</span>
-        <span class="text-gray-600">|</span>
-        <span class="text-gray-500">{activeTab.path}</span>
-      </div>
-      <div class="flex items-center gap-2">
-        {#if activeTab.isDirty}
-          <button 
-            class="flex items-center gap-1 px-2.5 py-1 bg-green-500 text-white border-none rounded text-xs cursor-pointer transition-colors hover:bg-green-600"
-            onclick={handleSave}
-          >
-            <Save size={14} />
-            <span>Save</span>
-          </button>
-        {:else}
-          <span class="text-green-500">Saved</span>
-        {/if}
-      </div>
     </div>
   {:else}
     <div class="flex items-center justify-center h-full bg-slate-50">

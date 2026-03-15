@@ -17,7 +17,7 @@
   $effect(() => {
     if (isOpen) {
       const prefix = parentPath ? `${parentPath}/` : '';
-      fullPath = prefix + (type === 'folder' ? 'new-folder' : 'new-file');
+      fullPath = prefix + (type === 'folder' ? 'new-folder' : 'new-config');
       error = '';
     }
   });
@@ -89,7 +89,7 @@
             <File size={18} />
           {/if}
           <h2 id="create-dialog-title" class="text-base font-semibold m-0">
-            Create New {type === 'folder' ? 'Folder' : 'File'}
+            Create New {type === 'folder' ? 'Folder' : 'Config'}
           </h2>
         </div>
         <button 
@@ -105,13 +105,13 @@
         <div class="p-5">
           <div class="mb-3">
             <label for="path-input" class="block text-[13px] font-medium text-gray-700 mb-1.5">
-              Full Path
+              {type === 'folder' ? 'Folder Path' : 'Config Path'}
             </label>
             <input
               id="path-input"
               type="text"
               bind:value={fullPath}
-              placeholder={type === 'folder' ? 'path/to/folder' : 'path/to/file'}
+              placeholder={type === 'folder' ? 'path/to/folder' : 'path/to/config-name'}
               class="w-full px-3 py-2.5 text-sm font-mono border border-slate-200 rounded transition-all
                 focus:outline-none focus:border-blue-500 focus:ring-[3px] focus:ring-blue-500/10
                 {error ? 'border-red-600' : ''}"
@@ -124,9 +124,9 @@
 
           <p class="text-xs text-slate-500 m-0">
             {#if type === 'file'}
-              File format can be changed in the Settings panel after creation
+              Config will be created in YAML format. You can convert to other formats in the editor.
             {:else}
-              Parent folders will be created automatically if they don't exist
+              Parent folders will be created automatically if they don't exist.
             {/if}
           </p>
         </div>
@@ -143,7 +143,7 @@
             type="submit" 
             class="px-4 py-2 bg-blue-500 text-white border-none rounded text-[13px] font-medium cursor-pointer transition-colors hover:bg-blue-600"
           >
-            Create {type === 'folder' ? 'Folder' : 'File'}
+            Create {type === 'folder' ? 'Folder' : 'Config'}
           </button>
         </div>
       </form>

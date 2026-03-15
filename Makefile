@@ -11,7 +11,7 @@ PKG := $(shell go list -m | head -n 1)
 .PHONY: build
 build: CGO_ENABLED = 0
 build: ## Build the binary
-	go build -trimpath -ldflags="-s -w -X $(PKG)/internal/config.version=$(VERSION) -X main.commit=$(BUILD_COMMIT) -X main.date=$(BUILD_DATE)" -o bin/$(BINARY_NAME) $(MAIN_FILE)
+	go build -trimpath -ldflags="-s -w -X $(PKG)/internal/config.ServiceVersion=$(VERSION) -X main.commit=$(BUILD_COMMIT) -X main.date=$(BUILD_DATE)" -o bin/$(BINARY) $(MAIN_FILE)
 
 .PHONY: build-frontend
 build-frontend: ## Build the frontend assets

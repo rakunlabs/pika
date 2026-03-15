@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"maps"
 
 	"github.com/rakunlabs/pika/internal/external"
@@ -27,6 +28,12 @@ func (s *Service) Settings(ctx context.Context) (*Settings, error) {
 	keyPath := keySettings
 	data, err := s.store.Get(ctx, keyPath)
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			// Return empty settings on first use
+			return &Settings{
+				External: make(map[string]external.External),
+			}, nil
+		}
 		return nil, err
 	}
 
@@ -46,10 +53,15 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 
 	switch patch.Action {
 	case ActionKeySet:
+		if settings.External == nil {
+			settings.External = make(map[string]external.External)
+		}
 		maps.Copy(settings.External, patch.External)
 	case ActionKeyRemove:
-		for k := range patch.External {
-			delete(settings.External, k)
+		if settings.External != nil {
+			for k := range patch.External {
+				delete(settings.External, k)
+			}
 		}
 	default:
 		return ErrBadRequest

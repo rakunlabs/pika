@@ -1,46 +1,137 @@
 <script lang="ts">
-  import { removeToast, storeToast } from '@/lib/store/toast.svelte';
-  import { ChevronRight } from 'lucide-svelte';
+  import { removeToast, storeToast, type ToastType } from '@/lib/store/toast.svelte';
+  import { X, CheckCircle, Info, AlertTriangle, AlertCircle } from 'lucide-svelte';
+  import { onDestroy } from 'svelte';
 
-  const close = (id: number) => {
-    removeToast(id);
+  // Track animation frame for progress bars
+  let frameId: number | null = null;
+  let now = $state(Date.now());
+
+  function tick() {
+    now = Date.now();
+    frameId = requestAnimationFrame(tick);
+  }
+
+  $effect(() => {
+    if (storeToast.length > 0 && frameId === null) {
+      frameId = requestAnimationFrame(tick);
+    } else if (storeToast.length === 0 && frameId !== null) {
+      cancelAnimationFrame(frameId);
+      frameId = null;
+    }
+  });
+
+  onDestroy(() => {
+    if (frameId !== null) cancelAnimationFrame(frameId);
+  });
+
+  function getProgress(toast: { createdAt: number; duration: number }): number {
+    if (toast.duration <= 0) return 100;
+    const elapsed = now - toast.createdAt;
+    return Math.max(0, 100 - (elapsed / toast.duration) * 100);
+  }
+
+  const iconMap: Record<ToastType, typeof Info> = {
+    info: Info,
+    success: CheckCircle,
+    warn: AlertTriangle,
+    alert: AlertCircle,
   };
-  const customSlide = (_: HTMLElement, { duration }: { duration: number }) => {
+
+  const config: Record<ToastType, {
+    bg: string; border: string; text: string; icon: string; progress: string;
+  }> = {
+    info: {
+      bg: 'bg-slate-800',
+      border: 'border-slate-700',
+      text: 'text-slate-100',
+      icon: 'text-blue-400',
+      progress: 'bg-blue-400',
+    },
+    success: {
+      bg: 'bg-slate-800',
+      border: 'border-slate-700',
+      text: 'text-slate-100',
+      icon: 'text-emerald-400',
+      progress: 'bg-emerald-400',
+    },
+    warn: {
+      bg: 'bg-slate-800',
+      border: 'border-slate-700',
+      text: 'text-slate-100',
+      icon: 'text-amber-400',
+      progress: 'bg-amber-400',
+    },
+    alert: {
+      bg: 'bg-slate-800',
+      border: 'border-slate-700',
+      text: 'text-slate-100',
+      icon: 'text-red-400',
+      progress: 'bg-red-400',
+    },
+  };
+
+  function slideIn(node: HTMLElement, { duration }: { duration: number }) {
     return {
       duration,
-      css: (_: number, u: number) => `transform: translateX(${u * 400}px)`
+      css: (t: number) => {
+        const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+        return `
+          transform: translateX(${(1 - eased) * 120}%);
+          opacity: ${eased};
+        `;
+      }
     };
-  };
+  }
+
+  function slideOut(node: HTMLElement, { duration }: { duration: number }) {
+    return {
+      duration,
+      css: (t: number) => {
+        const eased = 1 - Math.pow(1 - t, 3);
+        return `
+          transform: translateX(${(1 - eased) * 120}%);
+          opacity: ${eased};
+          max-height: ${eased * 80}px;
+          margin-bottom: ${eased * 8}px;
+          overflow: hidden;
+        `;
+      }
+    };
+  }
 </script>
 
-<div class="fixed bottom-0 right-0 z-50">
+<div class="fixed bottom-3 right-3 z-[200] flex flex-col-reverse gap-2 w-80 pointer-events-none">
   {#each storeToast as toast (toast.id)}
+    {@const style = config[toast.type]}
+    {@const Icon = iconMap[toast.type]}
+    {@const progress = getProgress(toast)}
     <div
-      class={`${toast.type} flex p-2 h-12 items-center border-l border-t border-gray-700 w-[28rem]`}
-      transition:customSlide={{ duration: 250 }}
+      class="{style.bg} {style.text} border {style.border} rounded-lg shadow-lg shadow-black/20 pointer-events-auto overflow-hidden"
+      in:slideIn={{ duration: 250 }}
+      out:slideOut={{ duration: 200 }}
     >
-      <button onclick={() => close(toast.id)} class="hover:fill-red-500">
-        <ChevronRight />
-      </button>
-      <div class="pl-2">
-        <span>{toast.message}</span>
+      <div class="flex items-start gap-2.5 px-3 py-2.5">
+        <span class="{style.icon} shrink-0 mt-0.5">
+          <Icon size={16} strokeWidth={2} />
+        </span>
+        <p class="flex-1 text-[13px] leading-snug m-0 break-words">{toast.message}</p>
+        <button
+          class="shrink-0 p-0.5 text-slate-500 bg-transparent border-none rounded cursor-pointer transition-colors hover:text-slate-200 hover:bg-slate-700"
+          onclick={() => removeToast(toast.id)}
+          aria-label="Dismiss"
+        >
+          <X size={14} />
+        </button>
       </div>
+      {#if toast.duration > 0}
+        <div class="h-[2px] w-full bg-slate-700/50">
+          <div
+            class="{style.progress} h-full transition-none"
+            style="width: {progress}%"
+          ></div>
+        </div>
+      {/if}
     </div>
   {/each}
 </div>
-
-<style>
-  @reference "tailwindcss";
-
-  .alert {
-    @apply bg-red-100 text-red-800;
-  }
-
-  .info {
-    @apply bg-teal-100 text-teal-800;
-  }
-
-  .warn {
-    @apply bg-yellow-100 text-yellow-800;
-  }
-</style>

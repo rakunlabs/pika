@@ -1,7 +1,8 @@
 <script lang="ts">
   import { configStore } from '@/lib/store/config.svelte';
-  import type { FileFormat } from '@/lib/types/config';
-  import { Play, Info, Clock, HardDrive, GitBranch, FileText } from 'lucide-svelte';
+  import { addToast } from '@/lib/store/toast.svelte';
+  import type { FileFormat, InheritEntry } from '@/lib/types/config';
+  import { Play, Info, Clock, HardDrive, GitBranch, FileText, Plus, Trash2, Layers, ChevronDown, ChevronRight } from 'lucide-svelte';
   import { onMount } from 'svelte';
 
   interface Props {
@@ -17,6 +18,26 @@
   const externalResources = $derived(
     settings?.external ? Object.keys(settings.external) : []
   );
+
+  // Version list state
+  let versionsExpanded = $state(false);
+  const allVersions = $derived(activeTab ? [...activeTab.versions].reverse() : []);
+  const visibleVersions = $derived(versionsExpanded ? allVersions : allVersions.slice(0, 1));
+  const hasMoreVersions = $derived(allVersions.length > 1);
+
+  // Variant state
+  let showAddVariant = $state(false);
+  let newVariantKey = $state('');
+
+  // Inheritance state
+  let showInheritance = $state(true);
+  let showAddInherit = $state(false);
+  let newInheritSource = $state('');
+  let newInheritType = $state<'internal' | 'external'>('internal');
+  let newInheritPaths = $state('');
+  let newInheritInject = $state('');
+
+  const inheritEntries = $derived(activeTab?.meta?.inherits || []);
 
   onMount(() => {
     configStore.loadSettings();
@@ -36,20 +57,65 @@
     }
   }
 
-  function handleInheritChange(e: Event) {
-    const target = e.target as HTMLSelectElement;
-    if (activeTab) {
-      configStore.updateTabMeta(activeTab.id, { 
-        inherit: target.value || undefined 
-      });
+  // ── Inheritance handlers ──
+  function addInheritEntry() {
+    if (!activeTab) return;
+    if (!newInheritSource.trim()) {
+      addToast('Source is required', 'alert');
+      return;
     }
+
+    const entry: InheritEntry = {
+      source: newInheritSource.trim(),
+    };
+
+    const paths = newInheritPaths.split(',').map(p => p.trim()).filter(p => p.length > 0);
+    if (paths.length > 0) {
+      entry.paths = paths;
+    }
+    if (newInheritInject.trim()) {
+      entry.inject = newInheritInject.trim();
+    }
+
+    const current = activeTab.meta.inherits || [];
+    configStore.updateTabMeta(activeTab.id, { inherits: [...current, entry] });
+
+    // Reset form
+    newInheritSource = '';
+    newInheritPaths = '';
+    newInheritInject = '';
+    showAddInherit = false;
+    addToast('Inheritance added', 'success');
   }
 
-  function handleVersionChange(e: Event) {
-    const target = e.target as HTMLSelectElement;
-    const version = parseInt(target.value, 10);
-    if (activeTab && !isNaN(version)) {
-      configStore.loadVersion(activeTab.id, version);
+  function removeInheritEntry(index: number) {
+    if (!activeTab) return;
+    const current = [...(activeTab.meta.inherits || [])];
+    current.splice(index, 1);
+    configStore.updateTabMeta(activeTab.id, { inherits: current.length > 0 ? current : undefined });
+    addToast('Inheritance removed', 'success');
+  }
+
+  // ── Variant handlers ──
+  async function handleAddVariant() {
+    if (!activeTab) return;
+    if (!newVariantKey.trim()) {
+      addToast('Variant key is required (e.g., env=production)', 'alert');
+      return;
+    }
+    if (!newVariantKey.includes('=')) {
+      addToast('Variant key must be in key=value format', 'alert');
+      return;
+    }
+
+    await configStore.createVariant(activeTab.path, newVariantKey.trim());
+    newVariantKey = '';
+    showAddVariant = false;
+  }
+
+  function handleRender() {
+    if (onRender) {
+      onRender();
     }
   }
 
@@ -64,11 +130,7 @@
     return new Date(timestamp).toLocaleString();
   }
 
-  function handleRender() {
-    if (onRender) {
-      onRender();
-    }
-  }
+
 </script>
 
 <div class="flex flex-col h-full bg-slate-50 border-l border-slate-200">
@@ -85,7 +147,7 @@
           <span class="flex items-center text-gray-400"><FileText size={12} /></span>
           Format
         </label>
-        <select 
+        <select
           id="format-select"
           class="w-full px-2.5 py-2 text-[13px] border border-slate-200 rounded bg-white text-gray-700 cursor-pointer transition-colors hover:border-slate-300 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
           value={activeTab.format}
@@ -97,23 +159,56 @@
         </select>
       </div>
 
-      <!-- Version Selection -->
+      <!-- Version History -->
       <div class="mb-4">
-        <label class="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 mb-1.5 uppercase tracking-wide" for="version-select">
+        <label class="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 mb-1.5 uppercase tracking-wide">
           <span class="flex items-center text-gray-400"><GitBranch size={12} /></span>
-          Version
+          Versions ({allVersions.length})
         </label>
-        <select 
-          id="version-select"
-          class="w-full px-2.5 py-2 text-[13px] border border-slate-200 rounded bg-white text-gray-700 cursor-pointer transition-colors hover:border-slate-300 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
-          value={activeTab.version}
-          onchange={handleVersionChange}
-        >
-          <option value={0}>Latest</option>
-          {#each activeTab.versions as ver}
-            <option value={ver.version}>v{ver.version}</option>
-          {/each}
-        </select>
+        {#if allVersions.length > 0}
+          <div class="border border-slate-200 rounded bg-white overflow-hidden">
+            <div style={versionsExpanded ? 'max-height: 200px; overflow-y: auto' : ''}>
+              {#each visibleVersions as ver}
+                {@const lastStatus = ver.status[ver.status.length - 1]}
+                {@const isCurrent = activeTab.version === ver.version || (activeTab.version === 0 && ver.version === activeTab.latestVersion)}
+                <button
+                  class="flex items-center justify-between w-full px-2.5 py-1.5 text-left text-[11px] border-b border-slate-100 last:border-b-0 cursor-pointer transition-colors
+                    {isCurrent ? 'bg-blue-50 text-blue-700' : 'hover:bg-slate-50 text-slate-600'}"
+                  onclick={() => configStore.loadVersion(activeTab.id, ver.version)}
+                >
+                  <span class="flex items-center gap-1.5">
+                    <span class="font-mono font-medium">v{ver.version}</span>
+                    {#if ver.constraint}
+                      <span class="px-1 py-0 text-[9px] font-mono bg-amber-100 text-amber-700 rounded">{ver.constraint}</span>
+                    {/if}
+                  </span>
+                  <span class="flex items-center gap-1.5 text-[10px] text-slate-400">
+                    {#if lastStatus?.author && lastStatus.author !== 'system'}
+                      <span class="text-slate-500">{lastStatus.author}</span>
+                      <span class="text-slate-300">·</span>
+                    {/if}
+                    {#if lastStatus?.timestamp}
+                      <span>{new Date(lastStatus.timestamp * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                    {/if}
+                    {#if lastStatus?.status === 'DELETED'}
+                      <span class="text-red-400">deleted</span>
+                    {/if}
+                  </span>
+                </button>
+              {/each}
+            </div>
+            {#if hasMoreVersions}
+              <button
+                class="w-full px-2.5 py-1 text-[10px] text-blue-600 bg-slate-50 border-t border-slate-100 cursor-pointer hover:bg-blue-50 transition-colors text-center sticky bottom-0"
+                onclick={() => versionsExpanded = !versionsExpanded}
+              >
+                {versionsExpanded ? 'Show less' : `Show all ${allVersions.length} versions`}
+              </button>
+            {/if}
+          </div>
+        {:else}
+          <p class="text-[11px] text-slate-400 italic">No versions yet</p>
+        {/if}
       </div>
 
       <!-- Description -->
@@ -132,33 +227,213 @@
         ></textarea>
       </div>
 
-      <!-- Inheritance -->
+      <div class="h-px bg-slate-200 my-4"></div>
+
+      <!-- ════════════════════════════════ -->
+      <!-- Inheritance Section -->
+      <!-- ════════════════════════════════ -->
       <div class="mb-4">
-        <label class="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 mb-1.5 uppercase tracking-wide" for="inherit-select">
-          <span class="flex items-center text-gray-400"><GitBranch size={12} /></span>
-          Inherit From
-        </label>
-        <select 
-          id="inherit-select"
-          class="w-full px-2.5 py-2 text-[13px] border border-slate-200 rounded bg-white text-gray-700 cursor-pointer transition-colors hover:border-slate-300 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
-          value={activeTab.meta.inherit || ''}
-          onchange={handleInheritChange}
-        >
-          <option value="">None</option>
-          {#each externalResources as resource}
-            <option value={resource}>{resource}</option>
-          {/each}
-        </select>
-        <p class="mt-1 text-[11px] text-gray-400">Inherit configuration from external resource</p>
+        <div class="flex items-center justify-between mb-2">
+          <button
+            class="flex items-center gap-1.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide cursor-pointer hover:text-slate-700"
+            onclick={() => showInheritance = !showInheritance}
+          >
+            {#if showInheritance}<ChevronDown size={12} />{:else}<ChevronRight size={12} />{/if}
+            <GitBranch size={12} />
+            Inherits ({inheritEntries.length})
+          </button>
+          {#if showInheritance}
+            <button
+              class="flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] text-blue-600 bg-blue-50 rounded cursor-pointer hover:bg-blue-100 transition-colors"
+              onclick={() => showAddInherit = true}
+            >
+              <Plus size={10} /> Add
+            </button>
+          {/if}
+        </div>
+
+        {#if showInheritance}
+          <!-- Add Inherit Form -->
+          {#if showAddInherit}
+            <div class="p-2.5 mb-2 bg-white border border-slate-200 rounded">
+              <!-- Source type toggle -->
+              <div class="flex gap-1.5 mb-2">
+                <button
+                  class="flex-1 py-1 text-[10px] font-medium rounded transition-colors cursor-pointer
+                    {newInheritType === 'internal' ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-slate-50 text-slate-500 border border-slate-200 hover:bg-slate-100'}"
+                  onclick={() => { newInheritType = 'internal'; newInheritSource = ''; }}
+                >
+                  Internal
+                </button>
+                <button
+                  class="flex-1 py-1 text-[10px] font-medium rounded transition-colors cursor-pointer
+                    {newInheritType === 'external' ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-slate-50 text-slate-500 border border-slate-200 hover:bg-slate-100'}"
+                  onclick={() => { newInheritType = 'external'; newInheritSource = ''; }}
+                >
+                  External
+                </button>
+              </div>
+
+              <!-- Source -->
+              {#if newInheritType === 'internal'}
+                <input
+                  type="text"
+                  bind:value={newInheritSource}
+                  placeholder="Config path (e.g., base/database)"
+                  class="w-full px-2 py-1.5 text-xs font-mono border border-slate-200 rounded mb-2 focus:outline-none focus:border-blue-500"
+                />
+              {:else}
+                <select
+                  class="w-full px-2 py-1.5 text-xs border border-slate-200 rounded mb-2 focus:outline-none focus:border-blue-500"
+                  bind:value={newInheritSource}
+                >
+                  <option value="">Select external resource</option>
+                  {#each externalResources as resource}
+                    <option value={resource}>{resource}</option>
+                  {/each}
+                </select>
+              {/if}
+
+              <!-- Paths filter -->
+              <div class="mb-2">
+                <label class="block text-[10px] text-slate-400 mb-0.5">Include paths (optional)</label>
+                <input
+                  type="text"
+                  bind:value={newInheritPaths}
+                  placeholder="e.g., host, port, credentials.*"
+                  class="w-full px-2 py-1.5 text-xs font-mono border border-slate-200 rounded focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <!-- Inject target -->
+              <div class="mb-2">
+                <label class="block text-[10px] text-slate-400 mb-0.5">Inject at (optional)</label>
+                <input
+                  type="text"
+                  bind:value={newInheritInject}
+                  placeholder="e.g., database.auth (empty = root)"
+                  class="w-full px-2 py-1.5 text-xs font-mono border border-slate-200 rounded focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div class="flex gap-1.5">
+                <button
+                  class="flex-1 py-1 text-[11px] text-white bg-blue-500 rounded cursor-pointer hover:bg-blue-600 transition-colors"
+                  onclick={addInheritEntry}
+                >
+                  Add
+                </button>
+                <button
+                  class="flex-1 py-1 text-[11px] text-slate-500 bg-slate-100 rounded cursor-pointer hover:bg-slate-200 transition-colors"
+                  onclick={() => { showAddInherit = false; newInheritSource = ''; newInheritPaths = ''; newInheritInject = ''; }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          {/if}
+
+          <!-- Inherit entries list -->
+          {#if inheritEntries.length === 0 && !showAddInherit}
+            <p class="text-[11px] text-slate-400 italic">No inheritance. Add sources to merge configs from other files or external resources.</p>
+          {:else}
+            <div class="space-y-1.5">
+              {#each inheritEntries as entry, i (i)}
+                <div class="bg-white border border-slate-200 rounded overflow-hidden">
+                  <div class="flex items-start justify-between px-2.5 py-2 gap-2">
+                    <div class="flex-1 min-w-0">
+                      <div class="text-xs font-mono text-blue-600 truncate" title={entry.source}>
+                        {entry.source}
+                      </div>
+                      {#if entry.paths?.length}
+                        <div class="text-[10px] text-slate-400 mt-0.5">
+                          paths: <span class="font-mono">{entry.paths.join(', ')}</span>
+                        </div>
+                      {/if}
+                      {#if entry.inject}
+                        <div class="text-[10px] text-slate-400 mt-0.5">
+                          inject: <span class="font-mono text-emerald-600">{entry.inject}</span>
+                        </div>
+                      {/if}
+                    </div>
+                    <button
+                      class="p-0.5 text-slate-400 hover:text-red-500 cursor-pointer transition-colors shrink-0"
+                      onclick={() => removeInheritEntry(i)}
+                      title="Remove"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        {/if}
       </div>
 
-      <!-- Divider -->
+      <div class="h-px bg-slate-200 my-4"></div>
+
+      <!-- ════════════════════════════════ -->
+      <!-- Variants Section -->
+      <!-- ════════════════════════════════ -->
+      {#if !activeTab.variantKey}
+        <div class="mb-4">
+          <div class="flex items-center justify-between mb-2">
+            <span class="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+              <Layers size={12} />
+              Variants
+            </span>
+            <button
+              class="flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] text-blue-600 bg-blue-50 rounded cursor-pointer hover:bg-blue-100 transition-colors"
+              onclick={() => showAddVariant = true}
+            >
+              <Plus size={10} /> Add
+            </button>
+          </div>
+
+          {#if showAddVariant}
+            <div class="p-2.5 mb-2 bg-white border border-slate-200 rounded">
+              <input
+                type="text"
+                bind:value={newVariantKey}
+                placeholder="key=value (e.g., env=production)"
+                class="w-full px-2 py-1.5 text-xs font-mono border border-slate-200 rounded mb-2 focus:outline-none focus:border-blue-500"
+              />
+              <div class="flex gap-1.5">
+                <button
+                  class="flex-1 py-1 text-[11px] text-white bg-blue-500 rounded cursor-pointer hover:bg-blue-600 transition-colors"
+                  onclick={handleAddVariant}
+                >
+                  Create
+                </button>
+                <button
+                  class="flex-1 py-1 text-[11px] text-slate-500 bg-slate-100 rounded cursor-pointer hover:bg-slate-200 transition-colors"
+                  onclick={() => { showAddVariant = false; newVariantKey = ''; }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          {/if}
+
+          <p class="text-[11px] text-slate-400">Variants are independent configs accessed via query params. Manage them in the file tree.</p>
+        </div>
+      {:else}
+        <div class="mb-4">
+          <span class="flex items-center gap-1.5 text-[11px] font-medium text-purple-600 mb-1">
+            <Layers size={12} />
+            Variant: <span class="font-mono">?{activeTab.variantKey}</span>
+          </span>
+          <p class="text-[11px] text-slate-400">This is an independent variant of <span class="font-mono text-slate-500">{activeTab.path}</span></p>
+        </div>
+      {/if}
+
       <div class="h-px bg-slate-200 my-4"></div>
 
       <!-- File Info -->
       <div class="mb-2">
         <h4 class="text-[11px] font-semibold text-slate-500 mb-2.5 uppercase tracking-wide">File Information</h4>
-        
+
         <div class="flex items-center gap-2 py-1.5 text-xs">
           <span class="flex items-center text-gray-400"><HardDrive size={12} /></span>
           <span class="text-slate-500 min-w-[60px]">Size</span>
@@ -178,12 +453,11 @@
         </div>
       </div>
 
-      <!-- Divider -->
       <div class="h-px bg-slate-200 my-4"></div>
 
       <!-- Render Button -->
       <div class="pt-2">
-        <button 
+        <button
           class="flex items-center justify-center gap-2 w-full px-4 py-2.5 bg-blue-500 text-white border-none rounded-md text-[13px] font-medium cursor-pointer transition-colors hover:bg-blue-600 active:bg-blue-700"
           onclick={handleRender}
         >

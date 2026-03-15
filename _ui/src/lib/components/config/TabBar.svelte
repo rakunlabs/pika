@@ -1,19 +1,17 @@
 <script lang="ts">
-  import { X, FileJson, FileCode, File } from 'lucide-svelte';
+  import { X, FileJson, FileCode, File, FileText } from 'lucide-svelte';
   import { configStore } from '@/lib/store/config.svelte';
-  import type { Tab } from '@/lib/types/config';
+  import type { Tab, FileFormat } from '@/lib/types/config';
 
-  function getFileIcon(filename: string) {
-    const ext = filename.split('.').pop()?.toLowerCase();
-    switch (ext) {
+  function getFormatIcon(format: FileFormat) {
+    switch (format) {
       case 'json':
         return FileJson;
       case 'yaml':
-      case 'yml':
       case 'toml':
         return FileCode;
       default:
-        return File;
+        return FileText;
     }
   }
 
@@ -45,7 +43,7 @@
   {:else}
     <div class="flex items-stretch overflow-x-auto overflow-y-hidden flex-1 scrollbar-thin scrollbar-track-slate-200 scrollbar-thumb-slate-400">
       {#each configStore.openTabs as tab (tab.id)}
-        {@const FileIcon = getFileIcon(tab.name)}
+        {@const FileIcon = getFormatIcon(tab.format)}
         {@const isActive = configStore.activeTabId === tab.id}
         <div
           class="group flex items-center gap-1.5 pl-3 pr-2 bg-transparent border-none border-r border-slate-200 cursor-pointer text-[13px] whitespace-nowrap min-w-0 max-w-[200px] transition-colors
