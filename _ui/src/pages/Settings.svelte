@@ -27,13 +27,14 @@
   // ── External resource state ──
   let showAddExternal = $state(false);
   let newExtName = $state('');
-  let newExtType = $state<'http' | 'vault'>('http');
+  let newExtType = $state<'http' | 'vault' | 'kubernetes'>('http');
   let newExtHttpUrl = $state('');
   let newExtVaultAddr = $state('');
   let newExtVaultMount = $state('secret');
   let newExtVaultRoleId = $state('');
   let newExtVaultSecretId = $state('');
   let newExtVaultAppRolePath = $state('approle');
+  let newExtK8sKubeconfig = $state('');
 
   const tokens = $derived(configStore.tokens);
   const settings = $derived(configStore.settings);
@@ -139,7 +140,7 @@
         return;
       }
       resource.http = { base_url: newExtHttpUrl.trim() };
-    } else {
+    } else if (newExtType === 'vault') {
       if (!newExtVaultAddr.trim() || !newExtVaultMount.trim()) {
         addToast('Vault address and mount are required', 'alert');
         return;
@@ -157,6 +158,10 @@
           app_role_base_path: newExtVaultAppRolePath.trim() || 'approle'
         }
       };
+    } else if (newExtType === 'kubernetes') {
+      resource.kubernetes = {
+        kubeconfig: newExtK8sKubeconfig.trim() || undefined
+      };
     }
 
     try {
@@ -168,10 +173,11 @@
       newExtName = '';
       newExtHttpUrl = '';
       newExtVaultAddr = '';
-      newExtVaultMount = '';
+      newExtVaultMount = 'secret';
       newExtVaultRoleId = '';
       newExtVaultSecretId = '';
       newExtVaultAppRolePath = 'approle';
+      newExtK8sKubeconfig = '';
     } catch (error) {
       addToast('Failed to add external resource', 'alert');
     }
@@ -500,6 +506,10 @@
                 <input type="radio" bind:group={newExtType} value="vault" class="text-blue-500" />
                 Vault
               </label>
+              <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                <input type="radio" bind:group={newExtType} value="kubernetes" class="text-blue-500" />
+                Kubernetes
+              </label>
             </div>
           </div>
 
@@ -514,7 +524,7 @@
                 class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
               />
             </div>
-          {:else}
+          {:else if newExtType === 'vault'}
             <div class="mb-4">
               <label for="ext-vault-addr" class="block text-xs font-medium text-slate-500 mb-1.5">Vault Address</label>
               <input
@@ -572,6 +582,18 @@
               />
               <p class="mt-1 text-[11px] text-slate-400">Usually "approle" unless using a custom mount</p>
             </div>
+          {:else if newExtType === 'kubernetes'}
+            <div class="mb-4">
+              <label for="ext-k8s-kubeconfig" class="block text-xs font-medium text-slate-500 mb-1.5">Kubeconfig Path (optional)</label>
+              <input
+                id="ext-k8s-kubeconfig"
+                type="text"
+                bind:value={newExtK8sKubeconfig}
+                placeholder="/path/to/kubeconfig"
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+              />
+              <p class="mt-1 text-[11px] text-slate-400">Leave empty to use in-cluster config (service account token). Path format: <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px]">namespace/secret/name</code> or <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px]">namespace/configmap/name</code></p>
+            </div>
           {/if}
 
           <div class="flex justify-end gap-2">
@@ -606,7 +628,7 @@
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-medium text-slate-800">{name}</span>
                   <span class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-blue-100 text-blue-700">
-                    {resource.http ? 'HTTP' : 'Vault'}
+                    {resource.http ? 'HTTP' : resource.vault ? 'Vault' : 'Kubernetes'}
                   </span>
                 </div>
                 <div class="mt-1 space-y-0.5">
@@ -625,6 +647,15 @@
                         <span>Role: {resource.vault.app_role.role_id.slice(0, 8)}...</span>
                       </div>
                     {/if}
+                  {:else if resource.kubernetes}
+                    <div class="text-xs text-slate-400">
+                      {resource.kubernetes.kubeconfig
+                        ? `Kubeconfig: ${resource.kubernetes.kubeconfig}`
+                        : 'In-cluster (service account)'}
+                    </div>
+                    <div class="text-[10px] text-slate-400">
+                      Path format: <code class="px-1 py-0.5 bg-slate-100 rounded">namespace/secret/name</code> or <code class="px-1 py-0.5 bg-slate-100 rounded">namespace/configmap/name</code>
+                    </div>
                   {/if}
                 </div>
               </div>

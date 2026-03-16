@@ -1,4 +1,4 @@
-/pika.db
+/pika.*
 /bin/
 /dist
 coverage.out

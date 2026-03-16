@@ -214,7 +214,12 @@ func (s *Service) fetchExternalConfig(ctx context.Context, resourceName string, 
 		return s.fetchVaultConfig(ctx, ext.Vault, path)
 	}
 
-	return nil, fmt.Errorf("external resource %q has no configured provider (http or vault)", resourceName)
+	// Kubernetes external resource
+	if ext.Kubernetes != nil {
+		return s.fetchKubernetesConfig(ctx, ext.Kubernetes, path)
+	}
+
+	return nil, fmt.Errorf("external resource %q has no configured provider (http, vault, or kubernetes)", resourceName)
 }
 
 // fetchVaultConfig reads a secret from Vault and returns it as JSON bytes.
@@ -283,6 +288,42 @@ func (s *Service) fetchHTTPConfig(ctx context.Context, cfg *ok.Config, path stri
 	return body, nil
 }
 
+// fetchKubernetesConfig fetches config from a Kubernetes Secret or ConfigMap.
+// Path format: "namespace/secret/name" or "namespace/configmap/name".
+func (s *Service) fetchKubernetesConfig(ctx context.Context, k8s *external.Kubernetes, path string) ([]byte, error) {
+	client, err := s.getKubeClient(k8s)
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes client: %w", err)
+	}
+
+	parts := strings.SplitN(path, "/", 3)
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid kubernetes path %q: expected namespace/type/name (e.g., default/secret/my-secret)", path)
+	}
+
+	namespace, resourceType, name := parts[0], parts[1], parts[2]
+
+	var data map[string]any
+	switch resourceType {
+	case "secret":
+		data, err = client.ReadSecret(ctx, namespace, name)
+	case "configmap":
+		data, err = client.ReadConfigMap(ctx, namespace, name)
+	default:
+		return nil, fmt.Errorf("unsupported kubernetes resource type %q: expected secret or configmap", resourceType)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("serializing kubernetes data: %w", err)
+	}
+
+	return jsonBytes, nil
+}
+
 // ListExternalPaths lists available paths from an external resource.
 // For Vault, this lists secrets under the mount path.
 // For HTTP, this is not supported (returns empty).
@@ -299,6 +340,11 @@ func (s *Service) ListExternalPaths(ctx context.Context, resourceName string, pr
 
 	if ext.Vault != nil {
 		return s.listVaultSecrets(ctx, ext.Vault, prefix)
+	}
+
+	// Kubernetes resource listing
+	if ext.Kubernetes != nil {
+		return s.listKubernetesResources(ctx, ext.Kubernetes, prefix)
 	}
 
 	// HTTP doesn't support listing
@@ -337,4 +383,14 @@ func (s *Service) listVaultSecrets(ctx context.Context, vault *external.Vault, p
 	}
 
 	return keys, nil
+}
+
+// listKubernetesResources lists available Kubernetes resources for the path browser.
+func (s *Service) listKubernetesResources(ctx context.Context, k8s *external.Kubernetes, prefix string) ([]string, error) {
+	client, err := s.getKubeClient(k8s)
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes client: %w", err)
+	}
+
+	return client.ListResources(ctx, prefix)
 }

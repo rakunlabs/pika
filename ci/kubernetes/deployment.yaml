@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pika
+  labels:
+    app.kubernetes.io/name: pika
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pika
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pika
+    spec:
+      serviceAccountName: pika
+      containers:
+        - name: pika
+          image: ghcr.io/rakunlabs/pika:latest
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: public
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: PIKA_CFG_FILE
+              value: /etc/pika/config.yaml
+          volumeMounts:
+            - name: config
+              mountPath: /etc/pika
+              readOnly: true
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: pika
+        - name: data
+          persistentVolumeClaim:
+            claimName: pika

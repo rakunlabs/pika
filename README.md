@@ -177,7 +177,7 @@ Inherit from another pika config:
 
 ### External Inheritance
 
-Inherit from Vault or HTTP sources (configure in Settings):
+Inherit from Vault, HTTP, or Kubernetes sources (configure in Settings):
 
 ```yaml
 - resource: my-vault
@@ -185,6 +185,34 @@ Inherit from Vault or HTTP sources (configure in Settings):
 
 - resource: my-api
   path: /config/defaults
+
+- resource: my-k8s
+  path: production/secret/db-credentials
+
+- resource: my-k8s
+  path: default/configmap/app-config
+```
+
+### Kubernetes Secrets & ConfigMaps
+
+Pika can inherit from Kubernetes Secrets and ConfigMaps. Configure a Kubernetes external resource in Settings with an optional kubeconfig path (leave empty for in-cluster auth).
+
+Path format: `namespace/type/name`
+
+| Path                              | Reads                                            |
+| --------------------------------- | ------------------------------------------------ |
+| `default/secret/db-creds`         | Secret "db-creds" in namespace "default"         |
+| `production/configmap/app-config` | ConfigMap "app-config" in namespace "production" |
+
+Secret values are automatically base64-decoded. ConfigMap values are returned as-is.
+
+Example — inject database credentials from a Kubernetes Secret:
+
+```yaml
+- resource: k8s-prod
+  path: production/secret/db-credentials
+  paths: ["username", "password"]
+  inject: database.auth
 ```
 
 ### Selective Inheritance
@@ -226,7 +254,7 @@ server:
 
 ### Forward Auth
 
-Pika supports forward authentication (e.g., with Authelia, Authentik):
+Pika supports forward authentication (e.g., with Turna, Authelia, Authentik):
 
 ```yaml
 server:
@@ -237,3 +265,71 @@ server:
     response_headers:
       - X-User
 ```
+
+## Kubernetes Deployment
+
+Kustomize manifests are provided in [`ci/kubernetes/`](ci/kubernetes/). They include a Deployment, Service, ConfigMap (with seed user and public port), PVC, ServiceAccount, and a Gateway API HTTPRoute for `pika.example.com`.
+
+### Quick Deploy
+
+Apply directly from the repository:
+
+```sh
+kubectl apply -k https://github.com/rakunlabs/pika/ci/kubernetes
+```
+
+Pin to a specific version:
+
+```sh
+kubectl apply -k "https://github.com/rakunlabs/pika/ci/kubernetes?ref=v0.1.0"
+```
+
+### Customizing with a Remote Base
+
+Create your own `kustomization.yaml` that references the upstream manifests and overrides what you need:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - https://github.com/rakunlabs/pika/ci/kubernetes?ref=main
+
+images:
+  - name: ghcr.io/rakunlabs/pika
+    newTag: v0.1.0
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: pika
+    patch: |
+      - op: replace
+        path: /data/config.yaml
+        value: |
+          server:
+            port: "8080"
+            public_port: "9090"
+            auth:
+              cookie_secret: my-real-secret
+              seed_user:
+                username: admin
+                password: my-real-password
+          storage:
+            path: /data/pika.db
+  - target:
+      kind: HTTPRoute
+      name: pika
+    patch: |
+      - op: replace
+        path: /spec/hostnames/0
+        value: pika.mydomain.com
+```
+
+Then apply:
+
+```sh
+kubectl apply -k .
+```
+
+The public port (9090) is only exposed as a ClusterIP service — accessible within the cluster at `pika.pika.svc.cluster.local:9090`, not through the gateway.

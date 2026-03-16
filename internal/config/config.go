@@ -58,7 +58,7 @@ type Server struct {
 // Auth configures built-in user/password authentication.
 type Auth struct {
 	// CookieSecret is used to sign session cookies (required).
-	CookieSecret string `cfg:"cookie_secret"`
+	CookieSecret string `cfg:"cookie_secret" log:"-"`
 	// SessionTTL is the session lifetime (default: 24h).
 	SessionTTL time.Duration `cfg:"session_ttl" default:"24h"`
 	// Cookie configures session cookie properties.

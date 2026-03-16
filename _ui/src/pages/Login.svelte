@@ -1,6 +1,6 @@
 <script lang="ts">
   import { appStore } from '@/lib/store/store.svelte';
-  import { Boxes, LogIn } from 'lucide-svelte';
+  import { Blocks, LogIn } from 'lucide-svelte';
 
   let username = $state('');
   let password = $state('');
@@ -22,17 +22,19 @@
   }
 </script>
 
-<div class="flex items-center justify-center h-full w-full bg-slate-100">
+<div class="flex flex-col items-center justify-start h-full w-full bg-slate-100 pt-8">
   <div class="w-full max-w-sm">
     <div class="bg-white rounded-lg shadow-lg border border-slate-200 p-8">
       <!-- Logo -->
       <div class="flex items-center justify-center gap-2 mb-6">
-        <Boxes size={24} class="text-blue-500" />
-        <span class="text-xl font-bold tracking-wide text-slate-800">pika</span>
+        <Blocks size={24} color="#EF233C" />
+        <div class="flex flex-col leading-none">
+          <span class="text-xl font-bold tracking-wide text-slate-800">pika</span>
+          {#if appStore.info?.version}
+            <span class="text-[10px] font-mono text-slate-400">{appStore.info.version}</span>
+          {/if}
+        </div>
       </div>
-
-      <h2 class="text-center text-sm font-medium text-slate-500 mb-6">Sign in to continue</h2>
-
       {#if error}
         <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-700">
           {error}
@@ -76,9 +78,5 @@
         </button>
       </form>
     </div>
-
-    <p class="text-center text-xs text-slate-400 mt-4">
-      {appStore.info?.version || ''}
-    </p>
   </div>
 </div>

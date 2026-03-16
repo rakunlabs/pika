@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pika
+data:
+  config.yaml: |
+    log_level: info
+    server:
+      port: "8080"
+      public_port: "9090"
+      auth:
+        cookie_secret: change-me-to-a-random-string
+        session_ttl: 24h
+        cookie:
+          secure: true
+          same_site: lax
+        seed_user:
+          username: admin
+          password: change-me
+    storage:
+      path: /data/pika.db

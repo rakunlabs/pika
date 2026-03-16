@@ -100,12 +100,18 @@ export interface VaultConfig {
   app_role?: VaultAppRole;
 }
 
+// Kubernetes external resource configuration
+export interface KubernetesConfig {
+  kubeconfig?: string;  // path to kubeconfig file (empty = in-cluster)
+}
+
 // External resource for inheritance
 export interface ExternalResource {
   http?: {
     base_url?: string;
   };
   vault?: VaultConfig;
+  kubernetes?: KubernetesConfig;
 }
 
 // Settings from API

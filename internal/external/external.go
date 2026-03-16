@@ -3,8 +3,16 @@ package external
 import "github.com/rakunlabs/ok"
 
 type External struct {
-	Http  *ok.Config `json:"http,omitempty"`
-	Vault *Vault     `json:"vault,omitempty"`
+	Http       *ok.Config  `json:"http,omitempty"`
+	Vault      *Vault      `json:"vault,omitempty"`
+	Kubernetes *Kubernetes `json:"kubernetes,omitempty"`
+}
+
+// Kubernetes configures a Kubernetes API external resource.
+type Kubernetes struct {
+	// Kubeconfig is the path to a kubeconfig file.
+	// If empty, in-cluster config is used (service account token at /var/run/secrets/kubernetes.io/serviceaccount/).
+	Kubeconfig string `json:"kubeconfig,omitempty"`
 }
 
 type Vault struct {

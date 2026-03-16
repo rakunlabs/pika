@@ -13,13 +13,47 @@ type Service struct {
 	// This avoids re-authenticating on every config fetch.
 	vaultMu      sync.RWMutex
 	vaultClients map[string]*external.VaultClient
+
+	// kubeClients caches Kubernetes clients keyed by kubeconfig path (or "" for in-cluster).
+	kubeMu      sync.RWMutex
+	kubeClients map[string]*external.KubeClient
 }
 
 func New(store Storage) *Service {
 	return &Service{
 		store:        store,
 		vaultClients: make(map[string]*external.VaultClient),
+		kubeClients:  make(map[string]*external.KubeClient),
 	}
+}
+
+// getKubeClient returns a cached or new KubeClient for the given Kubernetes config.
+func (s *Service) getKubeClient(k8s *external.Kubernetes) (*external.KubeClient, error) {
+	key := k8s.Kubeconfig // "" for in-cluster
+
+	s.kubeMu.RLock()
+	client, exists := s.kubeClients[key]
+	s.kubeMu.RUnlock()
+
+	if exists {
+		return client, nil
+	}
+
+	s.kubeMu.Lock()
+	defer s.kubeMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if client, exists = s.kubeClients[key]; exists {
+		return client, nil
+	}
+
+	client, err := external.NewKubeClient(k8s.Kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+
+	s.kubeClients[key] = client
+	return client, nil
 }
 
 // getVaultClient returns a cached or new VaultClient for the given vault config.
