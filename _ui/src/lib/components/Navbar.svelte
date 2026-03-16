@@ -1,7 +1,7 @@
 <script lang="ts">
   import { link, location } from 'svelte-spa-router';
   import { appStore } from '@/lib/store/store.svelte';
-  import { Boxes, Settings, Database, User, Users, LogOut } from 'lucide-svelte';
+  import { Blocks, Settings, Database, User, Users, LogOut } from 'lucide-svelte';
 
   const info = $derived(appStore.info);
   const authEnabled = $derived(info?.auth_enabled ?? false);
@@ -27,8 +27,13 @@
 <nav class="flex items-center h-10 bg-slate-900 text-white border-b border-slate-700 px-4 shrink-0">
   <!-- Logo / Brand -->
   <a href="/configurations" use:link class="flex items-center gap-2 mr-6 hover:opacity-80 transition-opacity no-underline text-white">
-    <Boxes size={18} class="text-blue-400" />
-    <span class="text-sm font-bold tracking-wide">pika</span>
+    <Blocks size={18} color="#EF233C" />
+    <div class="flex flex-col leading-none">
+      <span class="text-sm font-bold tracking-wide">pika</span>
+      {#if info}
+        <span class="text-[9px] font-mono text-slate-500">{info.version}</span>
+      {/if}
+    </div>
   </a>
 
   <!-- Nav Links -->
@@ -76,9 +81,7 @@
           {info.commit}
         </span>
       {/if}
-      <span class="px-1.5 py-0.5 bg-blue-900/50 text-blue-300 rounded font-mono">
-        {info.version}
-      </span>
+
     </div>
   {/if}
 </nav>

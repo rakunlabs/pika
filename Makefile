@@ -9,12 +9,12 @@ PKG := $(shell go list -m | head -n 1)
 .DEFAULT_GOAL := help
 
 .PHONY: build
-build: CGO_ENABLED = 0
-build: ## Build the binary
-	go build -trimpath -ldflags="-s -w -X $(PKG)/internal/config.ServiceVersion=$(VERSION) -X main.commit=$(BUILD_COMMIT) -X main.date=$(BUILD_DATE)" -o bin/$(BINARY) $(MAIN_FILE)
+build: build-ui ## Build the Go binary
+	@echo "> Building $(PROJECT) binary with goreleaser"
+	goreleaser build --snapshot --clean --single-target
 
-.PHONY: build-frontend
-build-frontend: ## Build the frontend assets
+.PHONY: build-ui
+build-ui: ## Build the frontend assets
 	@cd _ui && pnpm run build
 	@rm -rf internal/server/dist && mv _ui/dist internal/server/dist
 	@echo > internal/server/dist/.gitkeep

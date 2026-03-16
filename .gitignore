@@ -1,5 +1,6 @@
 /pika.db
 /bin/
+/dist
 coverage.out
 .env
 .env.*

@@ -2,21 +2,25 @@ package config
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"time"
 
 	mforwardauth "github.com/rakunlabs/ada/middleware/forwardauth"
 	"github.com/rakunlabs/chu"
+	"github.com/rakunlabs/logi"
 	"github.com/rakunlabs/pika/internal/storage"
 	"github.com/rakunlabs/tell"
 )
 
 var (
-	ServiceName    = "pika"
-	ServiceVersion = "v0.0.0"
-	Service        = ServiceName + "/" + ServiceVersion
+	ServiceName = "pika"
+	Service     = ServiceName
 )
 
 type Config struct {
+	LogLevel string `cfg:"log_level" default:"info"`
+
 	Storage storage.Config `cfg:"storage"`
 	Server  Server         `cfg:"server"`
 
@@ -29,9 +33,9 @@ type Secret struct {
 	// Enabled enables encryption of stored values.
 	Enabled bool `cfg:"enabled" default:"false"`
 	// EncryptionKey is the encryption key (any string, hashed with SHA-256 to derive 32 bytes).
-	EncryptionKey string `cfg:"encryption_key"`
+	EncryptionKey string `cfg:"encryption_key" log:"-"`
 	// AdminSecret is required to perform key rotation via the API.
-	AdminSecret string `cfg:"admin_secret"`
+	AdminSecret string `cfg:"admin_secret" log:"-"`
 }
 
 type Server struct {
@@ -78,7 +82,7 @@ type CookieConfig struct {
 // SeedUser defines an initial admin user for bootstrapping.
 type SeedUser struct {
 	Username string `cfg:"username"`
-	Password string `cfg:"password"`
+	Password string `cfg:"password" log:"-"`
 }
 
 func Load(ctx context.Context) (*Config, error) {
@@ -86,6 +90,12 @@ func Load(ctx context.Context) (*Config, error) {
 	if err := chu.Load(ctx, ServiceName, &cfg); err != nil {
 		return nil, err
 	}
+
+	if err := logi.SetLogLevel(cfg.LogLevel); err != nil {
+		return nil, fmt.Errorf("set log level %s: %w", cfg.LogLevel, err)
+	}
+
+	slog.Info("loaded configuration", "config", chu.MarshalMap(cfg))
 
 	return &cfg, nil
 }

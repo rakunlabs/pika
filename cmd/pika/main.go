@@ -20,14 +20,17 @@ import (
 )
 
 var (
-	commit = "-"
-	date   = "-"
+	version = "v0.0.0"
+	commit  = "-"
+	date    = "-"
 )
 
 func main() {
+	config.Service += "/" + version
+
 	into.Init(run,
 		into.WithLogger(logi.InitializeLog(logi.WithCaller(false))),
-		into.WithMsgf("%s version:[%s] commit:[%s] date:[%s]", config.ServiceName, config.ServiceVersion, commit, date),
+		into.WithMsgf("%s version:[%s] commit:[%s] date:[%s]", config.ServiceName, version, commit, date),
 	)
 }
 
@@ -98,7 +101,7 @@ func run(ctx context.Context) error {
 	// Start server
 	info := api.Info{
 		Name:    config.ServiceName,
-		Version: config.ServiceVersion,
+		Version: version,
 		Commit:  commit,
 		Date:    date,
 	}
