@@ -78,20 +78,19 @@ changelog:
     - title: Other work
       order: 9999
 
-dockers_v2:
-  - images:
-      - 'ghcr.io/rakunlabs/pika'
-    tags:
-      - '{{ .Tag }}'
-      - latest
-    dockerfile: ci/Dockerfile
-    labels:
-      "io.artifacthub.package.readme-url": "https://raw.githubusercontent.com/rakunlabs/pika/main/README.md"
-      "io.artifacthub.package.maintainers": "[{\"name\":\"Eray Ates\",\"email\":\"eates23@gmail.com\"}]"
-      "io.artifacthub.package.license": "MIT"
-      "org.opencontainers.image.description": "General configuration server"
-      "org.opencontainers.image.created": "{{.Date}}"
-      "org.opencontainers.image.name": "{{.ProjectName}}"
-      "org.opencontainers.image.revision": "{{.FullCommit}}"
-      "org.opencontainers.image.version": "{{.Version}}"
-      "org.opencontainers.image.source": "{{.GitURL}}"
+dockers:
+- image_templates:
+  - 'ghcr.io/rakunlabs/pika:{{ .Tag }}'
+  - 'ghcr.io/rakunlabs/pika:latest'
+  dockerfile: ci/Dockerfile
+  build_flag_templates:
+  - "--pull"
+  - "--label=io.artifacthub.package.readme-url=https://raw.githubusercontent.com/rakunlabs/pika/main/README.md"
+  - "--label=io.artifacthub.package.maintainers=[{\"name\":\"Eray Ates\",\"email\":\"eates23@gmail.com\"}]"
+  - "--label=io.artifacthub.package.license=MIT"
+  - "--label=org.opencontainers.image.description=General configuration server"
+  - "--label=org.opencontainers.image.created={{.Date}}"
+  - "--label=org.opencontainers.image.name={{.ProjectName}}"
+  - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+  - "--label=org.opencontainers.image.version={{.Version}}"
+  - "--label=org.opencontainers.image.source={{.GitURL}}"

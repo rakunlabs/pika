@@ -4,6 +4,5 @@ FROM $ALPINE
 
 RUN apk --no-cache --no-progress add tzdata ca-certificates
 
-ARG TARGETPLATFORM
-COPY $TARGETPLATFORM/pika /
+COPY pika /
 ENTRYPOINT [ "/pika" ]
