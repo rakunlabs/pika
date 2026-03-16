@@ -38,9 +38,14 @@ type Store struct {
 	stopCh   chan struct{}
 }
 
+const defaultSessionTTL = 24 * time.Hour
+
 // NewStore creates a session store with the given session TTL and cookie options.
 // It starts a background goroutine to clean up expired sessions.
 func NewStore(ttl time.Duration, cookie CookieOptions) *Store {
+	if ttl <= 0 {
+		ttl = defaultSessionTTL
+	}
 	if cookie.Name == "" {
 		cookie.Name = defaultCookieName
 	}

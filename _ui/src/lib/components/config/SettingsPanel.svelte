@@ -2,8 +2,8 @@
   import { configStore } from '@/lib/store/config.svelte';
   import { addToast } from '@/lib/store/toast.svelte';
   import type { FileFormat, InheritEntry } from '@/lib/types/config';
-  import { Play, Info, Clock, HardDrive, GitBranch, FileText, Plus, Trash2, Layers, ChevronDown, ChevronRight } from 'lucide-svelte';
-  import { onMount } from 'svelte';
+  import { Play, Info, Clock, HardDrive, GitBranch, FileText, Plus, Trash2, Layers, ChevronDown, ChevronRight, Pencil } from 'lucide-svelte';
+  import { onMount, tick } from 'svelte';
 
   interface Props {
     onRender?: () => void;
@@ -24,6 +24,45 @@
   const allVersions = $derived(activeTab ? [...activeTab.versions].reverse() : []);
   const visibleVersions = $derived(versionsExpanded ? allVersions : allVersions.slice(0, 1));
   const hasMoreVersions = $derived(allVersions.length > 1);
+
+  // Constraint editing state
+  let editingConstraintVersion = $state<number | null>(null);
+  let editingConstraintValue = $state('');
+
+  async function startEditConstraint(version: number, currentConstraint: string) {
+    editingConstraintVersion = version;
+    editingConstraintValue = currentConstraint || '';
+    await tick();
+    const input = document.querySelector<HTMLInputElement>('[data-constraint-input]');
+    input?.focus();
+    input?.select();
+  }
+
+  function cancelEditConstraint() {
+    editingConstraintVersion = null;
+    editingConstraintValue = '';
+  }
+
+  async function saveConstraint(version: number) {
+    if (!activeTab) return;
+    try {
+      await configStore.updateVersionConstraint(activeTab.id, version, editingConstraintValue.trim());
+      editingConstraintVersion = null;
+      editingConstraintValue = '';
+    } catch {
+      // Toast is handled by store
+    }
+  }
+
+  function handleConstraintKeydown(e: KeyboardEvent, version: number) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveConstraint(version);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelEditConstraint();
+    }
+  }
 
   // Variant state
   let showAddVariant = $state(false);
@@ -200,18 +239,56 @@
               {#each visibleVersions as ver}
                 {@const lastStatus = ver.status[ver.status.length - 1]}
                 {@const isCurrent = activeTab.version === ver.version || (activeTab.version === 0 && ver.version === activeTab.latestVersion)}
-                <button
-                  class="flex items-center justify-between w-full px-2.5 py-1.5 text-left text-[11px] border-b border-slate-100 last:border-b-0 cursor-pointer transition-colors
+                {@const isEditing = editingConstraintVersion === ver.version}
+                <div
+                  class="flex items-center justify-between w-full px-2.5 py-1.5 text-left text-[11px] border-b border-slate-100 last:border-b-0 transition-colors
                     {isCurrent ? 'bg-blue-50 text-blue-700' : 'hover:bg-slate-50 text-slate-600'}"
-                  onclick={() => configStore.loadVersion(activeTab.id, ver.version)}
                 >
-                  <span class="flex items-center gap-1.5">
-                    <span class="font-mono font-medium">v{ver.version}</span>
-                    {#if ver.constraint}
-                      <span class="px-1 py-0 text-[9px] font-mono bg-amber-100 text-amber-700 rounded">{ver.constraint}</span>
+                  <span class="flex items-center gap-1.5 min-w-0 flex-1">
+                    <button
+                      class="font-mono font-medium shrink-0 cursor-pointer hover:underline"
+                      onclick={() => configStore.loadVersion(activeTab.id, ver.version)}
+                      title="Load version {ver.version}"
+                    >v{ver.version}</button>
+                    {#if isEditing}
+                      <!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
+                      <span class="flex items-center gap-1" onclick={(e) => e.stopPropagation()}>
+                        <input
+                          type="text"
+                          data-constraint-input
+                          bind:value={editingConstraintValue}
+                          onkeydown={(e) => handleConstraintKeydown(e, ver.version)}
+                          placeholder=">= 0.0.0"
+                          class="w-20 px-1 py-0 text-[9px] font-mono border border-amber-400 rounded bg-white text-amber-700 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20"
+                        />
+                        <button
+                          class="px-1 py-0 text-[9px] text-white bg-amber-500 rounded cursor-pointer hover:bg-amber-600 transition-colors"
+                          onclick={() => saveConstraint(ver.version)}
+                          title="Save constraint (Enter)"
+                        >OK</button>
+                        <button
+                          class="px-1 py-0 text-[9px] text-slate-500 bg-slate-100 rounded cursor-pointer hover:bg-slate-200 transition-colors"
+                          onclick={cancelEditConstraint}
+                          title="Cancel (Esc)"
+                        >X</button>
+                      </span>
+                    {:else if ver.constraint}
+                      <button
+                        class="px-1 py-0 text-[9px] font-mono bg-amber-100 text-amber-700 rounded cursor-pointer hover:bg-amber-200 transition-colors"
+                        onclick={() => startEditConstraint(ver.version, ver.constraint ?? '')}
+                        title="Click to edit constraint"
+                      >{ver.constraint}</button>
+                    {:else}
+                      <button
+                        class="px-0.5 py-0 text-slate-300 cursor-pointer hover:text-amber-500 transition-colors"
+                        onclick={() => startEditConstraint(ver.version, '')}
+                        title="Add constraint"
+                      >
+                        <Pencil size={10} />
+                      </button>
                     {/if}
                   </span>
-                  <span class="flex items-center gap-1.5 text-[10px] text-slate-400">
+                  <span class="flex items-center gap-1.5 text-[10px] text-slate-400 shrink-0">
                     {#if lastStatus?.author && lastStatus.author !== 'system'}
                       <span class="text-slate-500">{lastStatus.author}</span>
                       <span class="text-slate-300">·</span>
@@ -223,7 +300,7 @@
                       <span class="text-red-400">deleted</span>
                     {/if}
                   </span>
-                </button>
+                </div>
               {/each}
             </div>
             {#if hasMoreVersions}
@@ -326,15 +403,15 @@
 
                 <!-- Path within the resource -->
                 {#if newInheritResource}
-                  <div class="mb-2">
-                    <label class="block text-[10px] text-slate-400 mb-0.5">Path (e.g., myapp/database)</label>
+                  <label class="block mb-2">
+                    <span class="block text-[10px] text-slate-400 mb-0.5">Path (e.g., myapp/database)</span>
                     <input
                       type="text"
                       bind:value={newInheritPath}
                       placeholder="Secret or endpoint path"
                       class="w-full px-2 py-1.5 text-xs font-mono border border-slate-200 rounded focus:outline-none focus:border-blue-500"
                     />
-                  </div>
+                  </label>
 
                   <!-- Path suggestions from browse -->
                   {#if loadingPaths}
@@ -366,26 +443,26 @@
               {/if}
 
               <!-- Paths filter -->
-              <div class="mb-2">
-                <label class="block text-[10px] text-slate-400 mb-0.5">Include paths (optional)</label>
+              <label class="block mb-2">
+                <span class="block text-[10px] text-slate-400 mb-0.5">Include paths (optional)</span>
                 <input
                   type="text"
                   bind:value={newInheritPaths}
                   placeholder="e.g., host, port, credentials.*"
                   class="w-full px-2 py-1.5 text-xs font-mono border border-slate-200 rounded focus:outline-none focus:border-blue-500"
                 />
-              </div>
+              </label>
 
               <!-- Inject target -->
-              <div class="mb-2">
-                <label class="block text-[10px] text-slate-400 mb-0.5">Inject at (optional)</label>
+              <label class="block mb-2">
+                <span class="block text-[10px] text-slate-400 mb-0.5">Inject at (optional)</span>
                 <input
                   type="text"
                   bind:value={newInheritInject}
                   placeholder="e.g., database.auth (empty = root)"
                   class="w-full px-2 py-1.5 text-xs font-mono border border-slate-200 rounded focus:outline-none focus:border-blue-500"
                 />
-              </div>
+              </label>
 
               <div class="flex gap-1.5">
                 <button

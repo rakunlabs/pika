@@ -229,6 +229,7 @@
   }
 </script>
 
+<div class="h-full overflow-y-auto">
 <div class="max-w-4xl mx-auto p-6">
   <!-- Section Tabs -->
   <div class="flex gap-1 mb-6 border-b border-slate-200">
@@ -340,7 +341,7 @@
 
           <div class="mb-4">
             <div class="flex items-center justify-between mb-2">
-              <label class="block text-xs font-medium text-slate-500">Scopes</label>
+              <span class="block text-xs font-medium text-slate-500">Scopes</span>
               <button
                 class="flex items-center gap-1 px-2 py-1 text-xs text-blue-600 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
                 onclick={addScope}
@@ -496,7 +497,7 @@
           </div>
 
           <div class="mb-4">
-            <label class="block text-xs font-medium text-slate-500 mb-1.5">Type</label>
+            <span class="block text-xs font-medium text-slate-500 mb-1.5">Type</span>
             <div class="flex gap-3">
               <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
                 <input type="radio" bind:group={newExtType} value="http" class="text-blue-500" />
@@ -747,4 +748,5 @@
       </div>
     </div>
   {/if}
+</div>
 </div>

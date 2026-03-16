@@ -84,6 +84,8 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 		mAuth.ErrorHandler(api.errorHandler)
 		mAuth.POST("/api/v1/auth/login", mAuth.Wrap(api.login))
 		mAuth.POST("/api/v1/auth/logout", mAuth.Wrap(api.logout))
+		mAuth.GET("/api/v1/auth/setup", mAuth.Wrap(api.getSetupStatus))
+		mAuth.POST("/api/v1/auth/setup", mAuth.Wrap(api.setup))
 
 		// User management endpoints — protected by session middleware
 		m.GET("/api/v1/users", m.Wrap(api.listUsers))
@@ -104,6 +106,7 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 
 	// File versions endpoint
 	m.GET("/api/v1/versions/*", m.Wrap(api.getFileVersions))
+	m.PATCH("/api/v1/versions/*", m.Wrap(api.patchFileVersion))
 
 	// Variant endpoints
 	m.GET("/api/v1/variants/*", m.Wrap(api.listVariants))
@@ -345,6 +348,34 @@ func (a *api) getFileVersions(c *ada.Context) error {
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(versions)
+}
+
+func (a *api) patchFileVersion(c *ada.Context) error {
+	key := c.Request.PathValue("*")
+	variant := c.Request.URL.Query().Get("variant")
+
+	var req struct {
+		Version    int64  `json:"version"`
+		Constraint string `json:"constraint"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+
+	if req.Version <= 0 {
+		return errors.Join(fmt.Errorf("version is required and must be > 0"), service.ErrBadRequest)
+	}
+
+	filePath := key
+	if variant != "" {
+		filePath = key + "/@" + variant
+	}
+
+	if err := a.svc.UpdateConstraint(c.Request.Context(), filePath, req.Version, req.Constraint); err != nil {
+		return err
+	}
+
+	return c.SetStatus(http.StatusOK).SendJSON(response{Message: "constraint updated"})
 }
 
 func (a *api) listVariants(c *ada.Context) error {

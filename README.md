@@ -245,12 +245,10 @@ Pika is configured via environment variables (prefixed with `PIKA_`) or a config
 ```yaml
 server:
   auth:
-    cookie_secret: "your-secret-key"
     session_ttl: 24h
-    seed_user:
-      username: admin
-      password: changeme
 ```
+
+On first launch, the UI will show a setup screen to create your initial admin account.
 
 ### Forward Auth
 
@@ -311,10 +309,7 @@ patches:
             port: "8080"
             public_port: "9090"
             auth:
-              cookie_secret: my-real-secret
-              seed_user:
-                username: admin
-                password: my-real-password
+              session_ttl: 24h
           storage:
             path: /data/pika.db
   - target:

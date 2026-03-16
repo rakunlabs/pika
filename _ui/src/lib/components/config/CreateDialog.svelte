@@ -114,6 +114,7 @@
             <label for="path-input" class="block text-[13px] font-medium text-gray-700 mb-1.5">
               {type === 'folder' ? 'Folder Path' : 'Config Path'}
             </label>
+            <!-- svelte-ignore a11y_autofocus -->
             <input
               id="path-input"
               type="text"

@@ -7,6 +7,7 @@ export interface AppInfo {
   date?: string;
   user?: string;
   auth_enabled?: boolean;
+  setup_required?: boolean;
 }
 
 export interface UserInfo {
@@ -30,13 +31,28 @@ function createAppStore() {
     } catch (err: any) {
       if (err?.response?.status === 401) {
         authenticated = false;
-        // Still try to get basic info without auth
+        // Check if this is a fresh install needing setup
         info = { name: 'pika', version: 'unknown', auth_enabled: true };
+        try {
+          const setupRes = await axios.get('/api/v1/auth/setup');
+          if (setupRes.data?.required) {
+            info = { ...info, setup_required: true };
+          }
+        } catch {
+          // Setup endpoint not available, just show login
+        }
       } else {
         info = { name: 'pika', version: 'unknown' };
         authenticated = true; // No auth configured
       }
     }
+  }
+
+  async function setup(username: string, password: string): Promise<void> {
+    await axios.post('/api/v1/auth/setup', { username, password });
+    authenticated = true;
+    // Reload info to get full server details now that we're authenticated
+    await loadInfo();
   }
 
   async function login(username: string, password: string): Promise<void> {
@@ -101,6 +117,7 @@ function createAppStore() {
     get authenticated() { return authenticated; },
     get users() { return users; },
     loadInfo,
+    setup,
     login,
     logout,
     loadUsers,

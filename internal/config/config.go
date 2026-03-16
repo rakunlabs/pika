@@ -56,15 +56,13 @@ type Server struct {
 }
 
 // Auth configures built-in user/password authentication.
+// When enabled, the first visit to the UI will show a setup screen
+// to create the initial admin account (no seed_user config needed).
 type Auth struct {
-	// CookieSecret is used to sign session cookies (required).
-	CookieSecret string `cfg:"cookie_secret" log:"-"`
 	// SessionTTL is the session lifetime (default: 24h).
 	SessionTTL time.Duration `cfg:"session_ttl" default:"24h"`
 	// Cookie configures session cookie properties.
 	Cookie CookieConfig `cfg:"cookie"`
-	// SeedUser defines an initial admin user to create on first run if no users exist.
-	SeedUser *SeedUser `cfg:"seed_user"`
 }
 
 // CookieConfig configures the session cookie.
@@ -81,12 +79,6 @@ type CookieConfig struct {
 	// SameSite controls cross-site cookie behavior.
 	// Values: "lax" (default), "strict", "none".
 	SameSite string `cfg:"same_site" default:"lax"`
-}
-
-// SeedUser defines an initial admin user for bootstrapping.
-type SeedUser struct {
-	Username string `cfg:"username"`
-	Password string `cfg:"password" log:"-"`
 }
 
 func Load(ctx context.Context) (*Config, error) {

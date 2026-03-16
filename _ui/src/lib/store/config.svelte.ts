@@ -474,6 +474,30 @@ function createConfigStore() {
     }
   }
 
+  async function updateVersionConstraint(tabId: string, version: number, constraint: string): Promise<void> {
+    const tab = openTabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    try {
+      const params: any = {};
+      if (tab.variantKey) params.variant = tab.variantKey;
+
+      await axios.patch(`/api/v1/versions/${tab.path}`, { version, constraint }, { params });
+
+      // Update the constraint in the local versions list
+      const ver = tab.versions.find(v => v.version === version);
+      if (ver) {
+        ver.constraint = constraint;
+      }
+
+      addToast(constraint ? `Constraint set to ${constraint}` : 'Constraint removed', 'success');
+    } catch (error: any) {
+      const msg = error.response?.data?.message || 'Failed to update constraint';
+      addToast(msg, 'alert');
+      throw error;
+    }
+  }
+
   async function loadVersion(tabId: string, version: number): Promise<void> {
     const tab = openTabs.find(t => t.id === tabId);
     if (!tab) return;
@@ -791,6 +815,7 @@ function createConfigStore() {
     updateTabMeta,
     saveTab,
     loadVersion,
+    updateVersionConstraint,
 
     // Variant operations
     openVariant,

@@ -265,3 +265,36 @@ func (s *Service) DeleteFile(ctx context.Context, key string, version int64) err
 		return tx.Files().Delete(ctx, key, version)
 	})
 }
+
+// UpdateConstraint updates the semver constraint on an existing version.
+// If constraint is empty, the constraint is removed.
+func (s *Service) UpdateConstraint(ctx context.Context, key string, version int64, constraint string) error {
+	// Validate constraint format if non-empty
+	if constraint != "" {
+		if _, _, err := ParseConstraint(constraint); err != nil {
+			return fmt.Errorf("invalid constraint %q: %w", constraint, ErrBadRequest)
+		}
+	}
+
+	return s.store.Tx(ctx, func(ctx context.Context, tx Storage) error {
+		fv, err := tx.FileVersions().Get(ctx, key)
+		if err != nil {
+			return err
+		}
+
+		var found bool
+		for i, v := range fv {
+			if v.Version == version {
+				found = true
+				fv[i].Constraint = constraint
+				break
+			}
+		}
+
+		if !found {
+			return fmt.Errorf("version %d not found: %w", version, ErrNotFound)
+		}
+
+		return tx.FileVersions().Set(ctx, key, fv)
+	})
+}

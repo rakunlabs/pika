@@ -127,3 +127,58 @@ func (a *api) deleteUser(c *ada.Context) error {
 
 	return c.SendNoContent()
 }
+
+// getSetupStatus returns whether initial setup is required (no users exist yet).
+func (a *api) getSetupStatus(c *ada.Context) error {
+	count, err := a.svc.UserCount(c.Request.Context())
+	if err != nil {
+		return err
+	}
+
+	return c.SetStatus(http.StatusOK).SendJSON(struct {
+		Required bool `json:"required"`
+	}{
+		Required: count == 0,
+	})
+}
+
+// setup creates the first admin user. Only works when zero users exist.
+// On success it also creates a session so the user is immediately logged in.
+func (a *api) setup(c *ada.Context) error {
+	// Check if setup is still available
+	count, err := a.svc.UserCount(c.Request.Context())
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return errors.Join(fmt.Errorf("setup already completed"), service.ErrBadRequest)
+	}
+
+	var req loginRequest
+	if err := c.Bind(&req); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+
+	if req.Username == "" || req.Password == "" {
+		return errors.Join(fmt.Errorf("username and password are required"), service.ErrBadRequest)
+	}
+
+	// Create the first user
+	userInfo, err := a.svc.CreateUser(c.Request.Context(), &service.CreateUserRequest{
+		Username: req.Username,
+		Password: req.Password,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Auto-login: create a session so the user is immediately authenticated
+	cookie, err := a.sessionStore.Create(userInfo.ID, userInfo.Username)
+	if err != nil {
+		return fmt.Errorf("creating session: %w", err)
+	}
+
+	http.SetCookie(c.Response, cookie)
+
+	return c.SetStatus(http.StatusCreated).SendJSON(userInfo)
+}

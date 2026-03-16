@@ -196,22 +196,3 @@ func (s *Service) DeleteUser(ctx context.Context, id string) error {
 func (s *Service) UserCount(ctx context.Context) (int64, error) {
 	return s.store.Users().Count(ctx)
 }
-
-// SeedUser creates an initial user if no users exist.
-// This is idempotent — if any user exists, it does nothing.
-func (s *Service) SeedUser(ctx context.Context, username, password string) error {
-	count, err := s.UserCount(ctx)
-	if err != nil {
-		return err
-	}
-
-	if count > 0 {
-		return nil // Users already exist, skip seeding
-	}
-
-	_, err = s.CreateUser(ctx, &CreateUserRequest{
-		Username: username,
-		Password: password,
-	})
-	return err
-}
