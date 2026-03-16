@@ -9,19 +9,14 @@ import (
 	"github.com/rakunlabs/pika/internal/service"
 )
 
+// getData serves resolved configuration data with token authentication.
 func (a *api) getData(c *ada.Context) error {
 	key := c.Request.PathValue("*")
 
 	// Authenticate via Bearer token
 	tokenRaw := c.Request.Header.Get("Authorization")
-	if tokenRaw == "" {
-		// Also check query parameter for simple integrations
-		tokenRaw = c.Request.URL.Query().Get("token")
-	} else {
-		// Strip "Bearer " prefix
-		if len(tokenRaw) > 7 && tokenRaw[:7] == "Bearer " {
-			tokenRaw = tokenRaw[7:]
-		}
+	if len(tokenRaw) > 7 && tokenRaw[:7] == "Bearer " {
+		tokenRaw = tokenRaw[7:]
 	}
 
 	if tokenRaw == "" {
@@ -33,18 +28,23 @@ func (a *api) getData(c *ada.Context) error {
 		return err
 	}
 
-	// Collect variation query params (exclude reserved params)
+	return a.resolveAndWriteData(c, key)
+}
+
+// getDataPublic serves resolved configuration data without authentication.
+// Intended for the public port where no token is required.
+func (a *api) getDataPublic(c *ada.Context) error {
+	key := c.Request.PathValue("*")
+	return a.resolveAndWriteData(c, key)
+}
+
+// resolveAndWriteData is the shared logic for serving configuration data.
+// It resolves the file (with variant/version/format), sets Content-Type, and writes the response.
+func (a *api) resolveAndWriteData(c *ada.Context, key string) error {
 	query := c.Request.URL.Query()
-	var variationKey string
-	for k, v := range query {
-		if k == "token" || k == "version" || k == "format" {
-			continue
-		}
-		if len(v) > 0 {
-			variationKey = k + "=" + v[0]
-			break // Only one variation param is supported
-		}
-	}
+
+	// Variant — simple name (e.g., "prod", "staging")
+	variationKey := query.Get("variant")
 
 	// Version — can be integer ("7") or semver ("0.2.4")
 	versionStr := query.Get("version")

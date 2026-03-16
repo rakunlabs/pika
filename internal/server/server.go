@@ -7,6 +7,7 @@ import (
 	"net"
 
 	"github.com/rakunlabs/ada"
+	"github.com/rakunlabs/into"
 
 	mcors "github.com/rakunlabs/ada/middleware/cors"
 	mforwardauth "github.com/rakunlabs/ada/middleware/forwardauth"
@@ -71,6 +72,34 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 
 	if err := folderHandler(m); err != nil {
 		return err
+	}
+
+	// Start public data server on a separate port if configured
+	if cfg.Server.PublicPort != "" {
+		publicServer := ada.New()
+		publicServer.Use(
+			mrecover.Middleware(),
+			mserver.Middleware(config.Service),
+			mcors.Middleware(),
+			mrequestid.Middleware(),
+			mlog.Middleware(),
+			mtelemetry.Middleware(),
+		)
+
+		mPublic := publicServer.Group(cfg.Server.BasePath)
+		if err := api.HandlePublic(mPublic, svc); err != nil {
+			return err
+		}
+
+		publicAddr := net.JoinHostPort(cfg.Server.Host, cfg.Server.PublicPort)
+		slog.Info("starting public data server", "address", publicAddr)
+
+		go func() {
+			if err := publicServer.StartWithContext(ctx, publicAddr); err != nil {
+				slog.Error("public data server failed", "error", err)
+				into.CtxCancel()
+			}
+		}()
 	}
 
 	return server.StartWithContext(ctx, net.JoinHostPort(cfg.Server.Host, cfg.Server.Port))

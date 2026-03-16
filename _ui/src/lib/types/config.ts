@@ -52,7 +52,7 @@ export interface TreeNode {
   name: string;
   path: string;
   type: 'folder' | 'file' | 'variant';
-  variantKey?: string;  // e.g., "env=prod" for variant nodes
+  variantKey?: string;  // e.g., "prod" for variant nodes
   parentPath?: string;  // parent file path for variants
   expanded?: boolean;
   children?: TreeNode[];

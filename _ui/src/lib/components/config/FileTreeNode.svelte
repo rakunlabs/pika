@@ -128,7 +128,7 @@
         <FileText size={14} />
       </span>
     {/if}
-    <span class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap {node.type === 'variant' ? 'text-[12px] font-mono' : ''}" title={node.type === 'variant' ? `${node.parentPath}?${node.variantKey}` : node.path}>{node.name}</span>
+    <span class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap {node.type === 'variant' ? 'text-[12px] font-mono' : ''}" title={node.type === 'variant' ? `${node.parentPath}@${node.variantKey}` : node.path}>{node.name}</span>
     
     {#if node.type === 'folder' && isHovered}
       <span class="flex gap-0.5 shrink-0">

@@ -60,8 +60,14 @@
     }
   }
 
+  let mouseDownTarget: EventTarget | null = null;
+
+  function handleBackdropMouseDown(e: MouseEvent) {
+    mouseDownTarget = e.target;
+  }
+
   function handleBackdropClick(e: MouseEvent) {
-    if (e.target === e.currentTarget) {
+    if (e.target === e.currentTarget && mouseDownTarget === e.currentTarget) {
       onClose();
     }
   }
@@ -73,6 +79,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div 
     class="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-5"
+    onmousedown={handleBackdropMouseDown}
     onclick={handleBackdropClick}
     onkeydown={(e) => e.key === 'Escape' && onClose()}
     role="dialog"

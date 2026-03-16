@@ -167,7 +167,7 @@ function createConfigStore() {
             path: name,
             type: 'file' as const,
             children: (variants[name] || []).map((vk: string) => ({
-              name: '?' + vk,
+              name: '@' + vk,
               path: name,
               type: 'variant' as const,
               variantKey: vk,
@@ -216,7 +216,7 @@ function createConfigStore() {
           path: `${node.path}/${name}`,
           type: 'file' as const,
           children: (variants[name] || []).map((vk: string) => ({
-            name: '?' + vk,
+            name: '@' + vk,
             path: `${node.path}/${name}`,
             type: 'variant' as const,
             variantKey: vk,
@@ -306,7 +306,7 @@ function createConfigStore() {
     try {
       const fileData = await fetchFile(filePath, 0, variantKey);
       const content = decodeContent(fileData.data);
-      const name = `${filePath.split('/').pop() || filePath}?${variantKey}`;
+      const name = `${filePath.split('/').pop() || filePath}@${variantKey}`;
       const format = fileData.meta.format || 'yaml';
 
       const latestVersion = fileData.versions.length > 0
@@ -343,7 +343,7 @@ function createConfigStore() {
         return openVariant(filePath, variantKey);
       }
       console.error('Failed to open variant:', error);
-      addToast(`Failed to open variant: ?${variantKey}`, 'alert');
+      addToast(`Failed to open variant: @${variantKey}`, 'alert');
       throw error;
     }
   }
@@ -401,7 +401,7 @@ function createConfigStore() {
     try {
       const format: FileFormat = 'yaml';
       await createFile(filePath, '', { format }, variantKey);
-      addToast(`Created variant: ?${variantKey}`, 'success');
+      addToast(`Created variant: @${variantKey}`, 'success');
 
       // Refresh parent folder to show the new variant
       const parts = filePath.split('/');
@@ -412,7 +412,7 @@ function createConfigStore() {
       await openVariant(filePath, variantKey);
     } catch (error) {
       console.error('Failed to create variant:', error);
-      addToast(`Failed to create variant: ?${variantKey}`, 'alert');
+      addToast(`Failed to create variant: @${variantKey}`, 'alert');
       throw error;
     }
   }
@@ -433,7 +433,7 @@ function createConfigStore() {
       parts.pop();
       await refreshFolder(parts.join('/'));
 
-      addToast(`Deleted variant: ?${variantKey}`, 'success');
+      addToast(`Deleted variant: @${variantKey}`, 'success');
     } catch (error) {
       console.error('Failed to delete variant:', error);
       addToast('Failed to delete variant', 'alert');

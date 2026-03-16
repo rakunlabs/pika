@@ -1,14 +1,13 @@
 <script lang="ts">
   import { link, location } from 'svelte-spa-router';
   import { appStore } from '@/lib/store/store.svelte';
-  import { Blocks, Settings, Database, User, Users, LogOut } from 'lucide-svelte';
+  import { Blocks, Settings, User, Users, LogOut } from 'lucide-svelte';
 
   const info = $derived(appStore.info);
   const authEnabled = $derived(info?.auth_enabled ?? false);
 
   const navItems = $derived.by(() => {
     const items = [
-      { path: '/configurations', label: 'Configurations', icon: Database },
       { path: '/settings', label: 'Settings', icon: Settings },
     ];
 

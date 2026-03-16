@@ -133,11 +133,7 @@
   async function handleAddVariant() {
     if (!activeTab) return;
     if (!newVariantKey.trim()) {
-      addToast('Variant key is required (e.g., env=production)', 'alert');
-      return;
-    }
-    if (!newVariantKey.includes('=')) {
-      addToast('Variant key must be in key=value format', 'alert');
+      addToast('Variant name is required (e.g., prod, staging)', 'alert');
       return;
     }
 
@@ -483,7 +479,7 @@
               <input
                 type="text"
                 bind:value={newVariantKey}
-                placeholder="key=value (e.g., env=production)"
+                placeholder="e.g., prod, staging"
                 class="w-full px-2 py-1.5 text-xs font-mono border border-slate-200 rounded mb-2 focus:outline-none focus:border-blue-500"
               />
               <div class="flex gap-1.5">
@@ -503,13 +499,13 @@
             </div>
           {/if}
 
-          <p class="text-[11px] text-slate-400">Variants are independent configs accessed via query params. Manage them in the file tree.</p>
+          <p class="text-[11px] text-slate-400">Variants are independent configs accessed via <span class="font-mono">?variant=name</span>. Manage them in the file tree.</p>
         </div>
       {:else}
         <div class="mb-4">
           <span class="flex items-center gap-1.5 text-[11px] font-medium text-purple-600 mb-1">
             <Layers size={12} />
-            Variant: <span class="font-mono">?{activeTab.variantKey}</span>
+            Variant: <span class="font-mono">@{activeTab.variantKey}</span>
           </span>
           <p class="text-[11px] text-slate-400">This is an independent variant of <span class="font-mono text-slate-500">{activeTab.path}</span></p>
         </div>

@@ -19,9 +19,17 @@ build-ui: ## Build the frontend assets
 	@rm -rf internal/server/dist && mv _ui/dist internal/server/dist
 	@echo > internal/server/dist/.gitkeep
 
+.PHONY: build-container
+build-container: build ## Build the container image with test tag
+	docker build -t $(PROJECT):test -f ci/Dockerfile dist/$(BINARY)_linux_amd64_v1/
+
 .PHONY: run
 run: ## Run the application
 	go run $(MAIN_FILE)
+
+.PHONY: run-ui
+run-ui: ## Run the frontend development server
+	@cd _ui && pnpm run dev
 
 .PHONY: lint
 lint: ## Lint Go files

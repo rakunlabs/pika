@@ -42,6 +42,10 @@ type Server struct {
 	Host string `cfg:"host"`
 	Port string `cfg:"port" default:"8080"`
 
+	// PublicPort starts a second HTTP server serving only /data/* and /healthz
+	// without token authentication. Leave empty to disable.
+	PublicPort string `cfg:"public_port"`
+
 	BasePath string `cfg:"base_path"`
 
 	ForwardAuth *mforwardauth.ForwardAuth `cfg:"forward_auth"`

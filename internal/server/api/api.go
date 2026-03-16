@@ -57,6 +57,16 @@ type response struct {
 	Message string `json:"message,omitempty"`
 }
 
+// HandlePublic registers unauthenticated endpoints for the public port.
+// Only /data/* and /healthz are exposed — no admin API, no UI.
+func HandlePublic(m *ada.Mux, svc *service.Service) error {
+	a := &api{svc: svc}
+	m.ErrorHandler(a.errorHandler)
+	m.GET("/data/*", m.Wrap(a.getDataPublic))
+	m.GET("/healthz", m.Wrap(a.healthzHandler))
+	return nil
+}
+
 func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, adminSecret string, encStore *secret.Storage, sessionStore *session.Store) error {
 	api := &api{svc: svc, info: info, adminSecret: adminSecret, encStore: encStore, sessionStore: sessionStore}
 

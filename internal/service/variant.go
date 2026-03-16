@@ -10,7 +10,7 @@ import (
 const variantSeparator = "@"
 
 // variantKey constructs the storage key for a variant.
-// e.g., "app/config" + "env=prod" -> "app/config@env=prod"
+// e.g., "app/config" + "prod" -> "app/config@prod"
 func variantKey(filePath string, variantKey string) string {
 	return filePath + variantSeparator + variantKey
 }
