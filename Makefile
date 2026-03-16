@@ -13,8 +13,13 @@ build: build-ui ## Build the Go binary
 	@echo "> Building $(PROJECT) binary with goreleaser"
 	goreleaser build --snapshot --clean --single-target
 
+.PHONY: install-ui
+install-ui: ## Install UI dependencies
+	@echo "> Installing UI dependencies"
+	@cd _ui && pnpm install
+
 .PHONY: build-ui
-build-ui: ## Build the frontend assets
+build-ui: install-ui ## Build the frontend assets
 	@cd _ui && pnpm run build
 	@rm -rf internal/server/dist && mv _ui/dist internal/server/dist
 	@echo > internal/server/dist/.gitkeep
