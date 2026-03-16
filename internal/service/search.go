@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"encoding/base64"
-	"path"
+	"errors"
 	"strings"
 )
 
@@ -29,14 +29,11 @@ func (s *Service) searchFolder(ctx context.Context, folderPath string, lowerQuer
 	default:
 	}
 
-	keyPath := path.Join(keyFolder, folderPath)
-	data, err := s.store.Get(ctx, keyPath)
+	folder, err := s.store.Folders().Get(ctx, folderPath)
 	if err != nil {
-		return nil // skip folders we can't read
-	}
-
-	var folder Folder
-	if err := s.decodeBytes(data, &folder); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil // skip folders we can't read
+		}
 		return nil
 	}
 

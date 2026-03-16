@@ -6,12 +6,6 @@ import (
 	"github.com/rakunlabs/pika/internal/external"
 )
 
-const (
-	keyFolder   = "_folder"
-	keyFile     = "_file"
-	keySettings = "_settings"
-)
-
 type Service struct {
 	store Storage
 

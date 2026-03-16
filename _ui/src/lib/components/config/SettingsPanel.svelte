@@ -34,8 +34,12 @@
   let showAddInherit = $state(false);
   let newInheritSource = $state('');
   let newInheritType = $state<'internal' | 'external'>('internal');
+  let newInheritResource = $state('');
+  let newInheritPath = $state('');
   let newInheritPaths = $state('');
   let newInheritInject = $state('');
+  let externalPathSuggestions = $state<string[]>([]);
+  let loadingPaths = $state(false);
 
   const inheritEntries = $derived(activeTab?.meta?.inherits || []);
 
@@ -60,14 +64,25 @@
   // ── Inheritance handlers ──
   function addInheritEntry() {
     if (!activeTab) return;
-    if (!newInheritSource.trim()) {
-      addToast('Source is required', 'alert');
-      return;
-    }
 
-    const entry: InheritEntry = {
-      source: newInheritSource.trim(),
-    };
+    const entry: InheritEntry = {};
+
+    if (newInheritType === 'internal') {
+      if (!newInheritSource.trim()) {
+        addToast('Source path is required', 'alert');
+        return;
+      }
+      entry.source = newInheritSource.trim();
+    } else {
+      if (!newInheritResource) {
+        addToast('External resource is required', 'alert');
+        return;
+      }
+      entry.resource = newInheritResource;
+      if (newInheritPath.trim()) {
+        entry.path = newInheritPath.trim();
+      }
+    }
 
     const paths = newInheritPaths.split(',').map(p => p.trim()).filter(p => p.length > 0);
     if (paths.length > 0) {
@@ -82,10 +97,28 @@
 
     // Reset form
     newInheritSource = '';
+    newInheritResource = '';
+    newInheritPath = '';
     newInheritPaths = '';
     newInheritInject = '';
+    externalPathSuggestions = [];
     showAddInherit = false;
     addToast('Inheritance added', 'success');
+  }
+
+  async function loadExternalPaths(resourceName: string, prefix: string = '') {
+    if (!resourceName) {
+      externalPathSuggestions = [];
+      return;
+    }
+    loadingPaths = true;
+    try {
+      externalPathSuggestions = await configStore.listExternalPaths(resourceName, prefix);
+    } catch {
+      externalPathSuggestions = [];
+    } finally {
+      loadingPaths = false;
+    }
   }
 
   function removeInheritEntry(index: number) {
@@ -261,14 +294,14 @@
                 <button
                   class="flex-1 py-1 text-[10px] font-medium rounded transition-colors cursor-pointer
                     {newInheritType === 'internal' ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-slate-50 text-slate-500 border border-slate-200 hover:bg-slate-100'}"
-                  onclick={() => { newInheritType = 'internal'; newInheritSource = ''; }}
+                  onclick={() => { newInheritType = 'internal'; newInheritSource = ''; newInheritResource = ''; newInheritPath = ''; externalPathSuggestions = []; }}
                 >
                   Internal
                 </button>
                 <button
                   class="flex-1 py-1 text-[10px] font-medium rounded transition-colors cursor-pointer
                     {newInheritType === 'external' ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-slate-50 text-slate-500 border border-slate-200 hover:bg-slate-100'}"
-                  onclick={() => { newInheritType = 'external'; newInheritSource = ''; }}
+                  onclick={() => { newInheritType = 'external'; newInheritSource = ''; newInheritResource = ''; newInheritPath = ''; externalPathSuggestions = []; }}
                 >
                   External
                 </button>
@@ -283,15 +316,57 @@
                   class="w-full px-2 py-1.5 text-xs font-mono border border-slate-200 rounded mb-2 focus:outline-none focus:border-blue-500"
                 />
               {:else}
+                <!-- External resource selector -->
                 <select
                   class="w-full px-2 py-1.5 text-xs border border-slate-200 rounded mb-2 focus:outline-none focus:border-blue-500"
-                  bind:value={newInheritSource}
+                  bind:value={newInheritResource}
+                  onchange={() => { newInheritPath = ''; loadExternalPaths(newInheritResource); }}
                 >
                   <option value="">Select external resource</option>
                   {#each externalResources as resource}
                     <option value={resource}>{resource}</option>
                   {/each}
                 </select>
+
+                <!-- Path within the resource -->
+                {#if newInheritResource}
+                  <div class="mb-2">
+                    <label class="block text-[10px] text-slate-400 mb-0.5">Path (e.g., myapp/database)</label>
+                    <input
+                      type="text"
+                      bind:value={newInheritPath}
+                      placeholder="Secret or endpoint path"
+                      class="w-full px-2 py-1.5 text-xs font-mono border border-slate-200 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+
+                  <!-- Path suggestions from browse -->
+                  {#if loadingPaths}
+                    <div class="text-[10px] text-slate-400 mb-2">Loading paths...</div>
+                  {:else if externalPathSuggestions.length > 0}
+                    <div class="mb-2 max-h-32 overflow-y-auto border border-slate-200 rounded">
+                      {#each externalPathSuggestions as suggestion}
+                        {@const isDir = suggestion.endsWith('/')}
+                        <button
+                          class="w-full text-left px-2 py-1 text-xs font-mono hover:bg-blue-50 transition-colors cursor-pointer border-b border-slate-100 last:border-b-0
+                            {isDir ? 'text-slate-500' : 'text-blue-600'}"
+                          onclick={() => {
+                            if (isDir) {
+                              newInheritPath = (newInheritPath ? newInheritPath.replace(/\/?$/, '/') : '') + suggestion;
+                              loadExternalPaths(newInheritResource, newInheritPath);
+                            } else {
+                              const base = newInheritPath.includes('/') ? newInheritPath.replace(/[^/]*$/, '') : '';
+                              newInheritPath = base + suggestion;
+                              externalPathSuggestions = [];
+                            }
+                          }}
+                        >
+                          {#if isDir}📁{:else}📄{/if} {suggestion}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                {/if}
               {/if}
 
               <!-- Paths filter -->
@@ -325,7 +400,7 @@
                 </button>
                 <button
                   class="flex-1 py-1 text-[11px] text-slate-500 bg-slate-100 rounded cursor-pointer hover:bg-slate-200 transition-colors"
-                  onclick={() => { showAddInherit = false; newInheritSource = ''; newInheritPaths = ''; newInheritInject = ''; }}
+                  onclick={() => { showAddInherit = false; newInheritSource = ''; newInheritResource = ''; newInheritPath = ''; newInheritPaths = ''; newInheritInject = ''; externalPathSuggestions = []; }}
                 >
                   Cancel
                 </button>
@@ -342,9 +417,21 @@
                 <div class="bg-white border border-slate-200 rounded overflow-hidden">
                   <div class="flex items-start justify-between px-2.5 py-2 gap-2">
                     <div class="flex-1 min-w-0">
-                      <div class="text-xs font-mono text-blue-600 truncate" title={entry.source}>
-                        {entry.source}
-                      </div>
+                      {#if entry.resource}
+                        <div class="flex items-center gap-1 text-xs">
+                          <span class="px-1 py-0.5 bg-purple-50 text-purple-600 rounded text-[10px] font-medium shrink-0">ext</span>
+                          <span class="font-mono text-blue-600 truncate" title="{entry.resource}:{entry.path || ''}">{entry.resource}</span>
+                        </div>
+                        {#if entry.path}
+                          <div class="text-[10px] text-slate-400 mt-0.5">
+                            path: <span class="font-mono">{entry.path}</span>
+                          </div>
+                        {/if}
+                      {:else}
+                        <div class="text-xs font-mono text-blue-600 truncate" title={entry.source}>
+                          {entry.source}
+                        </div>
+                      {/if}
                       {#if entry.paths?.length}
                         <div class="text-[10px] text-slate-400 mt-0.5">
                           paths: <span class="font-mono">{entry.paths.join(', ')}</span>

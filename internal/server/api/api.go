@@ -12,6 +12,7 @@ import (
 	"github.com/rakunlabs/ada"
 	"github.com/rakunlabs/pika/internal/secret"
 	"github.com/rakunlabs/pika/internal/secret/crypto"
+	"github.com/rakunlabs/pika/internal/server/session"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -35,18 +36,29 @@ type Info struct {
 }
 
 type api struct {
-	svc         *service.Service
-	info        Info
-	adminSecret string
-	encStore    *secret.Storage // nil if encryption is disabled
+	svc          *service.Service
+	info         Info
+	adminSecret  string
+	encStore     *secret.Storage // nil if encryption is disabled
+	sessionStore *session.Store  // nil if built-in auth is disabled
+}
+
+// SessionStore is the interface for session management.
+// Used to decouple the api package from the session package.
+type SessionStore interface {
+	Create(userID, username string) (*http.Cookie, error)
+	Get(sessionID string) interface{ Username() string }
+	Delete(sessionID string)
+	ClearCookie() *http.Cookie
+	Middleware(next http.Handler) http.Handler
 }
 
 type response struct {
 	Message string `json:"message,omitempty"`
 }
 
-func Handle(m *ada.Mux, mData *ada.Mux, svc *service.Service, info Info, adminSecret string, encStore *secret.Storage) error {
-	api := &api{svc: svc, info: info, adminSecret: adminSecret, encStore: encStore}
+func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, adminSecret string, encStore *secret.Storage, sessionStore *session.Store) error {
+	api := &api{svc: svc, info: info, adminSecret: adminSecret, encStore: encStore, sessionStore: sessionStore}
 
 	// Inject X-User header into context for all API requests
 	m.Use(userMiddleware)
@@ -56,6 +68,20 @@ func Handle(m *ada.Mux, mData *ada.Mux, svc *service.Service, info Info, adminSe
 	mData.ErrorHandler(api.errorHandler)
 	// Data endpoint — consumer-facing, returns resolved config (with token auth)
 	mData.GET("/data/*", mData.Wrap(api.getData))
+
+	// Auth endpoints — registered on the unprotected mux (no session middleware)
+	if sessionStore != nil {
+		mAuth.ErrorHandler(api.errorHandler)
+		mAuth.POST("/api/v1/auth/login", mAuth.Wrap(api.login))
+		mAuth.POST("/api/v1/auth/logout", mAuth.Wrap(api.logout))
+
+		// User management endpoints — protected by session middleware
+		m.GET("/api/v1/users", m.Wrap(api.listUsers))
+		m.POST("/api/v1/users", m.Wrap(api.createUser))
+		m.GET("/api/v1/users/*", m.Wrap(api.getUser))
+		m.PATCH("/api/v1/users/*", m.Wrap(api.updateUser))
+		m.DELETE("/api/v1/users/*", m.Wrap(api.deleteUser))
+	}
 
 	m.GET("/api/v1/folder", m.Wrap(api.getFolder))
 	m.GET("/api/v1/folder/*", m.Wrap(api.getFolder))
@@ -94,6 +120,9 @@ func Handle(m *ada.Mux, mData *ada.Mux, svc *service.Service, info Info, adminSe
 	m.GET("/api/v1/settings", m.Wrap(api.getSettings))
 	m.POST("/api/v1/settings", m.Wrap(api.postSettings))
 
+	// External resource browsing
+	m.GET("/api/v1/external/*/paths", m.Wrap(api.listExternalPaths))
+
 	m.GET("/api/v1/info", m.Wrap(api.infoHandler))
 	m.GET("/healthz", m.Wrap(api.healthzHandler))
 
@@ -128,10 +157,12 @@ func (a *api) infoHandler(c *ada.Context) error {
 
 	resp := struct {
 		Info
-		User string `json:"user,omitempty"`
+		User        string `json:"user,omitempty"`
+		AuthEnabled bool   `json:"auth_enabled"`
 	}{
-		Info: a.info,
-		User: user,
+		Info:        a.info,
+		User:        user,
+		AuthEnabled: a.sessionStore != nil,
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(resp)
@@ -157,6 +188,18 @@ func (a *api) postSettings(c *ada.Context) error {
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(patchSettings)
+}
+
+func (a *api) listExternalPaths(c *ada.Context) error {
+	resourceName := c.Request.PathValue("*")
+	prefix := c.Request.URL.Query().Get("prefix")
+
+	paths, err := a.svc.ListExternalPaths(c.Request.Context(), resourceName, prefix)
+	if err != nil {
+		return err
+	}
+
+	return c.SetStatus(http.StatusOK).SendJSON(paths)
 }
 
 func (a *api) postFolder(c *ada.Context) error {
@@ -325,7 +368,7 @@ func (a *api) renderFile(c *ada.Context) error {
 }
 
 func (a *api) listTokens(c *ada.Context) error {
-	tokens, err := a.svc.ListTokens(c.Request.Context())
+	tokens, _, err := a.svc.ListTokens(c.Request.Context(), nil)
 	if err != nil {
 		return err
 	}

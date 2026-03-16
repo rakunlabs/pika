@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
+	"github.com/rakunlabs/ok"
 	"github.com/rakunlabs/pika/internal/external"
 )
 
@@ -118,24 +117,38 @@ func (s *Service) RenderFile(ctx context.Context, filePath string, content strin
 // The current config data always takes precedence over inherited values.
 func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entries []InheritEntry) ([]byte, error) {
 	for _, entry := range entries {
-		if entry.Source == "" {
+		if entry.Source == "" && entry.Resource == "" {
 			continue
 		}
 
-		// Fetch the source data
-		sourceData, err := s.fetchSource(ctx, entry.Source)
+		var sourceData []byte
+		var sourceName string
+		var err error
+
+		if entry.Resource != "" {
+			// External resource: lookup by resource name and fetch with path
+			sourceName = entry.Resource + ":" + entry.Path
+			sourceData, err = s.fetchExternalConfig(ctx, entry.Resource, entry.Path)
+		} else {
+			// Internal file or legacy external (backward compat)
+			sourceName = entry.Source
+			sourceData, err = s.fetchSource(ctx, entry.Source)
+		}
+
 		if err != nil {
-			return nil, fmt.Errorf("resolving inheritance from %q: %w", entry.Source, err)
+			return nil, fmt.Errorf("resolving inheritance from %q: %w", sourceName, err)
 		}
 
 		// Ensure source data is JSON for merging
-		// Try to detect format from the source file's meta if internal
 		sourceJSON := sourceData
-		file, fileErr := s.File(ctx, entry.Source, 0)
-		if fileErr == nil && file.Meta.Format != "" && file.Meta.Format != "json" && file.Meta.Format != "raw" {
-			converted, convErr := ConvertFormat(sourceData, file.Meta.Format, "json")
-			if convErr == nil {
-				sourceJSON = converted
+		if entry.Resource == "" {
+			// For internal sources, try to detect format and convert
+			file, fileErr := s.File(ctx, entry.Source, 0)
+			if fileErr == nil && file.Meta.Format != "" && file.Meta.Format != "json" && file.Meta.Format != "raw" {
+				converted, convErr := ConvertFormat(sourceData, file.Meta.Format, "json")
+				if convErr == nil {
+					sourceJSON = converted
+				}
 			}
 		}
 
@@ -143,7 +156,7 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 		if len(entry.Paths) > 0 {
 			filtered, err := filterByPaths(sourceJSON, entry.Paths)
 			if err != nil {
-				return nil, fmt.Errorf("filtering paths from %q: %w", entry.Source, err)
+				return nil, fmt.Errorf("filtering paths from %q: %w", sourceName, err)
 			}
 			sourceJSON = filtered
 		}
@@ -152,7 +165,7 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 		if entry.Inject != "" {
 			injected, err := injectAtPath(sourceJSON, entry.Inject)
 			if err != nil {
-				return nil, fmt.Errorf("injecting at %q from %q: %w", entry.Inject, entry.Source, err)
+				return nil, fmt.Errorf("injecting at %q from %q: %w", entry.Inject, sourceName, err)
 			}
 			sourceJSON = injected
 		}
@@ -160,7 +173,7 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 		// Merge: inherited data is the base, current data overrides
 		merged, err := mergeJSON(sourceJSON, currentData)
 		if err != nil {
-			return nil, fmt.Errorf("merging from %q: %w", entry.Source, err)
+			return nil, fmt.Errorf("merging from %q: %w", sourceName, err)
 		}
 		currentData = merged
 	}
@@ -168,61 +181,60 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 	return currentData, nil
 }
 
-// fetchSource fetches config data from an internal file or external resource.
+// fetchSource fetches config data from an internal file.
 func (s *Service) fetchSource(ctx context.Context, source string) ([]byte, error) {
-	// Try internal file first
 	file, err := s.File(ctx, source, 0)
-	if err == nil {
-		return file.Data, nil
-	}
-	if !errors.Is(err, ErrNotFound) {
+	if err != nil {
 		return nil, err
 	}
-
-	// Not internal — try external resource
-	return s.fetchExternalConfig(ctx, source)
+	return file.Data, nil
 }
 
 // fetchExternalConfig fetches configuration data from an external resource.
-// The source is looked up in settings.External by name and fetched via HTTP.
-func (s *Service) fetchExternalConfig(ctx context.Context, sourceName string) ([]byte, error) {
+// The resourceName is looked up in settings.External, and path is the
+// resource-specific path (e.g., Vault secret path or HTTP endpoint path).
+func (s *Service) fetchExternalConfig(ctx context.Context, resourceName string, path string) ([]byte, error) {
 	settings, err := s.Settings(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading settings: %w", err)
 	}
 
-	ext, exists := settings.External[sourceName]
+	ext, exists := settings.External[resourceName]
 	if !exists {
-		return nil, fmt.Errorf("external resource %q not found in settings", sourceName)
+		return nil, fmt.Errorf("external resource %q not found in settings", resourceName)
 	}
 
 	// HTTP-based external resource
 	if ext.Http != nil {
-		return s.fetchHTTPConfig(ctx, ext.Http.BaseURL)
+		return s.fetchHTTPConfig(ctx, ext.Http, path)
 	}
 
 	// Vault-based external resource
 	if ext.Vault != nil {
-		return s.fetchVaultConfig(ctx, ext.Vault, sourceName)
+		return s.fetchVaultConfig(ctx, ext.Vault, path)
 	}
 
-	return nil, fmt.Errorf("external resource %q has no configured provider (http or vault)", sourceName)
+	return nil, fmt.Errorf("external resource %q has no configured provider (http or vault)", resourceName)
 }
 
 // fetchVaultConfig reads a secret from Vault and returns it as JSON bytes.
-// The secretPath is constructed from vault.BasePath + the config's inherit source context.
-// For example: basePath="secret/data", configPath="myapp/db" → reads "secret/data/myapp/db"
-func (s *Service) fetchVaultConfig(ctx context.Context, vault *external.Vault, configPath string) ([]byte, error) {
+// The secretPath is constructed from vault.Mount + the path.
+// For example: mount="secret", path="myapp/db" → reads "secret/data/myapp/db"
+func (s *Service) fetchVaultConfig(ctx context.Context, vault *external.Vault, path string) ([]byte, error) {
 	if vault.Address == "" {
 		return nil, fmt.Errorf("vault address is empty")
 	}
 
 	client := s.getVaultClient(vault)
 
-	// Construct the full secret path: basePath + configPath
-	secretPath := vault.BasePath
-	if configPath != "" {
-		secretPath = strings.TrimRight(secretPath, "/") + "/" + strings.TrimLeft(configPath, "/")
+	// Construct the full secret path: mount + "/data/" + path (KV v2 convention)
+	// If using the old BasePath field, use it directly as before
+	mount := vault.Mount
+	var secretPath string
+	if path != "" {
+		secretPath = strings.TrimRight(mount, "/") + "/" + strings.TrimLeft(path, "/")
+	} else {
+		secretPath = mount
 	}
 
 	data, err := client.ReadSecret(ctx, secretPath)
@@ -239,32 +251,90 @@ func (s *Service) fetchVaultConfig(ctx context.Context, vault *external.Vault, c
 	return jsonBytes, nil
 }
 
-// fetchHTTPConfig fetches JSON/YAML config from an HTTP URL.
-func (s *Service) fetchHTTPConfig(ctx context.Context, url string) ([]byte, error) {
-	if url == "" {
-		return nil, fmt.Errorf("empty URL for HTTP external resource")
+// fetchHTTPConfig fetches config from an HTTP endpoint using the ok client.
+func (s *Service) fetchHTTPConfig(ctx context.Context, cfg *ok.Config, path string) ([]byte, error) {
+	client, err := cfg.New()
+	if err != nil {
+		return nil, fmt.Errorf("creating HTTP client: %w", err)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	endpoint := "/"
+	if path != "" {
+		endpoint = "/" + strings.TrimLeft(path, "/")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating HTTP request: %w", err)
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("executing HTTP request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP request returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading HTTP response: %w", err)
+	var body []byte
+	if err := client.Do(req, func(resp *http.Response) error {
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("HTTP request returned status %d", resp.StatusCode)
+		}
+		var readErr error
+		body, readErr = io.ReadAll(resp.Body)
+		return readErr
+	}); err != nil {
+		return nil, fmt.Errorf("fetching HTTP config: %w", err)
 	}
 
 	return body, nil
+}
+
+// ListExternalPaths lists available paths from an external resource.
+// For Vault, this lists secrets under the mount path.
+// For HTTP, this is not supported (returns empty).
+func (s *Service) ListExternalPaths(ctx context.Context, resourceName string, prefix string) ([]string, error) {
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading settings: %w", err)
+	}
+
+	ext, exists := settings.External[resourceName]
+	if !exists {
+		return nil, fmt.Errorf("external resource %q not found in settings: %w", resourceName, ErrNotFound)
+	}
+
+	if ext.Vault != nil {
+		return s.listVaultSecrets(ctx, ext.Vault, prefix)
+	}
+
+	// HTTP doesn't support listing
+	return []string{}, nil
+}
+
+// listVaultSecrets lists secret keys from Vault under the given prefix.
+func (s *Service) listVaultSecrets(ctx context.Context, vault *external.Vault, prefix string) ([]string, error) {
+	if vault.Address == "" {
+		return nil, fmt.Errorf("vault address is empty")
+	}
+
+	client := s.getVaultClient(vault)
+
+	mount := vault.Mount
+	// For KV v2 LIST, the path is: mount + "/metadata/" + prefix
+	// For KV v1 LIST, the path is: mount + "/" + prefix
+	// We try KV v2 first, then fall back to v1 style
+
+	listPath := strings.TrimRight(mount, "/") + "/metadata/"
+	if prefix != "" {
+		listPath += strings.TrimLeft(prefix, "/")
+	}
+
+	keys, err := client.ListSecrets(ctx, listPath)
+	if err != nil {
+		// Try without /metadata/ (KV v1 or direct mount)
+		listPath = strings.TrimRight(mount, "/") + "/"
+		if prefix != "" {
+			listPath += strings.TrimLeft(prefix, "/")
+		}
+		keys, err = client.ListSecrets(ctx, listPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return keys, nil
 }

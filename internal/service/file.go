@@ -4,16 +4,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path"
 	"strconv"
 
 	"github.com/rakunlabs/tummy"
 )
 
 // InheritEntry defines a single inheritance source.
+//
+// For internal files: Source is the file path (e.g., "base/database").
+// For external resources: Resource is the settings key (e.g., "my-vault"),
+// and Path is the resource-specific path (e.g., "myapp/database" for Vault secrets
+// or "/api/config" for HTTP endpoints).
 type InheritEntry struct {
-	// Source is the path to the parent config (internal path or external resource name).
-	Source string `json:"source"`
+	// Source is the internal file path. Used for internal inheritance.
+	Source string `json:"source,omitempty"`
+	// Resource is the name of an external resource from settings.
+	Resource string `json:"resource,omitempty"`
+	// Path is the resource-specific path when using an external resource.
+	// For Vault: the secret path under the mount (e.g., "myapp/database").
+	// For HTTP: appended to the base URL (e.g., "/api/config").
+	Path string `json:"path,omitempty"`
 	// Paths selectively includes only these fields from the source.
 	// Supports dot-notation (e.g., "database.host") and wildcards ("logging.*").
 	// If empty, all fields are included.
@@ -61,11 +71,9 @@ const (
 // File retrieves a file from storage at the given path.
 //   - version 0 returns the latest version.
 func (s *Service) File(ctx context.Context, filePath string, version int64) (*File, error) {
-	keyPath := path.Join(keyFile, filePath)
-
 	// get last version if version is 0
 	if version == 0 {
-		fileVersions, err := s.FileInfo(ctx, keyPath)
+		fileVersions, err := s.FileInfo(ctx, filePath)
 		if err != nil {
 			return nil, err
 		}
@@ -78,19 +86,7 @@ func (s *Service) File(ctx context.Context, filePath string, version int64) (*Fi
 		version = fileVersion.Version
 	}
 
-	keyPath = path.Join(keyPath, strconv.FormatInt(version, 10))
-
-	data, err := s.store.Get(ctx, keyPath)
-	if err != nil {
-		return nil, err
-	}
-
-	var file File
-	if err := s.decodeBytes(data, &file); err != nil {
-		return nil, err
-	}
-
-	return &file, nil
+	return s.store.Files().Get(ctx, filePath, version)
 }
 
 // FileByVersion retrieves a file using a version string.
@@ -113,8 +109,7 @@ func (s *Service) FileByVersion(ctx context.Context, filePath string, versionStr
 		return nil, fmt.Errorf("invalid version %q: %w", versionStr, ErrBadRequest)
 	}
 
-	keyPath := path.Join(keyFile, filePath)
-	fileVersions, err := s.FileInfo(ctx, keyPath)
+	fileVersions, err := s.FileInfo(ctx, filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -140,24 +135,13 @@ func (s *Service) fileGetLatestValidVersion(versions FileVersions) (*FileVersion
 	return nil, ErrNotFound
 }
 
-func (s *Service) FileInfo(ctx context.Context, keyPath string) (FileVersions, error) {
-	data, err := s.store.Get(ctx, keyPath)
-	if err != nil {
-		return nil, err
-	}
-
-	var versions FileVersions
-	if err := s.decodeBytes(data, &versions); err != nil {
-		return nil, err
-	}
-
-	return versions, nil
+func (s *Service) FileInfo(ctx context.Context, filePath string) (FileVersions, error) {
+	return s.store.FileVersions().Get(ctx, filePath)
 }
 
 // FileVersionsList returns the version history for a file at the given path.
 func (s *Service) FileVersionsList(ctx context.Context, filePath string) (FileVersions, error) {
-	keyPath := path.Join(keyFile, filePath)
-	return s.FileInfo(ctx, keyPath)
+	return s.FileInfo(ctx, filePath)
 }
 
 // SetFile saves a file to storage at the given path.
@@ -179,10 +163,9 @@ func (s *Service) SetFile(ctx context.Context, key string, data *File, expectedV
 		}
 
 		// file versioning
-		keyPath := path.Join(keyFile, key)
 		var fileVersions FileVersions
 
-		fileVersionsData, err := tx.Get(ctx, keyPath)
+		existing, err := tx.FileVersions().Get(ctx, key)
 		if err != nil {
 			if !errors.Is(err, ErrNotFound) {
 				return err
@@ -190,9 +173,7 @@ func (s *Service) SetFile(ctx context.Context, key string, data *File, expectedV
 			// no versions yet
 			fileVersions = FileVersions{}
 		} else {
-			if err := s.decodeBytes(fileVersionsData, &fileVersions); err != nil {
-				return err
-			}
+			fileVersions = existing
 		}
 
 		var newVersion int64 = 1
@@ -223,24 +204,13 @@ func (s *Service) SetFile(ctx context.Context, key string, data *File, expectedV
 
 		fileVersions = append(fileVersions, newFileVersion)
 
-		encodedVersions, err := s.encodeBytes(fileVersions)
-		if err != nil {
-			return err
-		}
-
 		// save updated versions
-		if err := tx.Set(ctx, keyPath, encodedVersions); err != nil {
+		if err := tx.FileVersions().Set(ctx, key, fileVersions); err != nil {
 			return err
 		}
 
 		// save file data at versioned key
-		keyPath = path.Join(keyPath, strconv.FormatInt(newVersion, 10))
-		encodedData, err := s.encodeBytes(data)
-		if err != nil {
-			return err
-		}
-
-		return tx.Set(ctx, keyPath, encodedData)
+		return tx.Files().Set(ctx, key, newVersion, data)
 	})
 
 	return createdVersion, err
@@ -249,8 +219,6 @@ func (s *Service) SetFile(ctx context.Context, key string, data *File, expectedV
 // DeleteFile deletes a file from storage at the given path.
 //   - if version is 0, delete completely
 func (s *Service) DeleteFile(ctx context.Context, key string, version int64) error {
-	keyPath := path.Join(keyFile, key)
-
 	return s.store.Tx(ctx, func(ctx context.Context, tx Storage) error {
 		if version == 0 {
 			// delete completely
@@ -259,47 +227,26 @@ func (s *Service) DeleteFile(ctx context.Context, key string, version int64) err
 				return err
 			}
 
-			// Delete all versions
-			data, err := tx.Get(ctx, keyPath)
-			if err != nil {
-				if err == ErrNotFound {
-					return nil
-				}
+			// Delete all file versions data
+			if err := tx.Files().DeleteAllVersions(ctx, key); err != nil {
 				return err
-			}
-
-			var versions FileVersions
-			if err := s.decodeBytes(data, &versions); err != nil {
-				return err
-			}
-
-			for _, v := range versions {
-				versionedKeyPath := path.Join(keyPath, strconv.FormatInt(v.Version, 10))
-				if err := tx.Delete(ctx, versionedKeyPath); err != nil {
-					return err
-				}
 			}
 
 			// Delete versions metadata
-			return tx.Delete(ctx, keyPath)
+			return tx.FileVersions().Delete(ctx, key)
 		}
 
 		// Mark version as deleted
-		data, err := tx.Get(ctx, keyPath)
+		fv, err := tx.FileVersions().Get(ctx, key)
 		if err != nil {
 			return err
 		}
 
-		var versions FileVersions
-		if err := s.decodeBytes(data, &versions); err != nil {
-			return err
-		}
-
 		var versionFound bool
-		for i, v := range versions {
+		for i, v := range fv {
 			if v.Version == version {
 				versionFound = true
-				versions[i].Status = append(versions[i].Status, FileStatus{
+				fv[i].Status = append(fv[i].Status, FileStatus{
 					Status:    FileStatusTypeDeleted,
 					Timestamp: tummy.Now().Unix(),
 					Author:    UserFromContext(ctx),
@@ -309,18 +256,12 @@ func (s *Service) DeleteFile(ctx context.Context, key string, version int64) err
 		}
 
 		if versionFound {
-			encodedVersions, err := s.encodeBytes(versions)
-			if err != nil {
-				return err
-			}
-
-			if err := tx.Set(ctx, keyPath, encodedVersions); err != nil {
+			if err := tx.FileVersions().Set(ctx, key, fv); err != nil {
 				return err
 			}
 		}
 
 		// Delete file data at versioned key
-		versionedKeyPath := path.Join(keyPath, strconv.FormatInt(version, 10))
-		return tx.Delete(ctx, versionedKeyPath)
+		return tx.Files().Delete(ctx, key, version)
 	})
 }

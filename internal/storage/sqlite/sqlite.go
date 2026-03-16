@@ -18,12 +18,6 @@ var (
 	DefaultConnMaxIdleTime = 15 * time.Minute
 )
 
-type Querier interface {
-	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
-	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
-}
-
 type Config struct {
 	Enabled bool   `cfg:"enabled" default:"true"`
 	DSN     string `cfg:"dsn"`
@@ -64,16 +58,23 @@ func (c *Config) GetConfig() Config {
 	return cfg
 }
 
+// Querier abstracts *sql.DB and *sql.Tx for shared query execution.
+type Querier interface {
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
+}
+
+// Sqlite implements the service.Storage interface using SQLite
+// with proper SQL tables for each entity.
 type Sqlite struct {
 	db *sql.DB
-
-	q Querier
+	q  Querier
 }
 
 func New(ctx context.Context, cfg *Config) (*Sqlite, error) {
 	c := cfg.GetConfig()
 
-	// migration
 	if cfg.Migration.Enabled {
 		migCfg := cfg.Migration
 		if migCfg.DSN == "" {
@@ -96,11 +97,9 @@ func New(ctx context.Context, cfg *Config) (*Sqlite, error) {
 	if c.MaxIdleConns != nil {
 		db.SetMaxIdleConns(*c.MaxIdleConns)
 	}
-
 	if c.MaxOpenConns != nil {
 		db.SetMaxOpenConns(*c.MaxOpenConns)
 	}
-
 	if c.ConnMaxIdleTime != nil {
 		db.SetConnMaxIdleTime(*c.ConnMaxIdleTime)
 	}
@@ -108,18 +107,28 @@ func New(ctx context.Context, cfg *Config) (*Sqlite, error) {
 	return &Sqlite{db: db, q: db}, nil
 }
 
-// DB exposes the underlying database connection.
-func (m *Sqlite) DB() *sql.DB {
-	return m.db
+func (s *Sqlite) DB() *sql.DB {
+	return s.db
 }
 
-func (m *Sqlite) Tx(ctx context.Context, fn func(ctx context.Context, tx service.Storage) error) error {
-	tx, err := m.db.BeginTx(ctx, nil)
+func (s *Sqlite) Close() error {
+	return s.db.Close()
+}
+
+func (s *Sqlite) Users() service.UserStorage               { return &userStorage{q: s.q} }
+func (s *Sqlite) Tokens() service.TokenStorage             { return &tokenStorage{q: s.q} }
+func (s *Sqlite) Folders() service.FolderStorage           { return &folderStorage{q: s.q} }
+func (s *Sqlite) Files() service.FileStorage               { return &fileStorage{q: s.q} }
+func (s *Sqlite) FileVersions() service.FileVersionStorage { return &fileVersionStorage{q: s.q} }
+func (s *Sqlite) Settings() service.SettingsStorage        { return &settingsStorage{q: s.q} }
+
+func (s *Sqlite) Tx(ctx context.Context, fn func(ctx context.Context, tx service.Storage) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 
-	sqliteTx := &Sqlite{db: m.db, q: tx}
+	sqliteTx := &Sqlite{db: s.db, q: tx}
 
 	if err := fn(ctx, sqliteTx); err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil {
@@ -129,62 +138,4 @@ func (m *Sqlite) Tx(ctx context.Context, fn func(ctx context.Context, tx service
 	}
 
 	return tx.Commit()
-}
-
-// Get retrieves the value for the given key.
-// If key ends with "/", it returns a JSON-encoded Folder with immediate children (folders and files).
-// Otherwise, it returns the raw file value.
-// Returns ErrNotFound if the key does not exist (for files) or has no children (for folders).
-func (m *Sqlite) Get(ctx context.Context, key string) ([]byte, error) {
-	var value []byte
-	err := m.q.QueryRowContext(ctx, "SELECT value FROM pika WHERE key = ?", key).Scan(&value)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, service.ErrNotFound
-		}
-		return nil, err
-	}
-	return value, nil
-}
-
-// Set stores the key-value pair using UPSERT semantics.
-func (m *Sqlite) Set(ctx context.Context, key string, value []byte) error {
-	_, err := m.q.ExecContext(
-		ctx,
-		"INSERT INTO pika (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-		key, value,
-	)
-	return err
-}
-
-// Delete removes the key-value pair for the given key.
-func (m *Sqlite) Delete(ctx context.Context, key string) error {
-	_, err := m.q.ExecContext(ctx, "DELETE FROM pika WHERE key = ?", key)
-	return err
-}
-
-func (m *Sqlite) For(ctx context.Context, prefix string, fn func(ctx context.Context, key string, value []byte) error) error {
-	rows, err := m.q.QueryContext(ctx, "SELECT key, value FROM pika WHERE key LIKE ?", prefix+"%")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var key string
-		var value []byte
-		if err := rows.Scan(&key, &value); err != nil {
-			return err
-		}
-
-		if err := fn(ctx, key, value); err != nil {
-			return err
-		}
-	}
-
-	return rows.Err()
-}
-
-func (m *Sqlite) Close() error {
-	return m.db.Close()
 }

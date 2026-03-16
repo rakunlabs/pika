@@ -5,15 +5,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"path"
 	"strings"
 	"time"
-)
 
-const keyToken = "_token"
+	"github.com/rakunlabs/query"
+)
 
 // TokenScope defines what a token can access.
 type TokenScope struct {
@@ -122,13 +119,7 @@ func (s *Service) CreateToken(ctx context.Context, req *CreateTokenRequest) (*Cr
 		Active:    true,
 	}
 
-	keyPath := path.Join(keyToken, id)
-	data, err := json.Marshal(token)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := s.store.Set(ctx, keyPath, data); err != nil {
+	if err := s.store.Tokens().Create(ctx, &token); err != nil {
 		return nil, err
 	}
 
@@ -147,16 +138,15 @@ func (s *Service) CreateToken(ctx context.Context, req *CreateTokenRequest) (*Cr
 }
 
 // ListTokens lists all tokens (without exposing the hashed key).
-func (s *Service) ListTokens(ctx context.Context) ([]TokenInfo, error) {
-	var tokens []TokenInfo
+func (s *Service) ListTokens(ctx context.Context, q *query.Query) ([]TokenInfo, int64, error) {
+	tokens, total, err := s.store.Tokens().List(ctx, q)
+	if err != nil {
+		return nil, 0, err
+	}
 
-	err := s.store.For(ctx, keyToken, func(ctx context.Context, key string, value []byte) error {
-		var token Token
-		if err := json.Unmarshal(value, &token); err != nil {
-			return nil // skip invalid entries
-		}
-
-		tokens = append(tokens, TokenInfo{
+	infos := make([]TokenInfo, 0, len(tokens))
+	for _, token := range tokens {
+		infos = append(infos, TokenInfo{
 			ID:        token.ID,
 			Name:      token.Name,
 			Scopes:    token.Scopes,
@@ -165,36 +155,20 @@ func (s *Service) ListTokens(ctx context.Context) ([]TokenInfo, error) {
 			ExpiresAt: token.ExpiresAt,
 			Active:    token.Active,
 		})
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 
-	if tokens == nil {
-		tokens = []TokenInfo{}
-	}
-
-	return tokens, nil
+	return infos, total, nil
 }
 
 // DeleteToken deletes a token by ID.
 func (s *Service) DeleteToken(ctx context.Context, id string) error {
-	keyPath := path.Join(keyToken, id)
-	return s.store.Delete(ctx, keyPath)
+	return s.store.Tokens().Delete(ctx, id)
 }
 
 // PatchToken updates a token's properties.
 func (s *Service) PatchToken(ctx context.Context, id string, req *PatchTokenRequest) error {
-	keyPath := path.Join(keyToken, id)
-
-	data, err := s.store.Get(ctx, keyPath)
+	token, err := s.store.Tokens().Get(ctx, id)
 	if err != nil {
-		return err
-	}
-
-	var token Token
-	if err := json.Unmarshal(data, &token); err != nil {
 		return err
 	}
 
@@ -211,12 +185,7 @@ func (s *Service) PatchToken(ctx context.Context, id string, req *PatchTokenRequ
 		token.ExpiresAt = req.ExpiresAt
 	}
 
-	updated, err := json.Marshal(token)
-	if err != nil {
-		return err
-	}
-
-	return s.store.Set(ctx, keyPath, updated)
+	return s.store.Tokens().Update(ctx, token)
 }
 
 // ValidateToken validates a raw token key and checks if it has permission
@@ -224,27 +193,8 @@ func (s *Service) PatchToken(ctx context.Context, id string, req *PatchTokenRequ
 func (s *Service) ValidateToken(ctx context.Context, rawKey string, configPath string, operation string) error {
 	hashed := hashKey(rawKey)
 
-	// Find the token by iterating all tokens and matching the hash
-	var matchedToken *Token
-
-	err := s.store.For(ctx, keyToken, func(ctx context.Context, key string, value []byte) error {
-		var token Token
-		if err := json.Unmarshal(value, &token); err != nil {
-			return nil // skip
-		}
-
-		if token.HashedKey == hashed {
-			matchedToken = &token
-			return fmt.Errorf("found") // stop iteration
-		}
-		return nil
-	})
-
-	if err != nil && err.Error() != "found" {
-		return err
-	}
-
-	if matchedToken == nil {
+	matchedToken, err := s.store.Tokens().FindByHash(ctx, hashed)
+	if err != nil {
 		return fmt.Errorf("invalid token: %w", ErrUnauthorized)
 	}
 
@@ -337,23 +287,5 @@ func containsOperation(ops []string, op string) bool {
 
 // findTokenByHash looks up a token by its hashed key.
 func (s *Service) findTokenByHash(ctx context.Context, hashed string) (*Token, error) {
-	var matchedToken *Token
-
-	err := s.store.For(ctx, keyToken, func(ctx context.Context, key string, value []byte) error {
-		var token Token
-		if err := json.Unmarshal(value, &token); err != nil {
-			return nil
-		}
-		if token.HashedKey == hashed {
-			matchedToken = &token
-			return errors.New("found")
-		}
-		return nil
-	})
-
-	if err != nil && err.Error() != "found" {
-		return nil, err
-	}
-
-	return matchedToken, nil
+	return s.store.Tokens().FindByHash(ctx, hashed)
 }

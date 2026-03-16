@@ -30,7 +30,7 @@
   let newExtType = $state<'http' | 'vault'>('http');
   let newExtHttpUrl = $state('');
   let newExtVaultAddr = $state('');
-  let newExtVaultPath = $state('');
+  let newExtVaultMount = $state('secret');
   let newExtVaultRoleId = $state('');
   let newExtVaultSecretId = $state('');
   let newExtVaultAppRolePath = $state('approle');
@@ -140,8 +140,8 @@
       }
       resource.http = { base_url: newExtHttpUrl.trim() };
     } else {
-      if (!newExtVaultAddr.trim() || !newExtVaultPath.trim()) {
-        addToast('Vault address and base path are required', 'alert');
+      if (!newExtVaultAddr.trim() || !newExtVaultMount.trim()) {
+        addToast('Vault address and mount are required', 'alert');
         return;
       }
       if (!newExtVaultRoleId.trim() || !newExtVaultSecretId.trim()) {
@@ -150,7 +150,7 @@
       }
       resource.vault = {
         address: newExtVaultAddr.trim(),
-        base_path: newExtVaultPath.trim(),
+        mount: newExtVaultMount.trim(),
         app_role: {
           role_id: newExtVaultRoleId.trim(),
           secret_id: newExtVaultSecretId.trim(),
@@ -168,7 +168,7 @@
       newExtName = '';
       newExtHttpUrl = '';
       newExtVaultAddr = '';
-      newExtVaultPath = '';
+      newExtVaultMount = '';
       newExtVaultRoleId = '';
       newExtVaultSecretId = '';
       newExtVaultAppRolePath = 'approle';
@@ -526,15 +526,15 @@
               />
             </div>
             <div class="mb-4">
-              <label for="ext-vault-path" class="block text-xs font-medium text-slate-500 mb-1.5">Base Path</label>
+              <label for="ext-vault-mount" class="block text-xs font-medium text-slate-500 mb-1.5">Mount</label>
               <input
-                id="ext-vault-path"
+                id="ext-vault-mount"
                 type="text"
-                bind:value={newExtVaultPath}
-                placeholder="secret/data"
+                bind:value={newExtVaultMount}
+                placeholder="secret"
                 class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
               />
-              <p class="mt-1 text-[11px] text-slate-400">Config path will be appended when reading secrets</p>
+              <p class="mt-1 text-[11px] text-slate-400">KV secrets engine mount path. Secret paths are specified per-inheritance entry.</p>
             </div>
 
             <div class="mb-3 pt-2 border-t border-slate-100">
@@ -615,7 +615,7 @@
                   {:else if resource.vault}
                     <div class="text-xs font-mono text-slate-400">{resource.vault.address}</div>
                     <div class="text-xs text-slate-400">
-                      Path: <span class="font-mono">{resource.vault.base_path}</span>
+                      Mount: <span class="font-mono">{resource.vault.mount}</span>
                     </div>
                     {#if resource.vault.app_role}
                       <div class="flex items-center gap-1.5 text-[10px] text-slate-400">

@@ -10,7 +10,7 @@ import (
 const variantSeparator = "@"
 
 // variantKey constructs the storage key for a variant.
-// e.g., "app/config" + "env=prod" → "app/config@env=prod"
+// e.g., "app/config" + "env=prod" -> "app/config@env=prod"
 func variantKey(filePath string, variantKey string) string {
 	return filePath + variantSeparator + variantKey
 }
@@ -69,18 +69,12 @@ func (s *Service) ListVariants(ctx context.Context, filePath string) ([]string, 
 	}
 	fileName := path.Base(filePath)
 
-	keyPath := path.Join(keyFolder, dir)
-	data, err := s.store.Get(ctx, keyPath)
+	folder, err := s.store.Folders().Get(ctx, dir)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return []string{}, nil
 		}
 		return nil, err
-	}
-
-	var folder Folder
-	if err := s.decodeBytes(data, &folder); err != nil {
-		return []string{}, nil
 	}
 
 	if folder.Variants == nil {
@@ -104,29 +98,18 @@ func (s *Service) addVariantToFolder(ctx context.Context, filePath string, vKey 
 	fileName := path.Base(filePath)
 
 	return s.store.Tx(ctx, func(ctx context.Context, tx Storage) error {
-		keyPath := path.Join(keyFolder, dir)
-
-		data, err := tx.Get(ctx, keyPath)
+		folder, err := tx.Folders().Get(ctx, dir)
 		if err != nil {
 			if !errors.Is(err, ErrNotFound) {
 				return err
 			}
 			// Folder doesn't exist — create it with the variant entry
-			folder := Folder{
+			folder = &Folder{
 				Folders:  []string{},
 				Files:    []string{},
 				Variants: map[string][]string{fileName: {vKey}},
 			}
-			encoded, err := s.encodeBytes(folder)
-			if err != nil {
-				return err
-			}
-			return tx.Set(ctx, keyPath, encoded)
-		}
-
-		var folder Folder
-		if err := s.decodeBytes(data, &folder); err != nil {
-			return err
+			return tx.Folders().Set(ctx, dir, folder)
 		}
 
 		if folder.Variants == nil {
@@ -136,12 +119,7 @@ func (s *Service) addVariantToFolder(ctx context.Context, filePath string, vKey 
 		variants := folder.Variants[fileName]
 		if !slices.Contains(variants, vKey) {
 			folder.Variants[fileName] = append(variants, vKey)
-
-			encoded, err := s.encodeBytes(folder)
-			if err != nil {
-				return err
-			}
-			return tx.Set(ctx, keyPath, encoded)
+			return tx.Folders().Set(ctx, dir, folder)
 		}
 
 		return nil
@@ -157,16 +135,9 @@ func (s *Service) removeVariantFromFolder(ctx context.Context, filePath string, 
 	fileName := path.Base(filePath)
 
 	return s.store.Tx(ctx, func(ctx context.Context, tx Storage) error {
-		keyPath := path.Join(keyFolder, dir)
-
-		data, err := tx.Get(ctx, keyPath)
+		folder, err := tx.Folders().Get(ctx, dir)
 		if err != nil {
 			return nil // folder doesn't exist, nothing to remove
-		}
-
-		var folder Folder
-		if err := s.decodeBytes(data, &folder); err != nil {
-			return nil
 		}
 
 		if folder.Variants == nil {
@@ -191,10 +162,6 @@ func (s *Service) removeVariantFromFolder(ctx context.Context, filePath string, 
 			folder.Variants[fileName] = newVariants
 		}
 
-		encoded, err := s.encodeBytes(folder)
-		if err != nil {
-			return err
-		}
-		return tx.Set(ctx, keyPath, encoded)
+		return tx.Folders().Set(ctx, dir, folder)
 	})
 }

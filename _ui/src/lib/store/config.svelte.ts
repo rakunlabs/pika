@@ -176,9 +176,8 @@ function createConfigStore() {
           }))
         ]
       };
-    } catch (error) {
-      console.error('Failed to load tree:', error);
-      addToast('Failed to load file tree', 'alert');
+    } catch {
+      // Silently show empty tree — no configs exist yet or server is not ready.
       tree = {
         name: 'root',
         path: '',
@@ -590,6 +589,17 @@ function createConfigStore() {
     }
   }
 
+  async function listExternalPaths(resourceName: string, prefix: string = ''): Promise<string[]> {
+    try {
+      const response = await axios.get(`/api/v1/external/${resourceName}/paths`, {
+        params: prefix ? { prefix } : undefined
+      });
+      return response.data || [];
+    } catch {
+      return [];
+    }
+  }
+
   // Token operations
   async function loadTokens(): Promise<void> {
     try {
@@ -795,6 +805,7 @@ function createConfigStore() {
     // Settings operations
     loadSettings,
     saveSettings,
+    listExternalPaths,
 
     // Token operations
     loadTokens,

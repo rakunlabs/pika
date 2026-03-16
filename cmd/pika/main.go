@@ -83,6 +83,18 @@ func run(ctx context.Context) error {
 	svc := service.New(storeWrap)
 
 	// //////////////////////////////////////
+	// Seed user if built-in auth is configured
+	if cfg.Server.Auth != nil && cfg.Server.Auth.SeedUser != nil {
+		seed := cfg.Server.Auth.SeedUser
+		if seed.Username != "" && seed.Password != "" {
+			if err := svc.SeedUser(ctx, seed.Username, seed.Password); err != nil {
+				return fmt.Errorf("seed user: %w", err)
+			}
+			slog.Info("seed user checked", "username", seed.Username)
+		}
+	}
+
+	// //////////////////////////////////////
 	// Start server
 	info := api.Info{
 		Name:    config.ServiceName,

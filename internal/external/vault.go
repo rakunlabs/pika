@@ -238,6 +238,75 @@ func (vc *VaultClient) ReadSecret(ctx context.Context, secretPath string) (map[s
 	return data, nil
 }
 
+// ListSecrets lists secret keys at the given path using Vault's LIST method.
+// Returns a list of key names. Keys ending with "/" are sub-directories.
+func (vc *VaultClient) ListSecrets(ctx context.Context, listPath string) ([]string, error) {
+	if err := vc.EnsureAuthenticated(ctx); err != nil {
+		return nil, err
+	}
+
+	vc.mu.RLock()
+	token := vc.token
+	vc.mu.RUnlock()
+
+	listURL := fmt.Sprintf("%s/v1/%s", vc.address, strings.TrimLeft(listPath, "/"))
+
+	req, err := http.NewRequestWithContext(ctx, "LIST", listURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating list request: %w", err)
+	}
+	req.Header.Set("X-Vault-Token", token)
+
+	resp, err := vc.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("executing list request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading list response: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusNotFound {
+		return []string{}, nil
+	}
+
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		vc.mu.Lock()
+		vc.token = ""
+		vc.tokenExpAt = time.Time{}
+		vc.mu.Unlock()
+		return nil, fmt.Errorf("vault returned HTTP %d on list: %s", resp.StatusCode, string(respBody))
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("vault list returned HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	// Parse the list response: { data: { keys: ["key1", "key2/"] } }
+	var listResp struct {
+		Data *struct {
+			Keys []string `json:"keys"`
+		} `json:"data"`
+		Errors []string `json:"errors,omitempty"`
+	}
+
+	if err := json.Unmarshal(respBody, &listResp); err != nil {
+		return nil, fmt.Errorf("parsing list response: %w", err)
+	}
+
+	if len(listResp.Errors) > 0 {
+		return nil, fmt.Errorf("vault list errors: %s", strings.Join(listResp.Errors, "; "))
+	}
+
+	if listResp.Data == nil {
+		return []string{}, nil
+	}
+
+	return listResp.Data.Keys, nil
+}
+
 // unwrapSecretData attempts to extract the actual secret data.
 // For KV v2: the response has { data: { data: {...}, metadata: {...} } }
 // For KV v1: the response has { data: {...} }

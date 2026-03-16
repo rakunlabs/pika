@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+
+	"github.com/rakunlabs/query"
 )
 
 var (
@@ -14,31 +16,71 @@ var (
 	ErrConflict         = errors.New("conflict")
 )
 
-// KeyValue represents a key-value pair for search results.
-type KeyValue struct {
-	Key   string
-	Value []byte
-}
-
-// Storage defines the interface for the underlying storage backend.
+// Storage defines the top-level storage interface.
+// Each entity has its own typed repository.
 type Storage interface {
-	// Get retrieves the value for the given key.
-	//  - if not found, returns service.ErrNotFound
-	Get(ctx context.Context, key string) ([]byte, error)
-
-	// Set stores the key-value pair.
-	//  - uses UPSERT semantics
-	Set(ctx context.Context, key string, value []byte) error
-
-	// Delete removes the key-value pair for the given key.
-	Delete(ctx context.Context, key string) error
-
-	// For iterates over all key-value pairs where the key starts with the given prefix.
-	For(ctx context.Context, prefix string, fn func(ctx context.Context, key string, value []byte) error) error
+	Users() UserStorage
+	Tokens() TokenStorage
+	Folders() FolderStorage
+	Files() FileStorage
+	FileVersions() FileVersionStorage
+	Settings() SettingsStorage
 
 	// Tx executes a function within a transaction.
-	//  - if the function returns an error, the transaction is rolled back.
+	// If the function returns an error, the transaction is rolled back.
 	Tx(ctx context.Context, fn func(ctx context.Context, tx Storage) error) error
+}
+
+// UserStorage manages user records.
+type UserStorage interface {
+	Create(ctx context.Context, user *User) error
+	Get(ctx context.Context, id string) (*User, error)
+	GetByUsername(ctx context.Context, username string) (*User, error)
+	List(ctx context.Context, q *query.Query) ([]User, int64, error)
+	Update(ctx context.Context, user *User) error
+	Delete(ctx context.Context, id string) error
+	Count(ctx context.Context) (int64, error)
+}
+
+// TokenStorage manages access tokens.
+type TokenStorage interface {
+	Create(ctx context.Context, token *Token) error
+	Get(ctx context.Context, id string) (*Token, error)
+	FindByHash(ctx context.Context, hashedKey string) (*Token, error)
+	List(ctx context.Context, q *query.Query) ([]Token, int64, error)
+	Update(ctx context.Context, token *Token) error
+	Delete(ctx context.Context, id string) error
+}
+
+// FolderStorage manages folder records.
+type FolderStorage interface {
+	Get(ctx context.Context, path string) (*Folder, error)
+	Set(ctx context.Context, path string, folder *Folder) error
+	Delete(ctx context.Context, path string) error
+	DeletePrefix(ctx context.Context, prefix string) error
+}
+
+// FileStorage manages file content at specific versions.
+type FileStorage interface {
+	Get(ctx context.Context, path string, version int64) (*File, error)
+	Set(ctx context.Context, path string, version int64, file *File) error
+	Delete(ctx context.Context, path string, version int64) error
+	DeleteAllVersions(ctx context.Context, path string) error
+	DeletePrefix(ctx context.Context, prefix string) error
+}
+
+// FileVersionStorage manages file version metadata.
+type FileVersionStorage interface {
+	Get(ctx context.Context, path string) (FileVersions, error)
+	Set(ctx context.Context, path string, versions FileVersions) error
+	Delete(ctx context.Context, path string) error
+	DeletePrefix(ctx context.Context, prefix string) error
+}
+
+// SettingsStorage manages application settings (singleton).
+type SettingsStorage interface {
+	Get(ctx context.Context) (*Settings, error)
+	Set(ctx context.Context, settings *Settings) error
 }
 
 // Folder represents a directory containing folders and files.

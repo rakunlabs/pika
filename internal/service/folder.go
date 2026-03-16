@@ -5,25 +5,13 @@ import (
 	"errors"
 	"path"
 	"slices"
-	"strconv"
 	"strings"
 )
 
 // Folder retrieves the folder structure at the given path.
 // Returns immediate subfolders and files only.
 func (s *Service) Folder(ctx context.Context, folderPath string) (*Folder, error) {
-	keyPath := path.Join(keyFolder, folderPath)
-	data, err := s.store.Get(ctx, keyPath)
-	if err != nil {
-		return nil, err
-	}
-
-	var folder Folder
-	if err := s.decodeBytes(data, &folder); err != nil {
-		return nil, err
-	}
-
-	return &folder, nil
+	return s.store.Folders().Get(ctx, folderPath)
 }
 
 func (s *Service) SetFolder(ctx context.Context, folderPath string) error {
@@ -52,20 +40,13 @@ func (s *Service) addFileToFolder(ctx context.Context, tx Storage, filePath stri
 	}
 
 	// Get the current folder data
-	keyPath := path.Join(keyFolder, folderPath)
-	var folder Folder
-
-	data, err := tx.Get(ctx, keyPath)
+	folder, err := tx.Folders().Get(ctx, folderPath)
 	if err != nil {
 		if !errors.Is(err, ErrNotFound) {
 			return err
 		}
 		// Folder doesn't exist, create empty one
-		folder = Folder{Folders: []string{}, Files: []string{}}
-	} else {
-		if err := s.decodeBytes(data, &folder); err != nil {
-			return err
-		}
+		folder = &Folder{Folders: []string{}, Files: []string{}}
 	}
 
 	// Check if file already exists in folder
@@ -79,12 +60,7 @@ func (s *Service) addFileToFolder(ctx context.Context, tx Storage, filePath stri
 	folder.Files = append(folder.Files, fileName)
 
 	// Save the folder
-	encoded, err := s.encodeBytes(folder)
-	if err != nil {
-		return err
-	}
-
-	return tx.Set(ctx, keyPath, encoded)
+	return tx.Folders().Set(ctx, folderPath, folder)
 }
 
 // ensureFolderExists creates the folder and all parent folders if they don't exist.
@@ -105,26 +81,14 @@ func (s *Service) ensureFolderExists(ctx context.Context, tx Storage, folderPath
 	}
 
 	// Check if this folder exists
-	keyPath := path.Join(keyFolder, folderPath)
-
-	data, err := tx.Get(ctx, keyPath)
+	_, err := tx.Folders().Get(ctx, folderPath)
 	if err != nil {
 		if !errors.Is(err, ErrNotFound) {
 			return err
 		}
 		// Folder doesn't exist, create it with empty slices (not nil)
-		folder := Folder{Folders: []string{}, Files: []string{}}
-		encoded, err := s.encodeBytes(folder)
-		if err != nil {
-			return err
-		}
-		if err := tx.Set(ctx, keyPath, encoded); err != nil {
-			return err
-		}
-	} else {
-		// Folder already exists — no need to re-save, just validate it decodes
-		var folder Folder
-		if err := s.decodeBytes(data, &folder); err != nil {
+		folder := &Folder{Folders: []string{}, Files: []string{}}
+		if err := tx.Folders().Set(ctx, folderPath, folder); err != nil {
 			return err
 		}
 	}
@@ -138,19 +102,13 @@ func (s *Service) ensureFolderExists(ctx context.Context, tx Storage, folderPath
 		if !parentIsRoot {
 			normalizedParentPath = parentPath
 		}
-		parentKeyPath := path.Join(keyFolder, normalizedParentPath)
 
-		var parentFolder Folder
-		parentData, err := tx.Get(ctx, parentKeyPath)
+		parentFolder, err := tx.Folders().Get(ctx, normalizedParentPath)
 		if err != nil {
 			if !errors.Is(err, ErrNotFound) {
 				return err
 			}
-			parentFolder = Folder{Folders: []string{}, Files: []string{}}
-		} else {
-			if err := s.decodeBytes(parentData, &parentFolder); err != nil {
-				return err
-			}
+			parentFolder = &Folder{Folders: []string{}, Files: []string{}}
 		}
 
 		// Check if folder already exists in parent
@@ -158,11 +116,7 @@ func (s *Service) ensureFolderExists(ctx context.Context, tx Storage, folderPath
 
 		if !exists {
 			parentFolder.Folders = append(parentFolder.Folders, folderName)
-			parentEncoded, err := s.encodeBytes(parentFolder)
-			if err != nil {
-				return err
-			}
-			if err := tx.Set(ctx, parentKeyPath, parentEncoded); err != nil {
+			if err := tx.Folders().Set(ctx, normalizedParentPath, parentFolder); err != nil {
 				return err
 			}
 		}
@@ -186,18 +140,11 @@ func (s *Service) removeFileFromFolder(ctx context.Context, tx Storage, filePath
 	}
 
 	// Get the current folder data
-	keyPath := path.Join(keyFolder, folderPath)
-	var folder Folder
-
-	data, err := tx.Get(ctx, keyPath)
+	folder, err := tx.Folders().Get(ctx, folderPath)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil // Folder doesn't exist, nothing to remove
 		}
-		return err
-	}
-
-	if err := s.decodeBytes(data, &folder); err != nil {
 		return err
 	}
 
@@ -211,12 +158,7 @@ func (s *Service) removeFileFromFolder(ctx context.Context, tx Storage, filePath
 	folder.Files = newFiles
 
 	// Save the updated folder
-	encoded, err := s.encodeBytes(folder)
-	if err != nil {
-		return err
-	}
-
-	return tx.Set(ctx, keyPath, encoded)
+	return tx.Folders().Set(ctx, folderPath, folder)
 }
 
 // DeleteFolder deletes a folder from storage at the given path.
@@ -228,19 +170,12 @@ func (s *Service) DeleteFolder(ctx context.Context, key string) error {
 }
 
 func (s *Service) deleteFolderRecursive(ctx context.Context, tx Storage, folderPath string) error {
-	keyPath := path.Join(keyFolder, folderPath)
-
 	// Get folder contents
-	data, err := tx.Get(ctx, keyPath)
+	folder, err := tx.Folders().Get(ctx, folderPath)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil
 		}
-		return err
-	}
-
-	var folder Folder
-	if err := s.decodeBytes(data, &folder); err != nil {
 		return err
 	}
 
@@ -254,39 +189,21 @@ func (s *Service) deleteFolderRecursive(ctx context.Context, tx Storage, folderP
 
 	// Delete all files in this folder (all versions)
 	for _, fileName := range folder.Files {
-		filePath := path.Join(folderPath, fileName)
-		fileKeyPath := path.Join(keyFile, filePath)
+		fp := path.Join(folderPath, fileName)
 
-		// Get version info
-		versionData, err := tx.Get(ctx, fileKeyPath)
-		if err != nil {
-			if errors.Is(err, ErrNotFound) {
-				continue
-			}
+		// Delete all file version data
+		if err := tx.Files().DeleteAllVersions(ctx, fp); err != nil {
 			return err
 		}
 
-		var versions FileVersions
-		if err := s.decodeBytes(versionData, &versions); err != nil {
-			continue // skip if we can't decode
-		}
-
-		// Delete all version data
-		for _, v := range versions {
-			versionedKey := path.Join(fileKeyPath, strconv.FormatInt(v.Version, 10))
-			if err := tx.Delete(ctx, versionedKey); err != nil {
-				return err
-			}
-		}
-
 		// Delete version metadata
-		if err := tx.Delete(ctx, fileKeyPath); err != nil {
+		if err := tx.FileVersions().Delete(ctx, fp); err != nil {
 			return err
 		}
 	}
 
 	// Delete the folder entry itself
-	if err := tx.Delete(ctx, keyPath); err != nil {
+	if err := tx.Folders().Delete(ctx, folderPath); err != nil {
 		return err
 	}
 
@@ -298,18 +215,12 @@ func (s *Service) deleteFolderRecursive(ctx context.Context, tx Storage, folderP
 
 	if folderPath != "" && parentPath != folderPath {
 		folderName := path.Base(folderPath)
-		parentKeyPath := path.Join(keyFolder, parentPath)
 
-		parentData, err := tx.Get(ctx, parentKeyPath)
+		parentFolder, err := tx.Folders().Get(ctx, parentPath)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
 				return nil
 			}
-			return err
-		}
-
-		var parentFolder Folder
-		if err := s.decodeBytes(parentData, &parentFolder); err != nil {
 			return err
 		}
 
@@ -321,12 +232,7 @@ func (s *Service) deleteFolderRecursive(ctx context.Context, tx Storage, folderP
 		}
 		parentFolder.Folders = newFolders
 
-		encoded, err := s.encodeBytes(parentFolder)
-		if err != nil {
-			return err
-		}
-
-		return tx.Set(ctx, parentKeyPath, encoded)
+		return tx.Folders().Set(ctx, parentPath, parentFolder)
 	}
 
 	return nil

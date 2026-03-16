@@ -25,8 +25,7 @@ const (
 )
 
 func (s *Service) Settings(ctx context.Context) (*Settings, error) {
-	keyPath := keySettings
-	data, err := s.store.Get(ctx, keyPath)
+	settings, err := s.store.Settings().Get(ctx)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			// Return empty settings on first use
@@ -37,12 +36,7 @@ func (s *Service) Settings(ctx context.Context) (*Settings, error) {
 		return nil, err
 	}
 
-	var settings Settings
-	if err := s.decodeBytes(data, &settings); err != nil {
-		return nil, err
-	}
-
-	return &settings, nil
+	return settings, nil
 }
 
 func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error {
@@ -71,16 +65,5 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 }
 
 func (s *Service) UpdateSettings(ctx context.Context, settings *Settings) error {
-	keyPath := keySettings
-
-	data, err := s.encodeBytes(settings)
-	if err != nil {
-		return err
-	}
-
-	if err := s.store.Set(ctx, keyPath, data); err != nil {
-		return err
-	}
-
-	return nil
+	return s.store.Settings().Set(ctx, settings)
 }

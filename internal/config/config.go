@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"time"
 
 	mforwardauth "github.com/rakunlabs/ada/middleware/forwardauth"
 	"github.com/rakunlabs/chu"
@@ -40,6 +41,44 @@ type Server struct {
 	BasePath string `cfg:"base_path"`
 
 	ForwardAuth *mforwardauth.ForwardAuth `cfg:"forward_auth"`
+
+	// Auth enables built-in user/password authentication.
+	// Mutually exclusive with ForwardAuth.
+	Auth *Auth `cfg:"auth"`
+}
+
+// Auth configures built-in user/password authentication.
+type Auth struct {
+	// CookieSecret is used to sign session cookies (required).
+	CookieSecret string `cfg:"cookie_secret"`
+	// SessionTTL is the session lifetime (default: 24h).
+	SessionTTL time.Duration `cfg:"session_ttl" default:"24h"`
+	// Cookie configures session cookie properties.
+	Cookie CookieConfig `cfg:"cookie"`
+	// SeedUser defines an initial admin user to create on first run if no users exist.
+	SeedUser *SeedUser `cfg:"seed_user"`
+}
+
+// CookieConfig configures the session cookie.
+type CookieConfig struct {
+	// Name is the cookie name (default: "pika_session").
+	Name string `cfg:"name"`
+	// Domain sets the cookie domain. Empty means the current host.
+	Domain string `cfg:"domain"`
+	// Path sets the cookie path (default: "/").
+	Path string `cfg:"path"`
+	// Secure marks the cookie as HTTPS-only (default: false).
+	// Should be true in production behind TLS.
+	Secure bool `cfg:"secure" default:"false"`
+	// SameSite controls cross-site cookie behavior.
+	// Values: "lax" (default), "strict", "none".
+	SameSite string `cfg:"same_site" default:"lax"`
+}
+
+// SeedUser defines an initial admin user for bootstrapping.
+type SeedUser struct {
+	Username string `cfg:"username"`
+	Password string `cfg:"password"`
 }
 
 func Load(ctx context.Context) (*Config, error) {

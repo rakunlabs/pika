@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 
@@ -18,10 +19,16 @@ import (
 	"github.com/rakunlabs/pika/internal/config"
 	"github.com/rakunlabs/pika/internal/secret"
 	"github.com/rakunlabs/pika/internal/server/api"
+	"github.com/rakunlabs/pika/internal/server/session"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
 func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info api.Info, encStore *secret.Storage) error {
+	// Validate mutually exclusive auth options
+	if cfg.Server.ForwardAuth != nil && cfg.Server.Auth != nil {
+		return fmt.Errorf("forward_auth and auth are mutually exclusive; configure only one")
+	}
+
 	server := ada.New()
 	server.Use(
 		mrecover.Middleware(),
@@ -34,15 +41,31 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 
 	mData := server.Group(cfg.Server.BasePath)
 	m := server.Group(cfg.Server.BasePath)
+	mAuth := server.Group(cfg.Server.BasePath) // unprotected group for login endpoint
+
+	var sessionStore *session.Store
 
 	if cfg.Server.ForwardAuth != nil {
 		slog.Info("forward auth enabled", "url", cfg.Server.ForwardAuth.Address)
 		m.Use(mforwardauth.Middleware(mforwardauth.WithConfig(*cfg.Server.ForwardAuth)))
+	} else if cfg.Server.Auth != nil {
+		slog.Info("built-in auth enabled")
+
+		cookieOpts := session.CookieOptions{
+			Name:     cfg.Server.Auth.Cookie.Name,
+			Domain:   cfg.Server.Auth.Cookie.Domain,
+			Path:     cfg.Server.Auth.Cookie.Path,
+			Secure:   cfg.Server.Auth.Cookie.Secure,
+			SameSite: session.ParseSameSite(cfg.Server.Auth.Cookie.SameSite),
+		}
+
+		sessionStore = session.NewStore(cfg.Server.Auth.SessionTTL, cookieOpts)
+		m.Use(sessionStore.Middleware)
 	} else {
-		slog.Info("forward auth disabled (no forward_auth config)")
+		slog.Info("no auth configured — admin API is unprotected")
 	}
 
-	if err := api.Handle(m, mData, svc, info, cfg.Secret.AdminSecret, encStore); err != nil {
+	if err := api.Handle(m, mData, mAuth, svc, info, cfg.Secret.AdminSecret, encStore, sessionStore); err != nil {
 		return err
 	}
 

@@ -1,19 +1,27 @@
 <script lang="ts">
   import { link, location } from 'svelte-spa-router';
   import { appStore } from '@/lib/store/store.svelte';
-  import { onMount } from 'svelte';
-  import { Boxes, Settings, Database, User } from 'lucide-svelte';
-
-  onMount(() => {
-    appStore.loadInfo();
-  });
+  import { Boxes, Settings, Database, User, Users, LogOut } from 'lucide-svelte';
 
   const info = $derived(appStore.info);
+  const authEnabled = $derived(info?.auth_enabled ?? false);
 
-  const navItems = [
-    { path: '/configurations', label: 'Configurations', icon: Database },
-    { path: '/settings', label: 'Settings', icon: Settings },
-  ];
+  const navItems = $derived.by(() => {
+    const items = [
+      { path: '/configurations', label: 'Configurations', icon: Database },
+      { path: '/settings', label: 'Settings', icon: Settings },
+    ];
+
+    if (authEnabled) {
+      items.push({ path: '/users', label: 'Users', icon: Users });
+    }
+
+    return items;
+  });
+
+  async function handleLogout() {
+    await appStore.logout();
+  }
 </script>
 
 <nav class="flex items-center h-10 bg-slate-900 text-white border-b border-slate-700 px-4 shrink-0">
@@ -52,6 +60,16 @@
           <User size={11} />
           {info.user}
         </span>
+      {/if}
+      {#if authEnabled}
+        <button
+          onclick={handleLogout}
+          class="flex items-center gap-1 px-1.5 py-0.5 bg-slate-800 rounded text-slate-400 hover:text-white hover:bg-slate-700 transition-colors cursor-pointer border-none"
+          title="Sign out"
+        >
+          <LogOut size={11} />
+          <span>Logout</span>
+        </button>
       {/if}
       {#if info.commit && info.commit !== '-'}
         <span class="px-1.5 py-0.5 bg-slate-800 rounded font-mono text-slate-400" title="Commit: {info.commit}">

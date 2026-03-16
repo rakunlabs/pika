@@ -20,7 +20,9 @@ export interface FileVersion {
 
 // A single inheritance entry
 export interface InheritEntry {
-  source: string;     // Internal path or external resource name
+  source?: string;    // Internal file path (for internal inheritance)
+  resource?: string;  // External resource name from settings (for external inheritance)
+  path?: string;      // Resource-specific path (e.g., Vault secret path, HTTP endpoint path)
   paths?: string[];   // Fields to pull from the source (dot-notation, wildcards)
   inject?: string;    // Where to place in the config (dot-notation, empty = root)
 }
@@ -92,8 +94,8 @@ export interface VaultAppRole {
 
 // Vault external resource configuration
 export interface VaultConfig {
-  base_path: string;
   address: string;
+  mount: string;         // KV secrets engine mount (e.g., "secret")
   token?: string;
   app_role?: VaultAppRole;
 }
