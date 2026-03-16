@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"sync"
 
 	"github.com/rakunlabs/pika/internal/external"
@@ -57,8 +58,9 @@ func (s *Service) getKubeClient(k8s *external.Kubernetes) (*external.KubeClient,
 }
 
 // getVaultClient returns a cached or new VaultClient for the given vault config.
-// If the client doesn't exist yet, it creates one and configures authentication.
-func (s *Service) getVaultClient(vault *external.Vault) *external.VaultClient {
+// If the client doesn't exist yet, it creates one, configures authentication,
+// and starts background token renewal.
+func (s *Service) getVaultClient(ctx context.Context, vault *external.Vault) *external.VaultClient {
 	s.vaultMu.RLock()
 	client, exists := s.vaultClients[vault.Address]
 	s.vaultMu.RUnlock()
@@ -80,6 +82,8 @@ func (s *Service) getVaultClient(vault *external.Vault) *external.VaultClient {
 	// Configure authentication
 	if vault.AppRole != nil {
 		client.SetAppRole(vault.AppRole)
+		// Enable background token renewal for AppRole-based auth
+		client.StartRenewal(ctx)
 	} else if vault.Token != "" {
 		client.SetToken(vault.Token)
 	}

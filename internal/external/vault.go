@@ -14,7 +14,7 @@ import (
 )
 
 // VaultClient is a minimal HTTP client for HashiCorp Vault.
-// It supports AppRole authentication with automatic token renewal.
+// It supports AppRole authentication with automatic background token renewal.
 type VaultClient struct {
 	address    string
 	httpClient *http.Client
@@ -25,6 +25,10 @@ type VaultClient struct {
 
 	// AppRole credentials for re-authentication
 	appRole *VaultAppRole
+
+	// Background renewal
+	renewOnce sync.Once
+	renewCtx  context.Context
 }
 
 // NewVaultClient creates a new Vault client for the given address.
@@ -87,9 +91,7 @@ func (vc *VaultClient) EnsureAuthenticated(ctx context.Context) error {
 
 	vc.token = token
 	if leaseDuration > 0 {
-		// Renew slightly before expiry (90% of lease)
-		renewIn := time.Duration(float64(leaseDuration) * 0.9)
-		vc.tokenExpAt = time.Now().Add(renewIn * time.Second)
+		vc.tokenExpAt = time.Now().Add(time.Duration(leaseDuration) * time.Second)
 	} else {
 		vc.tokenExpAt = time.Time{} // no expiry
 	}
@@ -97,6 +99,131 @@ func (vc *VaultClient) EnsureAuthenticated(ctx context.Context) error {
 	slog.Info("vault: authenticated via approle",
 		"address", vc.address,
 		"lease_duration", leaseDuration)
+
+	// Start background renewal loop (only once per client)
+	if vc.renewCtx != nil {
+		vc.startRenewal()
+	}
+
+	return nil
+}
+
+// StartRenewal begins the background token renewal goroutine.
+// Must be called with a context that lives for the duration of the server.
+func (vc *VaultClient) StartRenewal(ctx context.Context) {
+	vc.mu.Lock()
+	vc.renewCtx = ctx
+	vc.mu.Unlock()
+}
+
+func (vc *VaultClient) startRenewal() {
+	ctx := vc.renewCtx
+	vc.renewOnce.Do(func() {
+		go vc.renewLoop(ctx)
+	})
+}
+
+func (vc *VaultClient) renewLoop(ctx context.Context) {
+	for {
+		vc.mu.RLock()
+		expAt := vc.tokenExpAt
+		vc.mu.RUnlock()
+
+		if expAt.IsZero() {
+			// No expiry known (direct token), check again later
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Minute):
+				continue
+			}
+		}
+
+		// Renew at 75% of the remaining time
+		remaining := time.Until(expAt)
+		renewAt := time.Duration(float64(remaining) * 0.75)
+		if renewAt < 10*time.Second {
+			renewAt = 10 * time.Second
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(renewAt):
+		}
+
+		if err := vc.renewToken(ctx); err != nil {
+			slog.Warn("vault: token renewal failed, re-authenticating via approle",
+				"address", vc.address,
+				"error", err)
+
+			// Fall back to full re-login
+			vc.mu.Lock()
+			vc.token = ""
+			vc.tokenExpAt = time.Time{}
+			vc.mu.Unlock()
+
+			if err := vc.EnsureAuthenticated(ctx); err != nil {
+				slog.Error("vault: re-authentication failed",
+					"address", vc.address,
+					"error", err)
+			}
+		}
+	}
+}
+
+// renewToken calls Vault's token renew-self endpoint to extend the current token's lease.
+func (vc *VaultClient) renewToken(ctx context.Context) error {
+	vc.mu.RLock()
+	token := vc.token
+	vc.mu.RUnlock()
+
+	if token == "" {
+		return fmt.Errorf("no token to renew")
+	}
+
+	renewURL := fmt.Sprintf("%s/v1/auth/token/renew-self", vc.address)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, renewURL, nil)
+	if err != nil {
+		return fmt.Errorf("creating renew request: %w", err)
+	}
+	req.Header.Set("X-Vault-Token", token)
+
+	resp, err := vc.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("executing renew request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("reading renew response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("renew returned HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var authResp vaultAuthResponse
+	if err := json.Unmarshal(respBody, &authResp); err != nil {
+		return fmt.Errorf("parsing renew response: %w", err)
+	}
+
+	if authResp.Auth == nil || authResp.Auth.ClientToken == "" {
+		return fmt.Errorf("no client_token in renew response")
+	}
+
+	vc.mu.Lock()
+	vc.token = authResp.Auth.ClientToken
+	if authResp.Auth.LeaseDuration > 0 {
+		vc.tokenExpAt = time.Now().Add(time.Duration(authResp.Auth.LeaseDuration) * time.Second)
+	}
+	vc.mu.Unlock()
+
+	slog.Debug("vault: token renewed",
+		"address", vc.address,
+		"lease_duration", authResp.Auth.LeaseDuration)
 
 	return nil
 }

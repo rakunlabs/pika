@@ -1,4 +1,4 @@
-<img align="left" height="78" src="_ui/public/favicon-192x192.png" />
+<img align="left" height="64" src="_ui/public/favicon-192x192.png" />
 
 # pika
 

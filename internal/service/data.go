@@ -230,7 +230,7 @@ func (s *Service) fetchVaultConfig(ctx context.Context, vault *external.Vault, p
 		return nil, fmt.Errorf("vault address is empty")
 	}
 
-	client := s.getVaultClient(vault)
+	client := s.getVaultClient(ctx, vault)
 
 	// Construct the full secret path: mount + "/data/" + path (KV v2 convention)
 	// If using the old BasePath field, use it directly as before
@@ -357,7 +357,7 @@ func (s *Service) listVaultSecrets(ctx context.Context, vault *external.Vault, p
 		return nil, fmt.Errorf("vault address is empty")
 	}
 
-	client := s.getVaultClient(vault)
+	client := s.getVaultClient(ctx, vault)
 
 	mount := vault.Mount
 	// For KV v2 LIST, the path is: mount + "/metadata/" + prefix
