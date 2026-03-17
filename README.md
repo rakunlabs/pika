@@ -236,8 +236,7 @@ Pika is configured via environment variables (prefixed with `PIKA_`) or a config
 | `PIKA_SERVER_PUBLIC_PORT`    |                    | Public data port (unauthenticated `/data/*`) |
 | `PIKA_SERVER_BASE_PATH`      | `/`                | Base URL path                                |
 | `PIKA_STORAGE_PATH`          | `pika.db`          | SQLite database path                         |
-| `PIKA_SECRET_ENABLED`        | `false`            | Enable value encryption                      |
-| `PIKA_SECRET_ENCRYPTION_KEY` |                    | Encryption key (any string)                  |
+| `PIKA_SECRET_ENCRYPTION_KEY` |                    | Encryption key — setting this enables encryption |
 | `PIKA_LOG_LEVEL`             | `info`             | Log level                                    |
 
 ### Built-in Authentication

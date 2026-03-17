@@ -66,7 +66,7 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		slog.Info("no auth configured — admin API is unprotected")
 	}
 
-	if err := api.Handle(m, mData, mAuth, svc, info, cfg.Secret.AdminSecret, encStore, sessionStore); err != nil {
+	if err := api.Handle(m, mData, mAuth, svc, info, encStore, sessionStore); err != nil {
 		return err
 	}
 

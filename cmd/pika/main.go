@@ -63,11 +63,7 @@ func run(ctx context.Context) error {
 	var storeWrap service.Storage = store
 	var encStore *secret.Storage
 
-	if cfg.Secret.Enabled {
-		if cfg.Secret.EncryptionKey == "" {
-			return fmt.Errorf("secret.encryption_key is required when encryption is enabled")
-		}
-
+	if cfg.Secret.EncryptionKey != "" {
 		key := sha256.Sum256([]byte(cfg.Secret.EncryptionKey))
 
 		encryptor, err := crypto.NewChaCha20(key[:])

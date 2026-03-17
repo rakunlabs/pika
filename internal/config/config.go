@@ -30,12 +30,9 @@ type Config struct {
 }
 
 type Secret struct {
-	// Enabled enables encryption of stored values.
-	Enabled bool `cfg:"enabled" default:"false"`
 	// EncryptionKey is the encryption key (any string, hashed with SHA-256 to derive 32 bytes).
+	// When set (non-empty), encryption is enabled automatically.
 	EncryptionKey string `cfg:"encryption_key" log:"-"`
-	// AdminSecret is required to perform key rotation via the API.
-	AdminSecret string `cfg:"admin_secret" log:"-"`
 }
 
 type Server struct {
@@ -60,7 +57,7 @@ type Server struct {
 // to create the initial admin account (no seed_user config needed).
 type Auth struct {
 	// SessionTTL is the session lifetime (default: 24h).
-	SessionTTL time.Duration `cfg:"session_ttl" default:"24h"`
+	SessionTTL time.Duration `cfg:"session_ttl"`
 	// Cookie configures session cookie properties.
 	Cookie CookieConfig `cfg:"cookie"`
 }
@@ -75,10 +72,10 @@ type CookieConfig struct {
 	Path string `cfg:"path"`
 	// Secure marks the cookie as HTTPS-only (default: false).
 	// Should be true in production behind TLS.
-	Secure bool `cfg:"secure" default:"false"`
+	Secure bool `cfg:"secure"`
 	// SameSite controls cross-site cookie behavior.
 	// Values: "lax" (default), "strict", "none".
-	SameSite string `cfg:"same_site" default:"lax"`
+	SameSite string `cfg:"same_site"`
 }
 
 func Load(ctx context.Context) (*Config, error) {

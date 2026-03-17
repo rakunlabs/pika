@@ -38,7 +38,6 @@ type Info struct {
 type api struct {
 	svc          *service.Service
 	info         Info
-	adminSecret  string
 	encStore     *secret.Storage // nil if encryption is disabled
 	sessionStore *session.Store  // nil if built-in auth is disabled
 }
@@ -67,8 +66,8 @@ func HandlePublic(m *ada.Mux, svc *service.Service) error {
 	return nil
 }
 
-func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, adminSecret string, encStore *secret.Storage, sessionStore *session.Store) error {
-	api := &api{svc: svc, info: info, adminSecret: adminSecret, encStore: encStore, sessionStore: sessionStore}
+func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, sessionStore *session.Store) error {
+	api := &api{svc: svc, info: info, encStore: encStore, sessionStore: sessionStore}
 
 	// Inject X-User header into context for all API requests
 	m.Use(userMiddleware)
@@ -128,6 +127,10 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 
 	// Key rotation endpoint (requires admin_secret)
 	m.POST("/api/v1/rotate", m.Wrap(api.rotateKey))
+
+	// Admin secret management endpoints
+	m.GET("/api/v1/admin-secret/status", m.Wrap(api.adminSecretStatus))
+	m.PUT("/api/v1/admin-secret", m.Wrap(api.setAdminSecret))
 
 	// Settings
 	m.GET("/api/v1/settings", m.Wrap(api.getSettings))
@@ -489,10 +492,6 @@ func (a *api) rotateKey(c *ada.Context) error {
 		return errors.Join(fmt.Errorf("encryption is not enabled"), service.ErrBadRequest)
 	}
 
-	if a.adminSecret == "" {
-		return errors.Join(fmt.Errorf("admin_secret is not configured"), service.ErrBadRequest)
-	}
-
 	var req struct {
 		AdminSecret string `json:"admin_secret"`
 		NewKey      string `json:"new_key"`
@@ -501,9 +500,9 @@ func (a *api) rotateKey(c *ada.Context) error {
 		return errors.Join(err, service.ErrBadRequest)
 	}
 
-	// Validate admin secret
-	if req.AdminSecret != a.adminSecret {
-		return errors.Join(fmt.Errorf("invalid admin secret"), service.ErrForbidden)
+	// Validate admin secret against the bcrypt hash stored in settings
+	if err := a.svc.VerifyAdminSecret(c.Request.Context(), req.AdminSecret); err != nil {
+		return err
 	}
 
 	// Validate new key
@@ -525,6 +524,35 @@ func (a *api) rotateKey(c *ada.Context) error {
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(response{Message: "key rotation completed"})
+}
+
+func (a *api) adminSecretStatus(c *ada.Context) error {
+	configured, err := a.svc.HasAdminSecret(c.Request.Context())
+	if err != nil {
+		return err
+	}
+
+	return c.SetStatus(http.StatusOK).SendJSON(struct {
+		Configured bool `json:"configured"`
+	}{
+		Configured: configured,
+	})
+}
+
+func (a *api) setAdminSecret(c *ada.Context) error {
+	var req struct {
+		CurrentSecret string `json:"current_secret"`
+		NewSecret     string `json:"new_secret"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+
+	if err := a.svc.SetAdminSecret(c.Request.Context(), req.CurrentSecret, req.NewSecret); err != nil {
+		return err
+	}
+
+	return c.SetStatus(http.StatusOK).SendJSON(response{Message: "admin secret updated"})
 }
 
 // searchHandler uses SSE to stream search results as they are found.

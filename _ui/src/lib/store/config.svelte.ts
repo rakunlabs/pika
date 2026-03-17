@@ -4,6 +4,7 @@ import type {
   PatchTokenRequest
 } from '@/lib/types/config';
 import { addToast } from '@/lib/store/toast.svelte';
+import { basePath } from '@/lib/basepath';
 import axios from 'axios';
 
 // Helper to decode base64 data (supports Unicode)
@@ -546,7 +547,7 @@ function createConfigStore() {
     const controller = new AbortController();
     searchAbortController = controller;
 
-    const eventSource = new EventSource(`/api/v1/search?q=${encodeURIComponent(query.trim())}`);
+    const eventSource = new EventSource(`${basePath}/api/v1/search?q=${encodeURIComponent(query.trim())}`);
 
     // Handle abort — close the connection
     controller.signal.addEventListener('abort', () => {
@@ -650,6 +651,23 @@ function createConfigStore() {
     await axios.patch(`/api/v1/tokens/${id}`, req);
     await loadTokens();
     addToast('Token updated', 'success');
+  }
+
+  // Admin secret operations
+  async function fetchAdminSecretStatus(): Promise<{ configured: boolean }> {
+    try {
+      const response = await axios.get('/api/v1/admin-secret/status');
+      return response.data;
+    } catch {
+      return { configured: false };
+    }
+  }
+
+  async function setAdminSecret(currentSecret: string, newSecret: string): Promise<void> {
+    await axios.put('/api/v1/admin-secret', {
+      current_secret: currentSecret,
+      new_secret: newSecret,
+    });
   }
 
   // Create operations
@@ -837,6 +855,10 @@ function createConfigStore() {
     createToken,
     deleteToken,
     patchToken,
+
+    // Admin secret operations
+    fetchAdminSecretStatus,
+    setAdminSecret,
 
     // Create operations
     createNewFolder,
