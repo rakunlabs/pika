@@ -20,6 +20,7 @@ import (
 	"github.com/rakunlabs/pika/internal/config"
 	"github.com/rakunlabs/pika/internal/secret"
 	"github.com/rakunlabs/pika/internal/server/api"
+	"github.com/rakunlabs/pika/internal/server/compat"
 	"github.com/rakunlabs/pika/internal/server/session"
 	"github.com/rakunlabs/pika/internal/service"
 )
@@ -74,6 +75,11 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		return err
 	}
 
+	// Warn if compat endpoints are configured but public port is not set
+	if cfg.Server.Compat != nil && cfg.Server.PublicPort == "" {
+		slog.Warn("compat endpoints configured but public_port is not set; compat endpoints will not be available")
+	}
+
 	// Start public data server on a separate port if configured
 	if cfg.Server.PublicPort != "" {
 		publicServer := ada.New()
@@ -90,6 +96,10 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		if err := api.HandlePublic(mPublic, svc); err != nil {
 			return err
 		}
+
+		// Register compatibility endpoints on the server root (not under BasePath)
+		// so that tools like Consul clients can reach them without Pika's base path.
+		compat.Register(publicServer.Mux, svc, cfg.Server.Compat)
 
 		publicAddr := net.JoinHostPort(cfg.Server.Host, cfg.Server.PublicPort)
 		slog.Info("starting public data server", "address", publicAddr)

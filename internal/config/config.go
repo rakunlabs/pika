@@ -50,6 +50,22 @@ type Server struct {
 	// Auth enables built-in user/password authentication.
 	// Mutually exclusive with ForwardAuth.
 	Auth *Auth `cfg:"auth"`
+
+	// Compat configures optional compatibility endpoints on the public server.
+	// Requires PublicPort to be set.
+	Compat *Compat `cfg:"compat"`
+}
+
+// Compat configures compatibility endpoints that emulate other tools' APIs.
+type Compat struct {
+	// ConsulKV enables Consul KV API compatibility (GET /v1/kv/*).
+	ConsulKV *ConsulKV `cfg:"consul_kv"`
+}
+
+// ConsulKV configures the Consul KV API compatibility layer.
+type ConsulKV struct {
+	// BasePath is the prefix for Consul KV compat routes (default: "/consul").
+	BasePath string `cfg:"base_path"`
 }
 
 // Auth configures built-in user/password authentication.
