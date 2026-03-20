@@ -1,7 +1,7 @@
 import type {
   Tab, TreeNode, SearchResult, FileFormat, FileVersion, FileMeta,
   Settings, TokenInfo, CreateTokenRequest, CreateTokenResponse,
-  PatchTokenRequest
+  PatchTokenRequest, ViewMode
 } from '@/lib/types/config';
 import { addToast } from '@/lib/store/toast.svelte';
 import { basePath } from '@/lib/basepath';
@@ -98,10 +98,13 @@ function createConfigStore() {
     };
   }
 
-  async function saveFile(path: string, content: string, meta: FileMeta, expectedVersion?: number, constraint?: string, variantKey?: string): Promise<{ version: number }> {
+  async function saveFile(path: string, content: string, meta: FileMeta, expectedVersion?: number, constraint?: string, variantKey?: string, rawData?: string): Promise<{ version: number }> {
+    // For raw format, use rawData directly if available (preserves binary fidelity)
+    const encodedData = (meta.format === 'raw' && rawData) ? rawData : encodeContent(content);
+
     const body: any = {
       meta,
-      data: encodeContent(content),
+      data: encodedData,
     };
     if (expectedVersion !== undefined && expectedVersion > 0) {
       body.expected_version = expectedVersion;
@@ -255,19 +258,26 @@ function createConfigStore() {
     const existingTab = openTabs.find(t => t.path === path);
     if (existingTab) {
       activeTabId = existingTab.id;
+      updateURL();
       return;
     }
 
     try {
       const fileData = await fetchFile(path);
-      const content = decodeContent(fileData.data);
       const name = path.split('/').pop() || path;
       const format = fileData.meta.format || 'yaml';
+      const isRaw = format === 'raw';
+
+      // For raw format, skip text decode (could be huge binary) and default to hex view
+      const content = isRaw ? '' : decodeContent(fileData.data);
 
       // Determine the latest version number from version history
       const latestVersion = fileData.versions.length > 0
         ? Math.max(...fileData.versions.map(v => v.version))
         : 0;
+
+      // Calculate size from raw base64 data length
+      const rawSize = fileData.data ? Math.floor(fileData.data.length * 3 / 4) : 0;
 
       const newTab: Tab = {
         id: path,
@@ -281,12 +291,16 @@ function createConfigStore() {
         latestVersion,
         meta: fileData.meta,
         isDirty: false,
-        size: new Blob([content]).size,
-        modifiedAt: Date.now()
+        size: isRaw ? rawSize : new Blob([content]).size,
+        modifiedAt: Date.now(),
+        rawData: fileData.data,
+        originalRawData: fileData.data,
+        viewMode: isRaw ? 'hex' : 'text',
       };
 
       openTabs = [...openTabs, newTab];
       activeTabId = newTab.id;
+      updateURL();
     } catch (error) {
       console.error('Failed to open file:', error);
       addToast(`Failed to open file: ${path}`, 'alert');
@@ -301,18 +315,24 @@ function createConfigStore() {
     const existingTab = openTabs.find(t => t.id === tabId);
     if (existingTab) {
       activeTabId = existingTab.id;
+      updateURL();
       return;
     }
 
     try {
       const fileData = await fetchFile(filePath, 0, variantKey);
-      const content = decodeContent(fileData.data);
       const name = `${filePath.split('/').pop() || filePath}@${variantKey}`;
       const format = fileData.meta.format || 'yaml';
+      const isRaw = format === 'raw';
+
+      // For raw format, skip text decode and default to hex view
+      const content = isRaw ? '' : decodeContent(fileData.data);
 
       const latestVersion = fileData.versions.length > 0
         ? Math.max(...fileData.versions.map(v => v.version))
         : 0;
+
+      const rawSize = fileData.data ? Math.floor(fileData.data.length * 3 / 4) : 0;
 
       const newTab: Tab = {
         id: tabId,
@@ -327,12 +347,16 @@ function createConfigStore() {
         latestVersion,
         meta: fileData.meta,
         isDirty: false,
-        size: new Blob([content]).size,
-        modifiedAt: Date.now()
+        size: isRaw ? rawSize : new Blob([content]).size,
+        modifiedAt: Date.now(),
+        rawData: fileData.data,
+        originalRawData: fileData.data,
+        viewMode: isRaw ? 'hex' : 'text',
       };
 
       openTabs = [...openTabs, newTab];
       activeTabId = newTab.id;
+      updateURL();
     } catch (error: any) {
       if (error.response?.status === 404) {
         // Variant doesn't exist yet — create it
@@ -365,16 +389,19 @@ function createConfigStore() {
         activeTabId = openTabs[tabIndex].id;
       }
     }
+    updateURL();
   }
 
   function selectTab(tabId: string): void {
     activeTabId = tabId;
+    updateURL();
   }
 
   function updateTabContent(tabId: string, content: string): void {
     const tab = openTabs.find(t => t.id === tabId);
     if (tab) {
       tab.content = content;
+      tab.rawData = encodeContent(content);
       tab.isDirty = content !== tab.originalContent;
       tab.size = new Blob([content]).size;
     }
@@ -447,8 +474,9 @@ function createConfigStore() {
     if (!tab) return;
 
     try {
-      const result = await saveFile(tab.path, tab.content, tab.meta, tab.latestVersion, constraint, tab.variantKey);
+      const result = await saveFile(tab.path, tab.content, tab.meta, tab.latestVersion, constraint, tab.variantKey, tab.rawData);
       tab.originalContent = tab.content;
+      tab.originalRawData = tab.rawData;
       tab.isDirty = false;
       tab.modifiedAt = Date.now();
       tab.version = 0; // Reset to latest after save
@@ -505,7 +533,10 @@ function createConfigStore() {
 
     try {
       const fileData = await fetchFile(tab.path, version, tab.variantKey);
-      const content = decodeContent(fileData.data);
+      const isRaw = tab.format === 'raw';
+
+      // For raw format, skip text decode and switch to hex view
+      const content = isRaw ? '' : decodeContent(fileData.data);
 
       tab.content = content;
       tab.originalContent = content;
@@ -515,9 +546,15 @@ function createConfigStore() {
         ? Math.max(...fileData.versions.map(v => v.version))
         : 0;
       tab.meta = fileData.meta;
-      tab.variants = fileData.variants;
+      tab.rawData = fileData.data;
+      tab.originalRawData = fileData.data;
       tab.isDirty = false;
-      tab.size = new Blob([content]).size;
+      if (isRaw) {
+        tab.viewMode = 'hex';
+        tab.size = fileData.data ? Math.floor(fileData.data.length * 3 / 4) : 0;
+      } else {
+        tab.size = new Blob([content]).size;
+      }
       addToast(`Loaded version ${version === 0 ? 'latest' : version}`, 'info');
     } catch (error) {
       console.error('Failed to load version:', error);
@@ -793,6 +830,114 @@ function createConfigStore() {
     }
   }
 
+  // View mode operations
+  function setTabViewMode(tabId: string, mode: ViewMode): void {
+    const tab = openTabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    // When switching to text mode and content is empty (raw file that was never decoded),
+    // lazily decode rawData into content
+    if (mode === 'text' && !tab.content && tab.rawData) {
+      const content = decodeContent(tab.rawData);
+      tab.content = content;
+      tab.originalContent = content;
+    }
+
+    tab.viewMode = mode;
+  }
+
+  // File import operations
+  async function importFileToTab(tabId: string, file: globalThis.File): Promise<void> {
+    const tab = openTabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+
+      reader.onload = () => {
+        const arrayBuffer = reader.result as ArrayBuffer;
+        const bytes = new Uint8Array(arrayBuffer);
+
+        // Convert to base64 in chunks to avoid call stack overflow on large files
+        const chunkSize = 8192;
+        let binaryStr = '';
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          const chunk = bytes.subarray(i, i + chunkSize);
+          binaryStr += String.fromCharCode(...chunk);
+        }
+        const base64Data = btoa(binaryStr);
+
+        // Store raw base64
+        tab.rawData = base64Data;
+        tab.size = bytes.length;
+        tab.isDirty = true;
+
+        if (tab.format === 'raw') {
+          // For raw format, don't decode to text — stay in hex view
+          tab.content = '';
+          tab.viewMode = 'hex';
+        } else {
+          // For text formats, decode as UTF-8 for the editor
+          try {
+            const textContent = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+            tab.content = textContent;
+          } catch {
+            tab.content = '';
+          }
+        }
+
+        addToast(`Imported: ${file.name} (${formatImportSize(bytes.length)})`, 'success');
+        resolve();
+      };
+
+      reader.onerror = () => {
+        addToast(`Failed to read file: ${file.name}`, 'alert');
+        reject(new Error('Failed to read file'));
+      };
+
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function formatImportSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  // URL deep linking operations
+  function updateURL(): void {
+    const tab = openTabs.find(t => t.id === activeTabId);
+    const base = '#/configurations';
+    if (tab) {
+      let url = `${base}?file=${encodeURIComponent(tab.path)}`;
+      if (tab.variantKey) {
+        url += `&variant=${encodeURIComponent(tab.variantKey)}`;
+      }
+      history.replaceState(null, '', url);
+    } else {
+      history.replaceState(null, '', base);
+    }
+  }
+
+  function openFromURL(): void {
+    const hash = window.location.hash;
+    const qsIndex = hash.indexOf('?');
+    if (qsIndex === -1) return;
+
+    const params = new URLSearchParams(hash.slice(qsIndex));
+    const file = params.get('file');
+    const variant = params.get('variant');
+
+    if (file) {
+      if (variant) {
+        openVariant(file, variant);
+      } else {
+        openFile(file);
+      }
+    }
+  }
+
   // Panel width operations
   function setLeftPanelWidth(width: number): void {
     leftPanelWidth = Math.max(150, Math.min(500, width));
@@ -840,6 +985,10 @@ function createConfigStore() {
     createVariant,
     deleteVariant,
 
+    // View mode & import operations
+    setTabViewMode,
+    importFileToTab,
+
     // Search operations
     search,
     cancelSearch,
@@ -867,6 +1016,9 @@ function createConfigStore() {
     // Delete operations
     deleteFile,
     deleteFolder,
+
+    // URL deep linking
+    openFromURL,
 
     // Panel operations
     setLeftPanelWidth,

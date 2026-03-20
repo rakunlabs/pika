@@ -6,8 +6,14 @@
   import SettingsPanel from "@/lib/components/config/SettingsPanel.svelte";
   import RenderPreview from "@/lib/components/config/RenderPreview.svelte";
   import ResizablePanel from "@/lib/components/config/ResizablePanel.svelte";
+  import { onMount } from "svelte";
 
   let showRenderPreview = $state(false);
+
+  onMount(() => {
+    // Open file from URL deep link (e.g., #/configurations?file=app/db&variant=prod)
+    configStore.openFromURL();
+  });
 
   function handleRenderClick() {
     showRenderPreview = true;

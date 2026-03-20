@@ -59,6 +59,9 @@ export interface TreeNode {
   loaded?: boolean; // For lazy loading folders
 }
 
+// View mode for editor display
+export type ViewMode = 'text' | 'hex';
+
 // Open tab in editor
 export interface Tab {
   id: string;           // Unique ID (file path or file@variant)
@@ -75,6 +78,9 @@ export interface Tab {
   isDirty: boolean;
   size: number;         // Content size in bytes
   modifiedAt?: number;  // Timestamp
+  rawData?: string;     // Base64 of the raw bytes (always populated from API/import)
+  originalRawData?: string; // Original rawData for dirty detection on raw format
+  viewMode: ViewMode;   // Current view mode: 'text' or 'hex'
 }
 
 // Search result from backend

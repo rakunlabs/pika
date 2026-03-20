@@ -7,9 +7,10 @@
   import { oneDark } from '@codemirror/theme-one-dark';
   import { configStore } from '@/lib/store/config.svelte';
   import { addToast } from '@/lib/store/toast.svelte';
-  import type { FileFormat } from '@/lib/types/config';
-  import { Save, Sparkles, ArrowRightLeft } from 'lucide-svelte';
+  import type { FileFormat, ViewMode } from '@/lib/types/config';
+  import { Save, Sparkles, ArrowRightLeft, Upload, Binary, Type } from 'lucide-svelte';
   import axios from 'axios';
+  import HexViewer from './HexViewer.svelte';
 
   function getLanguageExtension(format: FileFormat): LanguageSupport | undefined {
     switch (format) {
@@ -33,8 +34,6 @@
           return JSON.stringify(parsed, null, 2);
         }
         case 'yaml': {
-          // YAML beautification: normalize indentation
-          // Trim trailing whitespace per line, ensure final newline, collapse blank lines
           const lines = content.split('\n');
           const cleaned = lines
             .map(line => line.trimEnd())
@@ -44,12 +43,10 @@
           return cleaned + '\n';
         }
         case 'toml': {
-          // TOML beautification: normalize spacing around = signs and trim
           const lines = content.split('\n');
           const cleaned = lines
             .map(line => {
               const trimmed = line.trimEnd();
-              // Normalize key = value spacing (but not inside strings or section headers)
               if (trimmed.startsWith('[') || trimmed.startsWith('#') || trimmed === '') {
                 return trimmed;
               }
@@ -81,8 +78,12 @@
   const convertTargets = $derived(
     activeTab ? allFormats.filter(f => f !== activeTab.format) : []
   );
+  const isHexMode = $derived(activeTab?.viewMode === 'hex');
+  const hexData = $derived(activeTab?.rawData || '');
+
   let isConverting = $state(false);
   let saveConstraint = $state('');
+  let fileInput: HTMLInputElement | undefined = $state();
 
   function handleChange(value: string) {
     if (activeTab) {
@@ -147,6 +148,31 @@
     }
   }
 
+  function handleImportClick() {
+    fileInput?.click();
+  }
+
+  async function handleFileSelected(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file || !activeTab) return;
+
+    try {
+      await configStore.importFileToTab(activeTab.id, file);
+    } catch (error) {
+      console.error('Failed to import file:', error);
+    }
+
+    // Reset the file input so the same file can be re-imported
+    input.value = '';
+  }
+
+  function toggleViewMode() {
+    if (!activeTab) return;
+    const newMode: ViewMode = activeTab.viewMode === 'hex' ? 'text' : 'hex';
+    configStore.setTabViewMode(activeTab.id, newMode);
+  }
+
   function handleKeyDown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
       e.preventDefault();
@@ -162,13 +188,21 @@
 
 <svelte:window onkeydown={handleKeyDown} />
 
+<!-- Hidden file input for import -->
+<input
+  type="file"
+  class="hidden"
+  bind:this={fileInput}
+  onchange={handleFileSelected}
+/>
+
 <div class="flex flex-col h-full bg-[#1e1e1e]">
   {#if activeTab}
     <!-- Editor toolbar -->
     <div class="flex items-center justify-between px-3 py-1.5 bg-[#252526] border-b border-[#3c3c3c] text-xs text-gray-400 shrink-0">
       <div class="flex items-center gap-2 min-w-0">
         <span class="px-1.5 py-0.5 bg-blue-500 text-white rounded text-[10px] font-semibold shrink-0">{activeTab.format.toUpperCase()}</span>
-        {#if activeTab.format !== 'raw'}
+        {#if activeTab.format !== 'raw' && !isHexMode}
           <div class="flex items-center gap-1 shrink-0">
             <ArrowRightLeft size={11} class="text-gray-600" />
             {#each convertTargets as target}
@@ -187,14 +221,48 @@
         <span class="text-gray-500 overflow-hidden text-ellipsis whitespace-nowrap" title={activeTab.path}>{activeTab.path}</span>
       </div>
       <div class="flex items-center gap-1.5 shrink-0">
+        <!-- View mode toggle: Text / Hex -->
+        <div class="flex items-center rounded border border-[#3c3c3c] overflow-hidden shrink-0">
+          <button
+            class="flex items-center gap-1 px-2 py-1 text-[11px] cursor-pointer transition-colors
+              {!isHexMode ? 'bg-[#3c3c3c] text-gray-200' : 'bg-transparent text-gray-500 hover:bg-[#333] hover:text-gray-300'}"
+            onclick={() => !isHexMode || toggleViewMode()}
+            title="Text view"
+          >
+            <Type size={12} />
+            <span>Text</span>
+          </button>
+          <button
+            class="flex items-center gap-1 px-2 py-1 text-[11px] cursor-pointer transition-colors
+              {isHexMode ? 'bg-[#3c3c3c] text-gray-200' : 'bg-transparent text-gray-500 hover:bg-[#333] hover:text-gray-300'}"
+            onclick={() => isHexMode || toggleViewMode()}
+            title="Hex view"
+          >
+            <Binary size={12} />
+            <span>Hex</span>
+          </button>
+        </div>
+
+        <!-- Import button -->
         <button
           class="flex items-center gap-1 px-2 py-1 text-gray-400 bg-transparent border border-[#3c3c3c] rounded text-[11px] cursor-pointer transition-colors hover:bg-[#333] hover:text-gray-200"
-          onclick={handleBeautify}
-          title="Beautify (Ctrl+Shift+F)"
+          onclick={handleImportClick}
+          title="Import file from disk"
         >
-          <Sparkles size={12} />
-          <span>Beautify</span>
+          <Upload size={12} />
+          <span>Import</span>
         </button>
+
+        {#if !isHexMode}
+          <button
+            class="flex items-center gap-1 px-2 py-1 text-gray-400 bg-transparent border border-[#3c3c3c] rounded text-[11px] cursor-pointer transition-colors hover:bg-[#333] hover:text-gray-200"
+            onclick={handleBeautify}
+            title="Beautify (Ctrl+Shift+F)"
+          >
+            <Sparkles size={12} />
+            <span>Beautify</span>
+          </button>
+        {/if}
         {#if activeTab.isDirty}
           <input
             type="text"
@@ -218,27 +286,31 @@
     </div>
 
     <div class="flex-1 min-h-0 overflow-auto">
-      <CodeMirror
-        value={activeTab.content}
-        onchange={handleChange}
-        lang={languageExtension}
-        theme={oneDark}
-        styles={{
-          '&': {
-            height: '100%',
-            fontSize: '13px',
-            overflow: 'auto'
-          },
-          '.cm-content': {
-            fontFamily: "'JetBrains Mono', 'Fira Code', 'Monaco', 'Menlo', monospace"
-          },
-          '.cm-gutters': {
-            backgroundColor: '#1e1e1e',
-            color: '#6e7681',
-            border: 'none'
-          }
-        }}
-      />
+      {#if isHexMode}
+        <HexViewer data={hexData} />
+      {:else}
+        <CodeMirror
+          value={activeTab.content}
+          onchange={handleChange}
+          lang={languageExtension}
+          theme={oneDark}
+          styles={{
+            '&': {
+              height: '100%',
+              fontSize: '13px',
+              overflow: 'auto'
+            },
+            '.cm-content': {
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'Monaco', 'Menlo', monospace"
+            },
+            '.cm-gutters': {
+              backgroundColor: '#1e1e1e',
+              color: '#6e7681',
+              border: 'none'
+            }
+          }}
+        />
+      {/if}
     </div>
   {:else}
     <div class="flex items-center justify-center h-full bg-slate-50">
