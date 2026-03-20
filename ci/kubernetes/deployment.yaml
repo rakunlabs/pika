@@ -27,12 +27,9 @@ spec:
             - name: public
               containerPort: 9090
               protocol: TCP
-          env:
-            - name: PIKA_CFG_FILE
-              value: /etc/pika/config.yaml
           volumeMounts:
             - name: config
-              mountPath: /etc/pika
+              mountPath: /
               readOnly: true
             - name: data
               mountPath: /data
