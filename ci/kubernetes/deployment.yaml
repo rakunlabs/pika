@@ -37,21 +37,22 @@ spec:
           livenessProbe:
             httpGet:
               path: /healthz
-              port: http
+              port: public
             initialDelaySeconds: 5
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /healthz
-              port: http
+              port: public
             initialDelaySeconds: 3
             periodSeconds: 5
           resources:
             requests:
-              cpu: 50m
-              memory: 64Mi
+              cpu: 250m
+              memory: 512Mi
             limits:
-              memory: 256Mi
+              cpu: 1
+              memory: 1Gi
       volumes:
         - name: config
           configMap:
