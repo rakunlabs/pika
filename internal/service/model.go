@@ -52,12 +52,27 @@ type TokenStorage interface {
 	Delete(ctx context.Context, id string) error
 }
 
+// FolderEntry represents a single folder record for backup/export.
+type FolderEntry struct {
+	Path   string  `json:"path"`
+	Folder *Folder `json:"folder"`
+}
+
 // FolderStorage manages folder records.
 type FolderStorage interface {
 	Get(ctx context.Context, path string) (*Folder, error)
 	Set(ctx context.Context, path string, folder *Folder) error
 	Delete(ctx context.Context, path string) error
 	DeletePrefix(ctx context.Context, prefix string) error
+	List(ctx context.Context) ([]FolderEntry, error)
+	DeleteAll(ctx context.Context) error
+}
+
+// FileEntry represents a single file record (path + version) for backup/export.
+type FileEntry struct {
+	Path    string `json:"path"`
+	Version int64  `json:"version"`
+	File    *File  `json:"file"`
 }
 
 // FileStorage manages file content at specific versions.
@@ -67,6 +82,14 @@ type FileStorage interface {
 	Delete(ctx context.Context, path string, version int64) error
 	DeleteAllVersions(ctx context.Context, path string) error
 	DeletePrefix(ctx context.Context, prefix string) error
+	List(ctx context.Context) ([]FileEntry, error)
+	DeleteAll(ctx context.Context) error
+}
+
+// FileVersionEntry represents a single file version record for backup/export.
+type FileVersionEntry struct {
+	Path     string       `json:"path"`
+	Versions FileVersions `json:"versions"`
 }
 
 // FileVersionStorage manages file version metadata.
@@ -75,6 +98,8 @@ type FileVersionStorage interface {
 	Set(ctx context.Context, path string, versions FileVersions) error
 	Delete(ctx context.Context, path string) error
 	DeletePrefix(ctx context.Context, prefix string) error
+	List(ctx context.Context) ([]FileVersionEntry, error)
+	DeleteAll(ctx context.Context) error
 }
 
 // SettingsStorage manages application settings (singleton).

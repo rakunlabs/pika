@@ -84,3 +84,43 @@ func (s *folderStorage) DeletePrefix(ctx context.Context, prefix string) error {
 	)
 	return err
 }
+
+func (s *folderStorage) List(ctx context.Context) ([]service.FolderEntry, error) {
+	rows, err := s.q.QueryContext(ctx, `SELECT path, folders, files, variants FROM folders ORDER BY path`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []service.FolderEntry
+	for rows.Next() {
+		var path, foldersJSON, filesJSON string
+		var variantsJSON sql.NullString
+
+		if err := rows.Scan(&path, &foldersJSON, &filesJSON, &variantsJSON); err != nil {
+			return nil, err
+		}
+
+		var folder service.Folder
+		if err := json.Unmarshal([]byte(foldersJSON), &folder.Folders); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(filesJSON), &folder.Files); err != nil {
+			return nil, err
+		}
+		if variantsJSON.Valid && variantsJSON.String != "" {
+			if err := json.Unmarshal([]byte(variantsJSON.String), &folder.Variants); err != nil {
+				return nil, err
+			}
+		}
+
+		entries = append(entries, service.FolderEntry{Path: path, Folder: &folder})
+	}
+
+	return entries, rows.Err()
+}
+
+func (s *folderStorage) DeleteAll(ctx context.Context) error {
+	_, err := s.q.ExecContext(ctx, `DELETE FROM folders`)
+	return err
+}

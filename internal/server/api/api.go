@@ -136,6 +136,10 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.GET("/api/v1/settings", m.Wrap(api.getSettings))
 	m.POST("/api/v1/settings", m.Wrap(api.postSettings))
 
+	// Backup & Restore (requires admin secret)
+	m.GET("/api/v1/backup", m.Wrap(api.exportBackup))
+	m.POST("/api/v1/backup", m.Wrap(api.importBackup))
+
 	// External resource browsing
 	m.GET("/api/v1/external/*/paths", m.Wrap(api.listExternalPaths))
 

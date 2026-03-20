@@ -71,6 +71,41 @@ func (s *fileStorage) DeletePrefix(ctx context.Context, prefix string) error {
 	return err
 }
 
+func (s *fileStorage) List(ctx context.Context) ([]service.FileEntry, error) {
+	rows, err := s.q.QueryContext(ctx, `SELECT path, version, meta, data FROM files ORDER BY path, version`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []service.FileEntry
+	for rows.Next() {
+		var path string
+		var version int64
+		var metaJSON string
+		var data []byte
+
+		if err := rows.Scan(&path, &version, &metaJSON, &data); err != nil {
+			return nil, err
+		}
+
+		var file service.File
+		if err := json.Unmarshal([]byte(metaJSON), &file.Meta); err != nil {
+			return nil, err
+		}
+		file.Data = data
+
+		entries = append(entries, service.FileEntry{Path: path, Version: version, File: &file})
+	}
+
+	return entries, rows.Err()
+}
+
+func (s *fileStorage) DeleteAll(ctx context.Context) error {
+	_, err := s.q.ExecContext(ctx, `DELETE FROM files`)
+	return err
+}
+
 // fileVersionStorage implements service.FileVersionStorage.
 type fileVersionStorage struct {
 	q Querier
@@ -121,5 +156,36 @@ func (s *fileVersionStorage) DeletePrefix(ctx context.Context, prefix string) er
 		`DELETE FROM file_versions WHERE path = ? OR path LIKE ?`,
 		prefix, prefix+"/%",
 	)
+	return err
+}
+
+func (s *fileVersionStorage) List(ctx context.Context) ([]service.FileVersionEntry, error) {
+	rows, err := s.q.QueryContext(ctx, `SELECT path, versions FROM file_versions ORDER BY path`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []service.FileVersionEntry
+	for rows.Next() {
+		var path, versionsJSON string
+
+		if err := rows.Scan(&path, &versionsJSON); err != nil {
+			return nil, err
+		}
+
+		var versions service.FileVersions
+		if err := json.Unmarshal([]byte(versionsJSON), &versions); err != nil {
+			return nil, err
+		}
+
+		entries = append(entries, service.FileVersionEntry{Path: path, Versions: versions})
+	}
+
+	return entries, rows.Err()
+}
+
+func (s *fileVersionStorage) DeleteAll(ctx context.Context) error {
+	_, err := s.q.ExecContext(ctx, `DELETE FROM file_versions`)
 	return err
 }

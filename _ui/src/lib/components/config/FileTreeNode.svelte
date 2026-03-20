@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronRight, ChevronDown, Folder, FolderOpen, FileText, FilePlus, FolderPlus, RefreshCw, Layers } from 'lucide-svelte';
+  import { ChevronRight, ChevronDown, Folder, FolderOpen, FileText, FilePlus, FolderPlus, RefreshCw, Layers, Trash2 } from 'lucide-svelte';
   import type { TreeNode } from '@/lib/types/config';
   import { configStore } from '@/lib/store/config.svelte';
   import FileTreeNode from './FileTreeNode.svelte';
@@ -60,6 +60,25 @@
   function toggleVariants(e: MouseEvent) {
     e.stopPropagation();
     showVariants = !showVariants;
+  }
+
+  async function handleDeleteFolder(e: MouseEvent) {
+    e.stopPropagation();
+    if (!confirm(`Delete folder "${node.name}" and all its contents? This cannot be undone.`)) return;
+    await configStore.deleteFolder(node.path);
+  }
+
+  async function handleDeleteFile(e: MouseEvent) {
+    e.stopPropagation();
+    if (!confirm(`Delete file "${node.name}" and all its versions? This cannot be undone.`)) return;
+    await configStore.deleteFile(node.path);
+  }
+
+  async function handleDeleteVariant(e: MouseEvent) {
+    e.stopPropagation();
+    if (!node.parentPath || !node.variantKey) return;
+    if (!confirm(`Delete variant "@${node.variantKey}"? This cannot be undone.`)) return;
+    await configStore.deleteVariant(node.parentPath, node.variantKey);
   }
 
   // Determine active/open state based on node type
@@ -156,6 +175,36 @@
         >
           <RefreshCw size={12} />
         </button>
+        <button 
+          class="flex items-center justify-center w-4.5 h-4.5 rounded p-0 border-none cursor-pointer
+            {isActive ? 'text-white/70 hover:bg-red-500/20 hover:text-red-300' : 'text-slate-400 bg-transparent hover:bg-red-100 hover:text-red-500'}"
+          onclick={handleDeleteFolder}
+          title="Delete Folder"
+        >
+          <Trash2 size={12} />
+        </button>
+      </span>
+    {:else if node.type === 'file' && isHovered}
+      <span class="flex gap-0.5 shrink-0">
+        <button 
+          class="flex items-center justify-center w-4.5 h-4.5 rounded p-0 border-none cursor-pointer
+            {isActive ? 'text-white/70 hover:bg-red-500/20 hover:text-red-300' : 'text-slate-400 bg-transparent hover:bg-red-100 hover:text-red-500'}"
+          onclick={handleDeleteFile}
+          title="Delete File"
+        >
+          <Trash2 size={12} />
+        </button>
+      </span>
+    {:else if node.type === 'variant' && isHovered}
+      <span class="flex gap-0.5 shrink-0">
+        <button 
+          class="flex items-center justify-center w-4.5 h-4.5 rounded p-0 border-none cursor-pointer
+            {isActive ? 'text-white/70 hover:bg-red-500/20 hover:text-red-300' : 'text-slate-400 bg-transparent hover:bg-red-100 hover:text-red-500'}"
+          onclick={handleDeleteVariant}
+          title="Delete Variant"
+        >
+          <Trash2 size={12} />
+        </button>
       </span>
     {/if}
     
@@ -166,7 +215,7 @@
 
   {#if node.type === 'folder' && node.expanded && node.children}
     <div role="group">
-      {#each node.children as child (child.type === 'variant' ? `${child.path}@${child.variantKey}` : child.path)}
+      {#each node.children as child (child.type === 'variant' ? `variant:${child.path}@${child.variantKey}` : `${child.type}:${child.path}`)}
         <FileTreeNode node={child} level={level + 1} {onCreateFile} {onCreateFolder} />
       {/each}
     </div>

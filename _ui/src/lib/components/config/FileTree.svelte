@@ -231,7 +231,7 @@
         <div class="p-5 text-center text-gray-400 text-[13px]">Loading...</div>
       {:else if configStore.tree}
         {#if configStore.tree.children && configStore.tree.children.length > 0}
-          {#each configStore.tree.children as node (node.path)}
+          {#each configStore.tree.children as node (`${node.type}:${node.path}`)}
             <FileTreeNode
               {node}
               onCreateFile={handleCreateFile}
