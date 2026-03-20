@@ -71,7 +71,7 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		return err
 	}
 
-	if err := folderHandler(m); err != nil {
+	if err := folderHandler(mAuth); err != nil {
 		return err
 	}
 
