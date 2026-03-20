@@ -29,7 +29,8 @@ spec:
               protocol: TCP
           volumeMounts:
             - name: config
-              mountPath: /
+              mountPath: /pika.yaml
+              subPath: pika.yaml
               readOnly: true
             - name: data
               mountPath: /data
