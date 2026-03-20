@@ -302,15 +302,19 @@ patches:
       name: pika
     patch: |
       - op: replace
-        path: /data/config.yaml
+        path: /data/pika.yaml
         value: |
           server:
             port: "8080"
             public_port: "9090"
             auth:
               session_ttl: 24h
+              cookie:
+                secure: true
+                same_site: lax
           storage:
-            path: /data/pika.db
+            sqlite:
+              dsn: file:/data/pika.db?cache=shared
   - target:
       kind: HTTPRoute
       name: pika
