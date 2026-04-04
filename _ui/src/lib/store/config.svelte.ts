@@ -637,16 +637,77 @@ function createConfigStore() {
 
   async function saveSettings(updatedSettings: Settings): Promise<void> {
     try {
-      // Use patch endpoint to set external resources
-      await axios.post('/api/v1/settings', {
+      const body: Record<string, any> = {
         action: 'set',
         external: updatedSettings.external || {}
-      });
+      };
+      // Include raw_mounts if present in the update
+      if (updatedSettings.raw_mounts !== undefined) {
+        body.raw_mounts = updatedSettings.raw_mounts;
+      }
+      await axios.post('/api/v1/settings', body);
       settings = updatedSettings;
       addToast('Settings saved', 'success');
     } catch (error) {
       console.error('Failed to save settings:', error);
       addToast('Failed to save settings', 'alert');
+      throw error;
+    }
+  }
+
+  async function saveFTPUsers(users: import('@/lib/types/config').FTPUserEntry[]): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', {
+        action: 'set',
+        ftp_users: users
+      });
+      if (settings) {
+        settings = { ...settings, ftp_users: users };
+      } else {
+        settings = { ftp_users: users };
+      }
+      addToast('FTP users saved', 'success');
+    } catch (error: any) {
+      const msg = error.response?.data?.message || 'Failed to save FTP users';
+      addToast(msg, 'alert');
+      throw error;
+    }
+  }
+
+  async function saveFTPShares(shares: import('@/lib/types/config').FTPShareEntry[]): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', {
+        action: 'set',
+        ftp_shares: shares
+      });
+      if (settings) {
+        settings = { ...settings, ftp_shares: shares };
+      } else {
+        settings = { ftp_shares: shares };
+      }
+      addToast('FTP shares saved', 'success');
+    } catch (error: any) {
+      const msg = error.response?.data?.message || 'Failed to save FTP shares';
+      addToast(msg, 'alert');
+      throw error;
+    }
+  }
+
+  async function saveRawMounts(mounts: import('@/lib/types/config').RawMountEntry[]): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', {
+        action: 'set',
+        raw_mounts: mounts
+      });
+      if (settings) {
+        settings = { ...settings, raw_mounts: mounts };
+      } else {
+        settings = { raw_mounts: mounts };
+      }
+      addToast('Raw mounts saved', 'success');
+    } catch (error: any) {
+      const msg = error.response?.data?.message || 'Failed to save raw mounts';
+      addToast(msg, 'alert');
       throw error;
     }
   }
@@ -997,6 +1058,9 @@ function createConfigStore() {
     // Settings operations
     loadSettings,
     saveSettings,
+    saveRawMounts,
+    saveFTPShares,
+    saveFTPUsers,
     listExternalPaths,
 
     // Token operations

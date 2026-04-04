@@ -2,12 +2,66 @@
   import { configStore } from "@/lib/store/config.svelte";
   import { addToast } from "@/lib/store/toast.svelte";
   import { onMount } from "svelte";
-  import { Plus, Trash2, Copy, Eye, EyeOff, Shield, Globe, Key, RotateCw, Lock, Download, Upload, HardDrive } from "lucide-svelte";
-  import type { TokenScope, CreateTokenRequest, ExternalResource } from "@/lib/types/config";
+  import { Plus, Trash2, Copy, Eye, EyeOff, Shield, Globe, Key, RotateCw, Lock, Download, Upload, HardDrive, ShieldAlert, FolderOpen, Share2 } from "lucide-svelte";
+  import type { TokenScope, CreateTokenRequest, ExternalResource, RawMountEntry, FTPShareEntry, FTPUserEntry } from "@/lib/types/config";
+  import { appStore } from "@/lib/store/store.svelte";
   import axios from 'axios';
 
   // ── Tab state ──
-  let activeSection = $state<'tokens' | 'external' | 'rotation' | 'security' | 'backup'>('tokens');
+  let activeSection = $state<'tokens' | 'external' | 'raw_mounts' | 'ftp_shares' | 'rotation' | 'security' | 'backup'>('tokens');
+
+  // ── Raw mounts state ──
+  let rawMounts = $state<RawMountEntry[]>([]);
+  let showAddMount = $state(false);
+  let newMountPrefix = $state('');
+  let newMountType = $state<'local' | 's3' | 'ftp' | 'sftp'>('local');
+  let newMountPath = $state('');
+  // S3 fields
+  let newS3Bucket = $state('');
+  let newS3Region = $state('us-east-1');
+  let newS3Endpoint = $state('');
+  let newS3AccessKey = $state('');
+  let newS3SecretKey = $state('');
+  let newS3PathStyle = $state(false);
+  let newS3Prefix = $state('');
+  let newS3Secure = $state(true);
+  // FTP fields
+  let newFtpHost = $state('');
+  let newFtpUsername = $state('');
+  let newFtpPassword = $state('');
+  let newFtpTLS = $state(false);
+  let newFtpBasePath = $state('');
+  // SFTP fields
+  let newSftpHost = $state('');
+  let newSftpUsername = $state('');
+  let newSftpPassword = $state('');
+  let newSftpPrivateKey = $state('');
+  let newSftpBasePath = $state('');
+  // Edit state
+  let editingIndex = $state<number | null>(null);
+  let isSavingMounts = $state(false);
+
+  // ── FTP Shares state ──
+  let ftpShares = $state<FTPShareEntry[]>([]);
+  let showAddShare = $state(false);
+  let newShareName = $state('');
+  let newSharePaths = $state<string[]>([]);
+  let newSharePathInput = $state('');
+  let newShareReadOnly = $state(false);
+  let editingShareIndex = $state<number | null>(null);
+  let isSavingShares = $state(false);
+
+  // FTP/SFTP Users state
+  let ftpUsers = $state<FTPUserEntry[]>([]);
+  let showAddUser = $state(false);
+  let newUserUsername = $state('');
+  let newUserPassword = $state('');
+  let newUserShares = $state<string[]>([]);
+  let newUserShareInput = $state('');
+  let newUserReadOnly = $state(false);
+  let editingUserIndex = $state<number | null>(null);
+  let isSavingUsers = $state(false);
+  let showUserPassword = $state(false);
 
   // ── Rotation state ──
   let rotationAdminSecret = $state('');
@@ -34,6 +88,12 @@
   let importMode = $state<'replace' | 'merge'>('merge');
   let importFile = $state<File | null>(null);
   let importFileName = $state('');
+  let encryptionPassword = $state('');
+  let showEncryptionPassword = $state(false);
+  let importEncryptionPassword = $state('');
+  let showImportEncryptionPassword = $state(false);
+  let importFileIsEncrypted = $state(false);
+  let showUnencryptedWarning = $state(false);
 
   // ── Token state ──
   let showCreateToken = $state(false);
@@ -62,7 +122,10 @@
   );
 
   onMount(() => {
-    configStore.loadSettings();
+    configStore.loadSettings().then(() => {
+      // Initialize raw mounts from loaded settings
+      rawMounts = [...(configStore.settings?.raw_mounts || [])];
+    });
     configStore.loadTokens();
     loadAdminSecretStatus();
   });
@@ -219,6 +282,352 @@
     }
   }
 
+  // ── Raw mount handlers ──
+  function resetMountForm() {
+    newMountPrefix = '';
+    newMountType = 'local';
+    newMountPath = '';
+    newS3Bucket = '';
+    newS3Region = 'us-east-1';
+    newS3Endpoint = '';
+    newS3AccessKey = '';
+    newS3SecretKey = '';
+    newS3PathStyle = false;
+    newS3Prefix = '';
+    newS3Secure = true;
+    newFtpHost = '';
+    newFtpUsername = '';
+    newFtpPassword = '';
+    newFtpTLS = false;
+    newFtpBasePath = '';
+    newSftpHost = '';
+    newSftpUsername = '';
+    newSftpPassword = '';
+    newSftpPrivateKey = '';
+    newSftpBasePath = '';
+    editingIndex = null;
+  }
+
+  function loadMountIntoForm(mount: RawMountEntry) {
+    newMountPrefix = mount.prefix;
+    newMountType = (mount.type || 'local') as typeof newMountType;
+    newMountPath = mount.path || '';
+    newS3Bucket = mount.s3?.bucket || '';
+    newS3Region = mount.s3?.region || 'us-east-1';
+    newS3Endpoint = mount.s3?.endpoint || '';
+    newS3AccessKey = mount.s3?.access_key || '';
+    newS3SecretKey = mount.s3?.secret_key || '';
+    newS3PathStyle = mount.s3?.path_style || false;
+    newS3Prefix = mount.s3?.prefix || '';
+    newS3Secure = mount.s3?.secure ?? true;
+    newFtpHost = mount.ftp?.host || '';
+    newFtpUsername = mount.ftp?.username || '';
+    newFtpPassword = mount.ftp?.password || '';
+    newFtpTLS = mount.ftp?.tls || false;
+    newFtpBasePath = mount.ftp?.base_path || '';
+    newSftpHost = mount.sftp?.host || '';
+    newSftpUsername = mount.sftp?.username || '';
+    newSftpPassword = mount.sftp?.password || '';
+    newSftpPrivateKey = mount.sftp?.private_key || '';
+    newSftpBasePath = mount.sftp?.base_path || '';
+  }
+
+  function handleEditMount(index: number) {
+    const mount = rawMounts[index];
+    loadMountIntoForm(mount);
+    editingIndex = index;
+    showAddMount = true;
+  }
+
+  async function handleAddMount() {
+    const prefix = newMountPrefix.trim();
+
+    if (!prefix) {
+      addToast('Prefix is required', 'alert');
+      return;
+    }
+    // Check for duplicate prefix (skip the one being edited)
+    if (rawMounts.some((m, i) => m.prefix === prefix && i !== editingIndex)) {
+      addToast(`A mount with prefix "${prefix}" already exists`, 'alert');
+      return;
+    }
+
+    const entry: RawMountEntry = { prefix, type: newMountType };
+
+    if (newMountType === 'local') {
+      if (!newMountPath.trim()) {
+        addToast('Directory path is required', 'alert');
+        return;
+      }
+      entry.path = newMountPath.trim();
+    } else if (newMountType === 's3') {
+      if (!newS3Bucket.trim()) {
+        addToast('S3 bucket is required', 'alert');
+        return;
+      }
+      entry.s3 = {
+        bucket: newS3Bucket.trim(),
+        region: newS3Region.trim() || 'us-east-1',
+        endpoint: newS3Endpoint.trim() || undefined,
+        access_key: newS3AccessKey.trim() || undefined,
+        secret_key: newS3SecretKey.trim() || undefined,
+        path_style: newS3PathStyle || undefined,
+        prefix: newS3Prefix.trim() || undefined,
+        secure: newS3Secure,
+      };
+    } else if (newMountType === 'ftp') {
+      if (!newFtpHost.trim()) {
+        addToast('FTP host is required', 'alert');
+        return;
+      }
+      entry.ftp = {
+        host: newFtpHost.trim(),
+        username: newFtpUsername.trim() || undefined,
+        password: newFtpPassword.trim() || undefined,
+        tls: newFtpTLS || undefined,
+        base_path: newFtpBasePath.trim() || undefined,
+      };
+    } else if (newMountType === 'sftp') {
+      if (!newSftpHost.trim()) {
+        addToast('SFTP host is required', 'alert');
+        return;
+      }
+      entry.sftp = {
+        host: newSftpHost.trim(),
+        username: newSftpUsername.trim() || undefined,
+        password: newSftpPassword.trim() || undefined,
+        private_key: newSftpPrivateKey.trim() || undefined,
+        base_path: newSftpBasePath.trim() || undefined,
+      };
+    }
+
+    let updated: RawMountEntry[];
+    if (editingIndex !== null) {
+      // Replace the existing entry
+      updated = rawMounts.map((m, i) => i === editingIndex ? entry : m);
+    } else {
+      updated = [...rawMounts, entry];
+    }
+    isSavingMounts = true;
+    try {
+      await configStore.saveRawMounts(updated);
+      rawMounts = updated;
+      showAddMount = false;
+      resetMountForm();
+      await appStore.loadInfo();
+    } catch {
+      // Error toast already shown by store
+    } finally {
+      isSavingMounts = false;
+    }
+  }
+
+  async function handleRemoveMount(index: number) {
+    const mount = rawMounts[index];
+    if (!confirm(`Remove raw mount "${mount.prefix}" (${mount.path})?`)) return;
+
+    const updated = rawMounts.filter((_, i) => i !== index);
+    isSavingMounts = true;
+    try {
+      await configStore.saveRawMounts(updated);
+      rawMounts = updated;
+      // Reload app info so navbar updates
+      await appStore.loadInfo();
+    } catch {
+      // Error toast already shown by store
+    } finally {
+      isSavingMounts = false;
+    }
+  }
+
+  // ── FTP share handlers ──
+  function resetShareForm() {
+    newShareName = '';
+    newSharePaths = [];
+    newSharePathInput = '';
+    newShareReadOnly = false;
+    editingShareIndex = null;
+  }
+
+  function handleEditShare(index: number) {
+    const share = ftpShares[index];
+    newShareName = share.name;
+    newSharePaths = [...share.paths];
+    newSharePathInput = '';
+    newShareReadOnly = share.read_only;
+    editingShareIndex = index;
+    showAddShare = true;
+  }
+
+  function addSharePath() {
+    const p = newSharePathInput.trim().replace(/^\/+/, '');
+    if (!p) return;
+    if (newSharePaths.includes(p)) {
+      addToast('Path already added', 'alert');
+      return;
+    }
+    newSharePaths = [...newSharePaths, p];
+    newSharePathInput = '';
+  }
+
+  function removeSharePath(index: number) {
+    newSharePaths = newSharePaths.filter((_, i) => i !== index);
+  }
+
+  async function handleAddShare() {
+    const name = newShareName.trim();
+    if (!name) {
+      addToast('Share name is required', 'alert');
+      return;
+    }
+    if (newSharePaths.length === 0) {
+      addToast('At least one path is required', 'alert');
+      return;
+    }
+    if (ftpShares.some((s, i) => s.name === name && i !== editingShareIndex)) {
+      addToast(`A share named "${name}" already exists`, 'alert');
+      return;
+    }
+
+    const entry: FTPShareEntry = {
+      name,
+      paths: [...newSharePaths],
+      read_only: newShareReadOnly,
+    };
+
+    let updated: FTPShareEntry[];
+    if (editingShareIndex !== null) {
+      updated = ftpShares.map((s, i) => i === editingShareIndex ? entry : s);
+    } else {
+      updated = [...ftpShares, entry];
+    }
+
+    isSavingShares = true;
+    try {
+      await configStore.saveFTPShares(updated);
+      ftpShares = updated;
+      showAddShare = false;
+      resetShareForm();
+    } catch {
+      // toast already shown
+    } finally {
+      isSavingShares = false;
+    }
+  }
+
+  async function handleRemoveShare(index: number) {
+    const share = ftpShares[index];
+    if (!confirm(`Remove FTP share "${share.name}"?`)) return;
+
+    const updated = ftpShares.filter((_, i) => i !== index);
+    isSavingShares = true;
+    try {
+      await configStore.saveFTPShares(updated);
+      ftpShares = updated;
+    } catch {
+      // toast already shown
+    } finally {
+      isSavingShares = false;
+    }
+  }
+
+  const availableMounts = $derived(appStore.info?.raw_mounts ?? []);
+
+  // ── FTP/SFTP user handlers ──
+  function resetUserForm() {
+    newUserUsername = '';
+    newUserPassword = '';
+    newUserShares = [];
+    newUserShareInput = '';
+    newUserReadOnly = false;
+    editingUserIndex = null;
+    showUserPassword = false;
+  }
+
+  function handleEditUser(index: number) {
+    const user = ftpUsers[index];
+    newUserUsername = user.username;
+    newUserPassword = user.password;
+    newUserShares = [...(user.shares || [])];
+    newUserShareInput = '';
+    newUserReadOnly = user.read_only;
+    editingUserIndex = index;
+    showAddUser = true;
+  }
+
+  function addUserShare() {
+    const s = newUserShareInput.trim();
+    if (!s) return;
+    if (newUserShares.includes(s)) {
+      addToast('Share already added', 'alert');
+      return;
+    }
+    newUserShares = [...newUserShares, s];
+    newUserShareInput = '';
+  }
+
+  function removeUserShare(index: number) {
+    newUserShares = newUserShares.filter((_, i) => i !== index);
+  }
+
+  async function handleAddUser() {
+    const username = newUserUsername.trim();
+    if (!username) {
+      addToast('Username is required', 'alert');
+      return;
+    }
+    if (!newUserPassword) {
+      addToast('Password is required', 'alert');
+      return;
+    }
+    if (ftpUsers.some((u, i) => u.username === username && i !== editingUserIndex)) {
+      addToast(`User "${username}" already exists`, 'alert');
+      return;
+    }
+
+    const entry: FTPUserEntry = {
+      username,
+      password: newUserPassword,
+      shares: newUserShares.length > 0 ? [...newUserShares] : undefined,
+      read_only: newUserReadOnly,
+    };
+
+    let updated: FTPUserEntry[];
+    if (editingUserIndex !== null) {
+      updated = ftpUsers.map((u, i) => i === editingUserIndex ? entry : u);
+    } else {
+      updated = [...ftpUsers, entry];
+    }
+
+    isSavingUsers = true;
+    try {
+      await configStore.saveFTPUsers(updated);
+      ftpUsers = updated;
+      showAddUser = false;
+      resetUserForm();
+    } catch {
+      // toast already shown
+    } finally {
+      isSavingUsers = false;
+    }
+  }
+
+  async function handleRemoveUser(index: number) {
+    const user = ftpUsers[index];
+    if (!confirm(`Remove FTP/SFTP user "${user.username}"?`)) return;
+
+    const updated = ftpUsers.filter((_, i) => i !== index);
+    isSavingUsers = true;
+    try {
+      await configStore.saveFTPUsers(updated);
+      ftpUsers = updated;
+    } catch {
+      // toast already shown
+    } finally {
+      isSavingUsers = false;
+    }
+  }
+
   async function handleRotateKey() {
     if (!rotationAdminSecret.trim()) {
       addToast('Admin secret is required', 'alert');
@@ -277,16 +686,40 @@
   }
 
   // ── Backup handlers ──
-  async function handleExportBackup() {
+  function handleExportBackup() {
     if (!backupAdminSecret.trim()) {
       addToast('Admin secret is required', 'alert');
       return;
     }
 
+    // If no encryption password, show warning prompt
+    if (!encryptionPassword.trim()) {
+      showUnencryptedWarning = true;
+      return;
+    }
+
+    doExportBackup();
+  }
+
+  function confirmUnencryptedExport() {
+    showUnencryptedWarning = false;
+    doExportBackup();
+  }
+
+  function cancelUnencryptedExport() {
+    showUnencryptedWarning = false;
+  }
+
+  async function doExportBackup() {
     isExporting = true;
     try {
+      const params: Record<string, string> = { admin_secret: backupAdminSecret.trim() };
+      if (encryptionPassword.trim()) {
+        params.encryption_password = encryptionPassword.trim();
+      }
+
       const response = await axios.get('/api/v1/backup', {
-        params: { admin_secret: backupAdminSecret.trim() },
+        params,
         responseType: 'blob'
       });
 
@@ -302,7 +735,7 @@
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      addToast('Backup downloaded successfully', 'success');
+      addToast(encryptionPassword.trim() ? 'Encrypted backup downloaded successfully' : 'Backup downloaded successfully', 'success');
     } catch (error: any) {
       const msg = error.response?.data?.message || error.response?.statusText || 'Export failed';
       // If response is a blob, try to read the error message
@@ -320,11 +753,20 @@
     }
   }
 
-  function handleFileSelect(event: Event) {
+  async function handleFileSelect(event: Event) {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files.length > 0) {
       importFile = input.files[0];
       importFileName = input.files[0].name;
+
+      // Detect if the file is encrypted
+      try {
+        const text = await input.files[0].text();
+        const parsed = JSON.parse(text);
+        importFileIsEncrypted = !!parsed.encrypted;
+      } catch {
+        importFileIsEncrypted = false;
+      }
     }
   }
 
@@ -335,6 +777,10 @@
     }
     if (!importFile) {
       addToast('Please select a backup file', 'alert');
+      return;
+    }
+    if (importFileIsEncrypted && !importEncryptionPassword.trim()) {
+      addToast('Encryption password is required for encrypted backups', 'alert');
       return;
     }
 
@@ -355,15 +801,22 @@
         return;
       }
 
-      await axios.post('/api/v1/backup', {
+      const body: Record<string, any> = {
         admin_secret: backupAdminSecret.trim(),
         mode: importMode,
         data: backupData
-      });
+      };
+      if (importEncryptionPassword.trim()) {
+        body.encryption_password = importEncryptionPassword.trim();
+      }
+
+      await axios.post('/api/v1/backup', body);
 
       addToast('Backup imported successfully', 'success');
       importFile = null;
       importFileName = '';
+      importFileIsEncrypted = false;
+      importEncryptionPassword = '';
 
       // Refresh settings and tree
       configStore.loadSettings();
@@ -383,51 +836,75 @@
   }
 </script>
 
-<div class="h-full overflow-y-auto">
-<div class="max-w-4xl mx-auto p-6">
-  <!-- Section Tabs -->
-  <div class="flex gap-1 mb-6 border-b border-slate-200">
-    <button
-      class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 cursor-pointer transition-colors
-        {activeSection === 'tokens' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}"
-      onclick={() => activeSection = 'tokens'}
-    >
-      <Key size={16} />
-      Access Tokens
-    </button>
-    <button
-      class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 cursor-pointer transition-colors
-        {activeSection === 'external' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}"
-      onclick={() => activeSection = 'external'}
-    >
-      <Globe size={16} />
-      External Resources
-    </button>
-    <button
-      class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 cursor-pointer transition-colors
-        {activeSection === 'rotation' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}"
-      onclick={() => activeSection = 'rotation'}
-    >
-      <RotateCw size={16} />
-      Key Rotation
-    </button>
-    <button
-      class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 cursor-pointer transition-colors
-        {activeSection === 'security' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}"
-      onclick={() => activeSection = 'security'}
-    >
-      <Lock size={16} />
-      Security
-    </button>
-    <button
-      class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 cursor-pointer transition-colors
-        {activeSection === 'backup' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}"
-      onclick={() => activeSection = 'backup'}
-    >
-      <HardDrive size={16} />
-      Backup
-    </button>
+<div class="flex h-full overflow-hidden">
+  <!-- Left Sidebar -->
+  <div class="w-52 shrink-0 bg-slate-50 border-r border-slate-200 overflow-y-auto">
+    <div class="px-3 py-3">
+      <span class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider px-2">Settings</span>
+    </div>
+    <nav class="flex flex-col gap-0.5 px-2 pb-4">
+      <button
+        class="flex items-center gap-2.5 w-full px-3 py-2 text-[13px] font-medium rounded-md cursor-pointer transition-colors text-left
+          {activeSection === 'tokens' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-transparent text-slate-600 border border-transparent hover:bg-slate-100 hover:text-slate-800'}"
+        onclick={() => activeSection = 'tokens'}
+      >
+        <Key size={15} class="shrink-0" />
+        Access Tokens
+      </button>
+      <button
+        class="flex items-center gap-2.5 w-full px-3 py-2 text-[13px] font-medium rounded-md cursor-pointer transition-colors text-left
+          {activeSection === 'external' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-transparent text-slate-600 border border-transparent hover:bg-slate-100 hover:text-slate-800'}"
+        onclick={() => activeSection = 'external'}
+      >
+        <Globe size={15} class="shrink-0" />
+        External Resources
+      </button>
+      <button
+        class="flex items-center gap-2.5 w-full px-3 py-2 text-[13px] font-medium rounded-md cursor-pointer transition-colors text-left
+          {activeSection === 'raw_mounts' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-transparent text-slate-600 border border-transparent hover:bg-slate-100 hover:text-slate-800'}"
+        onclick={() => { activeSection = 'raw_mounts'; rawMounts = [...(configStore.settings?.raw_mounts || [])]; }}
+      >
+        <FolderOpen size={15} class="shrink-0" />
+        Raw Mounts
+      </button>
+      <button
+        class="flex items-center gap-2.5 w-full px-3 py-2 text-[13px] font-medium rounded-md cursor-pointer transition-colors text-left
+          {activeSection === 'ftp_shares' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-transparent text-slate-600 border border-transparent hover:bg-slate-100 hover:text-slate-800'}"
+        onclick={() => { activeSection = 'ftp_shares'; ftpShares = [...(configStore.settings?.ftp_shares || [])]; ftpUsers = [...(configStore.settings?.ftp_users || [])]; }}
+      >
+        <Share2 size={15} class="shrink-0" />
+        File Sharing
+      </button>
+      <button
+        class="flex items-center gap-2.5 w-full px-3 py-2 text-[13px] font-medium rounded-md cursor-pointer transition-colors text-left
+          {activeSection === 'rotation' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-transparent text-slate-600 border border-transparent hover:bg-slate-100 hover:text-slate-800'}"
+        onclick={() => activeSection = 'rotation'}
+      >
+        <RotateCw size={15} class="shrink-0" />
+        Key Rotation
+      </button>
+      <button
+        class="flex items-center gap-2.5 w-full px-3 py-2 text-[13px] font-medium rounded-md cursor-pointer transition-colors text-left
+          {activeSection === 'security' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-transparent text-slate-600 border border-transparent hover:bg-slate-100 hover:text-slate-800'}"
+        onclick={() => activeSection = 'security'}
+      >
+        <Lock size={15} class="shrink-0" />
+        Security
+      </button>
+      <button
+        class="flex items-center gap-2.5 w-full px-3 py-2 text-[13px] font-medium rounded-md cursor-pointer transition-colors text-left
+          {activeSection === 'backup' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-transparent text-slate-600 border border-transparent hover:bg-slate-100 hover:text-slate-800'}"
+        onclick={() => activeSection = 'backup'}
+      >
+        <HardDrive size={15} class="shrink-0" />
+        Backup
+      </button>
+    </nav>
   </div>
+
+  <!-- Right Content Area -->
+  <div class="flex-1 overflow-y-auto">
+  <div class="max-w-3xl p-6">
 
   <!-- ══════════════════════════════════════════ -->
   <!-- Token Created Banner -->
@@ -845,6 +1322,572 @@
   {/if}
 
   <!-- ══════════════════════════════════════════ -->
+  <!-- Raw Mounts Section -->
+  <!-- ══════════════════════════════════════════ -->
+  {#if activeSection === 'raw_mounts'}
+    <div>
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-lg font-semibold text-slate-800">Raw Filesystem Mounts</h2>
+          <p class="text-sm text-slate-500 mt-0.5">Serve files from local directories at <code class="px-1 py-0.5 bg-slate-100 rounded text-[11px]">/raw/&#123;prefix&#125;/...</code></p>
+        </div>
+        <button
+          class="flex items-center gap-1.5 px-3 py-2 bg-blue-500 text-white text-sm font-medium rounded-md hover:bg-blue-600 transition-colors"
+          onclick={() => showAddMount = true}
+        >
+          <Plus size={14} />
+          Add Mount
+        </button>
+      </div>
+
+      <!-- Add Mount Form -->
+      {#if showAddMount}
+        <div class="mb-6 p-5 bg-white border border-slate-200 rounded-lg shadow-sm">
+          <h3 class="text-sm font-semibold text-slate-700 mb-4">{editingIndex !== null ? 'Edit Raw Mount' : 'Add Raw Mount'}</h3>
+
+          <div class="mb-4">
+            <label for="mount-prefix" class="block text-xs font-medium text-slate-500 mb-1.5">Prefix</label>
+            <input id="mount-prefix" type="text" bind:value={newMountPrefix} placeholder="e.g., configs"
+              class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            <p class="mt-1 text-[11px] text-slate-400">URL prefix — files will be served at <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px]">/raw/{newMountPrefix || 'prefix'}/...</code></p>
+          </div>
+
+          <div class="mb-4">
+            <span class="block text-xs font-medium text-slate-500 mb-1.5">Backend Type</span>
+            <div class="flex gap-3">
+              <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                <input type="radio" bind:group={newMountType} value="local" class="text-blue-500" /> Local Directory
+              </label>
+              <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                <input type="radio" bind:group={newMountType} value="s3" class="text-blue-500" /> S3 Compatible
+              </label>
+              <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                <input type="radio" bind:group={newMountType} value="ftp" class="text-blue-500" /> FTP / FTPS
+              </label>
+              <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                <input type="radio" bind:group={newMountType} value="sftp" class="text-blue-500" /> SFTP (SSH)
+              </label>
+            </div>
+          </div>
+
+          {#if newMountType === 'local'}
+            <div class="mb-4">
+              <label for="mount-path" class="block text-xs font-medium text-slate-500 mb-1.5">Directory Path</label>
+              <input id="mount-path" type="text" bind:value={newMountPath} placeholder="/opt/configs"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              <p class="mt-1 text-[11px] text-slate-400">Absolute path to a directory on the server's filesystem (also works with FUSE mounts)</p>
+            </div>
+
+          {:else if newMountType === 's3'}
+            <div class="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label for="s3-bucket" class="block text-xs font-medium text-slate-500 mb-1.5">Bucket</label>
+                <input id="s3-bucket" type="text" bind:value={newS3Bucket} placeholder="my-bucket"
+                  class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+              <div>
+                <label for="s3-region" class="block text-xs font-medium text-slate-500 mb-1.5">Region</label>
+                <input id="s3-region" type="text" bind:value={newS3Region} placeholder="us-east-1"
+                  class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+            </div>
+            <div class="mb-4">
+              <label for="s3-endpoint" class="block text-xs font-medium text-slate-500 mb-1.5">Endpoint (optional)</label>
+              <input id="s3-endpoint" type="text" bind:value={newS3Endpoint} placeholder="s3.amazonaws.com or minio.local:9000"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              <p class="mt-1 text-[11px] text-slate-400">Leave empty for AWS S3. Set for MinIO, Cloudflare R2, etc.</p>
+            </div>
+            <div class="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label for="s3-access-key" class="block text-xs font-medium text-slate-500 mb-1.5">Access Key</label>
+                <input id="s3-access-key" type="text" bind:value={newS3AccessKey} placeholder="AKIA..."
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+              <div>
+                <label for="s3-secret-key" class="block text-xs font-medium text-slate-500 mb-1.5">Secret Key</label>
+                <input id="s3-secret-key" type="password" bind:value={newS3SecretKey} placeholder="Secret key"
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+            </div>
+            <div class="mb-4">
+              <label for="s3-prefix" class="block text-xs font-medium text-slate-500 mb-1.5">Key Prefix (optional)</label>
+              <input id="s3-prefix" type="text" bind:value={newS3Prefix} placeholder="configs/"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              <p class="mt-1 text-[11px] text-slate-400">Only serve keys under this prefix within the bucket</p>
+            </div>
+            <div class="flex gap-4 mb-4">
+              <label class="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                <input type="checkbox" bind:checked={newS3PathStyle} class="rounded border-slate-300" />
+                Path-style access (MinIO)
+              </label>
+              <label class="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                <input type="checkbox" bind:checked={newS3Secure} class="rounded border-slate-300" />
+                Use HTTPS
+              </label>
+            </div>
+
+          {:else if newMountType === 'ftp'}
+            <div class="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label for="ftp-host" class="block text-xs font-medium text-slate-500 mb-1.5">Host</label>
+                <input id="ftp-host" type="text" bind:value={newFtpHost} placeholder="ftp.example.com:21"
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+              <div>
+                <label for="ftp-basepath" class="block text-xs font-medium text-slate-500 mb-1.5">Base Path (optional)</label>
+                <input id="ftp-basepath" type="text" bind:value={newFtpBasePath} placeholder="/data"
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label for="ftp-username" class="block text-xs font-medium text-slate-500 mb-1.5">Username</label>
+                <input id="ftp-username" type="text" bind:value={newFtpUsername} placeholder="admin"
+                  class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+              <div>
+                <label for="ftp-password" class="block text-xs font-medium text-slate-500 mb-1.5">Password</label>
+                <input id="ftp-password" type="password" bind:value={newFtpPassword} placeholder="Password"
+                  class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+            </div>
+            <div class="mb-4">
+              <label class="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                <input type="checkbox" bind:checked={newFtpTLS} class="rounded border-slate-300" />
+                Use FTPS (explicit TLS)
+              </label>
+            </div>
+          {:else if newMountType === 'sftp'}
+            <div class="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label for="sftp-host" class="block text-xs font-medium text-slate-500 mb-1.5">Host</label>
+                <input id="sftp-host" type="text" bind:value={newSftpHost} placeholder="ssh.example.com:22"
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+              <div>
+                <label for="sftp-basepath" class="block text-xs font-medium text-slate-500 mb-1.5">Base Path (optional)</label>
+                <input id="sftp-basepath" type="text" bind:value={newSftpBasePath} placeholder="/data"
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label for="sftp-username" class="block text-xs font-medium text-slate-500 mb-1.5">Username</label>
+                <input id="sftp-username" type="text" bind:value={newSftpUsername} placeholder="admin"
+                  class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+              <div>
+                <label for="sftp-password" class="block text-xs font-medium text-slate-500 mb-1.5">Password</label>
+                <input id="sftp-password" type="password" bind:value={newSftpPassword} placeholder="Password"
+                  class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+            </div>
+            <div class="mb-4">
+              <label for="sftp-key" class="block text-xs font-medium text-slate-500 mb-1.5">Private Key (optional, PEM format)</label>
+              <textarea id="sftp-key" bind:value={newSftpPrivateKey} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;..."
+                rows="4"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 resize-y" ></textarea>
+              <p class="mt-1 text-[11px] text-slate-400">Used instead of password authentication. Paste the full PEM-encoded key.</p>
+            </div>
+          {/if}
+
+          <div class="flex justify-end gap-2">
+            <button
+              class="px-3 py-2 text-sm text-slate-600 bg-white border border-slate-200 rounded-md hover:bg-slate-50 transition-colors"
+              onclick={() => { showAddMount = false; resetMountForm(); }}
+            >
+              Cancel
+            </button>
+            <button
+              class="px-3 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              onclick={handleAddMount}
+              disabled={isSavingMounts}
+            >
+              {isSavingMounts ? 'Saving...' : editingIndex !== null ? 'Save Changes' : 'Add Mount'}
+            </button>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Mount List -->
+      {#if rawMounts.length === 0}
+        <div class="text-center py-12 bg-white border border-slate-200 rounded-lg">
+          <FolderOpen size={32} class="mx-auto text-slate-300 mb-3" />
+          <p class="text-sm text-slate-500">No raw mounts configured</p>
+          <p class="text-xs text-slate-400 mt-1">Add a mount to serve files from a local directory, S3 bucket, or FTP server</p>
+        </div>
+      {:else}
+        <div class="space-y-2">
+          {#each rawMounts as mount, i (mount.prefix)}
+            {@const mType = mount.type || 'local'}
+            <div class="flex items-center gap-4 p-4 bg-white border border-slate-200 rounded-lg hover:border-slate-300 transition-colors">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium text-slate-800">{mount.prefix}</span>
+                  <span class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-emerald-100 text-emerald-700">
+                    /raw/{mount.prefix}
+                  </span>
+                  <span class="px-1.5 py-0.5 text-[10px] font-medium rounded
+                    {mType === 's3' ? 'bg-orange-100 text-orange-700' : mType === 'ftp' ? 'bg-purple-100 text-purple-700' : mType === 'sftp' ? 'bg-teal-100 text-teal-700' : 'bg-blue-100 text-blue-700'}">
+                    {mType === 's3' ? 'S3' : mType === 'ftp' ? 'FTP' : mType === 'sftp' ? 'SFTP' : 'Local'}
+                  </span>
+                </div>
+                <div class="mt-1">
+                  {#if mType === 'local'}
+                    <span class="text-xs font-mono text-slate-400">{mount.path}</span>
+                  {:else if mType === 's3'}
+                    <span class="text-xs font-mono text-slate-400">
+                      {mount.s3?.endpoint ? mount.s3.endpoint + '/' : ''}{mount.s3?.bucket}{mount.s3?.prefix ? '/' + mount.s3.prefix : ''}
+                    </span>
+                  {:else if mType === 'ftp'}
+                    <span class="text-xs font-mono text-slate-400">
+                      {mount.ftp?.host}{mount.ftp?.base_path || ''}
+                    </span>
+                  {:else if mType === 'sftp'}
+                    <span class="text-xs font-mono text-slate-400">
+                      {mount.sftp?.username ? mount.sftp.username + '@' : ''}{mount.sftp?.host}{mount.sftp?.base_path || ''}
+                    </span>
+                  {/if}
+                </div>
+              </div>
+              <div class="flex items-center gap-1 shrink-0">
+                <button
+                  class="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded transition-colors"
+                  onclick={() => handleEditMount(i)}
+                  title="Edit mount"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                </button>
+                <button
+                  class="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                  onclick={() => handleRemoveMount(i)}
+                  title="Remove mount"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- FTP Shares Section -->
+  <!-- ══════════════════════════════════════════ -->
+  {#if activeSection === 'ftp_shares'}
+    <div>
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-lg font-semibold text-slate-800">FTP Shares</h2>
+          <p class="text-sm text-slate-500 mt-0.5">Share folders from your raw mounts via the built-in FTP server. External clients can connect and browse/download files.</p>
+        </div>
+        <button
+          class="flex items-center gap-1.5 px-3 py-2 bg-blue-500 text-white text-sm font-medium rounded-md hover:bg-blue-600 transition-colors"
+          onclick={() => { showAddShare = true; resetShareForm(); }}
+        >
+          <Plus size={14} />
+          Add Share
+        </button>
+      </div>
+
+      {#if availableMounts.length === 0}
+        <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-md">
+          <p class="text-xs text-amber-800">No raw mounts configured. Add a raw mount first before creating FTP shares.</p>
+        </div>
+      {/if}
+
+      <!-- Add/Edit Share Form -->
+      {#if showAddShare}
+        <div class="mb-6 p-5 bg-white border border-slate-200 rounded-lg shadow-sm">
+          <h3 class="text-sm font-semibold text-slate-700 mb-4">{editingShareIndex !== null ? 'Edit Share' : 'Add Share'}</h3>
+
+          <div class="mb-4">
+            <label for="share-name" class="block text-xs font-medium text-slate-500 mb-1.5">Share Name</label>
+            <input id="share-name" type="text" bind:value={newShareName} placeholder="e.g., project-files"
+              class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            <p class="mt-1 text-[11px] text-slate-400">This becomes the top-level folder name visible to FTP clients</p>
+          </div>
+
+          <div class="mb-4">
+            <label for="share-path-input" class="block text-xs font-medium text-slate-500 mb-1.5">Paths</label>
+            <div class="flex gap-2">
+              <input id="share-path-input" type="text" bind:value={newSharePathInput}
+                placeholder="mount/folder (e.g., configs/app)"
+                onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addSharePath(); } }}
+                class="flex-1 px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              <button
+                class="px-3 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 transition-colors"
+                onclick={addSharePath}
+              >
+                Add
+              </button>
+            </div>
+            <p class="mt-1 text-[11px] text-slate-400">
+              Format: <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px]">mount_prefix</code> or
+              <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px]">mount_prefix/sub/folder</code>.
+              Multiple paths are merged into a single share.
+              {#if availableMounts.length > 0}
+                Available mounts: {availableMounts.map(m => m.prefix).join(', ')}
+              {/if}
+            </p>
+
+            {#if newSharePaths.length > 0}
+              <div class="mt-2 flex flex-wrap gap-1.5">
+                {#each newSharePaths as p, i}
+                  <span class="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 border border-blue-200 rounded text-xs font-mono text-blue-700">
+                    {p}
+                    <button
+                      class="flex items-center justify-center w-3.5 h-3.5 p-0 border-none cursor-pointer bg-transparent text-blue-400 hover:text-red-500 transition-colors"
+                      onclick={() => removeSharePath(i)}
+                      title="Remove"
+                    >&times;</button>
+                  </span>
+                {/each}
+              </div>
+            {/if}
+          </div>
+
+          <div class="mb-4">
+            <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+              <input type="checkbox" bind:checked={newShareReadOnly} class="rounded border-slate-300" />
+              Read-only (clients cannot upload or delete)
+            </label>
+          </div>
+
+          <div class="flex justify-end gap-2">
+            <button
+              class="px-3 py-2 text-sm text-slate-600 bg-white border border-slate-200 rounded-md hover:bg-slate-50 transition-colors"
+              onclick={() => { showAddShare = false; resetShareForm(); }}
+            >
+              Cancel
+            </button>
+            <button
+              class="px-3 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              onclick={handleAddShare}
+              disabled={isSavingShares}
+            >
+              {isSavingShares ? 'Saving...' : editingShareIndex !== null ? 'Save Changes' : 'Add Share'}
+            </button>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Share List -->
+      {#if ftpShares.length === 0 && !showAddShare}
+        <div class="text-center py-12 bg-white border border-slate-200 rounded-lg">
+          <Share2 size={32} class="mx-auto text-slate-300 mb-3" />
+          <p class="text-sm text-slate-500">No FTP shares configured</p>
+          <p class="text-xs text-slate-400 mt-1">Add a share to expose folders via the built-in FTP server</p>
+        </div>
+      {:else}
+        <div class="space-y-2">
+          {#each ftpShares as share, i (share.name)}
+            <div class="flex items-center gap-4 p-4 bg-white border border-slate-200 rounded-lg hover:border-slate-300 transition-colors">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium text-slate-800">{share.name}</span>
+                  {#if share.read_only}
+                    <span class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700">
+                      Read-only
+                    </span>
+                  {:else}
+                    <span class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-emerald-100 text-emerald-700">
+                      Read+Write
+                    </span>
+                  {/if}
+                  <span class="text-[10px] text-slate-400">→ ftp://.../{share.name}/</span>
+                </div>
+                <div class="mt-1 flex flex-wrap gap-1">
+                  {#each share.paths as p}
+                    <span class="px-1.5 py-0.5 text-[10px] font-mono rounded bg-slate-100 text-slate-600 border border-slate-200">{p}</span>
+                  {/each}
+                </div>
+              </div>
+              <div class="flex items-center gap-1 shrink-0">
+                <button
+                  class="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded transition-colors"
+                  onclick={() => handleEditShare(i)}
+                  title="Edit share"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                </button>
+                <button
+                  class="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                  onclick={() => handleRemoveShare(i)}
+                  title="Remove share"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      <!-- Users Section -->
+      <div class="mt-8">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h3 class="text-base font-semibold text-slate-800">Users</h3>
+            <p class="text-xs text-slate-500 mt-0.5">Manage FTP/SFTP user accounts. Users are shared between both servers.</p>
+          </div>
+          <button
+            class="flex items-center gap-1.5 px-3 py-2 bg-blue-500 text-white text-sm font-medium rounded-md hover:bg-blue-600 transition-colors"
+            onclick={() => { showAddUser = true; resetUserForm(); }}
+          >
+            <Plus size={14} />
+            Add User
+          </button>
+        </div>
+
+        {#if showAddUser}
+          <div class="mb-6 p-5 bg-white border border-slate-200 rounded-lg shadow-sm">
+            <h3 class="text-sm font-semibold text-slate-700 mb-4">{editingUserIndex !== null ? 'Edit User' : 'Add User'}</h3>
+
+            <div class="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label for="ftp-user-name" class="block text-xs font-medium text-slate-500 mb-1.5">Username</label>
+                <input id="ftp-user-name" type="text" bind:value={newUserUsername} placeholder="admin"
+                  class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+              <div>
+                <label for="ftp-user-pass" class="block text-xs font-medium text-slate-500 mb-1.5">Password</label>
+                <div class="relative">
+                  <input id="ftp-user-pass" type={showUserPassword ? 'text' : 'password'} bind:value={newUserPassword} placeholder="Password"
+                    class="w-full px-3 py-2 pr-9 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                  <button
+                    type="button"
+                    class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 bg-transparent border-none cursor-pointer hover:text-slate-600 transition-colors"
+                    onclick={() => showUserPassword = !showUserPassword}
+                    title={showUserPassword ? 'Hide' : 'Show'}
+                  >
+                    {#if showUserPassword}<EyeOff size={15} />{:else}<Eye size={15} />{/if}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="mb-4">
+              <label for="ftp-user-shares" class="block text-xs font-medium text-slate-500 mb-1.5">Allowed Shares (optional)</label>
+              <div class="flex gap-2">
+                <input id="ftp-user-shares" type="text" bind:value={newUserShareInput}
+                  placeholder="Share name"
+                  onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addUserShare(); } }}
+                  class="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                <button
+                  class="px-3 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 transition-colors"
+                  onclick={addUserShare}
+                >
+                  Add
+                </button>
+              </div>
+              <p class="mt-1 text-[11px] text-slate-400">Leave empty to allow access to all shares. Otherwise, type share names to restrict access.</p>
+
+              {#if newUserShares.length > 0}
+                <div class="mt-2 flex flex-wrap gap-1.5">
+                  {#each newUserShares as s, i}
+                    <span class="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 border border-blue-200 rounded text-xs text-blue-700">
+                      {s}
+                      <button class="w-3.5 h-3.5 p-0 border-none cursor-pointer bg-transparent text-blue-400 hover:text-red-500"
+                        onclick={() => removeUserShare(i)}>&times;</button>
+                    </span>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+
+            <div class="mb-4">
+              <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                <input type="checkbox" bind:checked={newUserReadOnly} class="rounded border-slate-300" />
+                Read-only (user cannot upload or delete, regardless of share settings)
+              </label>
+            </div>
+
+            <div class="flex justify-end gap-2">
+              <button class="px-3 py-2 text-sm text-slate-600 bg-white border border-slate-200 rounded-md hover:bg-slate-50 transition-colors"
+                onclick={() => { showAddUser = false; resetUserForm(); }}>Cancel</button>
+              <button class="px-3 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                onclick={handleAddUser} disabled={isSavingUsers}>
+                {isSavingUsers ? 'Saving...' : editingUserIndex !== null ? 'Save Changes' : 'Add User'}
+              </button>
+            </div>
+          </div>
+        {/if}
+
+        {#if ftpUsers.length === 0 && !showAddUser}
+          <div class="text-center py-8 bg-white border border-slate-200 rounded-lg">
+            <p class="text-sm text-slate-500">No users configured</p>
+            <p class="text-xs text-slate-400 mt-1">Add a user to enable FTP/SFTP access. Users can also be set in the config file.</p>
+          </div>
+        {:else}
+          <div class="space-y-2">
+            {#each ftpUsers as user, i (user.username)}
+              <div class="flex items-center gap-4 p-4 bg-white border border-slate-200 rounded-lg hover:border-slate-300 transition-colors">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="text-sm font-medium text-slate-800">{user.username}</span>
+                    {#if user.read_only}
+                      <span class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700">Read-only</span>
+                    {:else}
+                      <span class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-emerald-100 text-emerald-700">Read+Write</span>
+                    {/if}
+                  </div>
+                  <div class="mt-1">
+                    {#if user.shares && user.shares.length > 0}
+                      <span class="text-[11px] text-slate-400 mr-1">Shares:</span>
+                      {#each user.shares as s}
+                        <span class="px-1 py-0.5 text-[10px] rounded bg-slate-100 text-slate-600 border border-slate-200 mr-1">{s}</span>
+                      {/each}
+                    {:else}
+                      <span class="text-[11px] text-slate-400">All shares</span>
+                    {/if}
+                  </div>
+                </div>
+                <div class="flex items-center gap-1 shrink-0">
+                  <button class="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded transition-colors"
+                    onclick={() => handleEditUser(i)} title="Edit user">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                  </button>
+                  <button class="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                    onclick={() => handleRemoveUser(i)} title="Remove user">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <!-- Server Config Info -->
+      <div class="mt-6 p-4 bg-slate-50 border border-slate-200 rounded-lg">
+        <h4 class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">Server Configuration</h4>
+        <p class="text-xs text-slate-500 leading-relaxed mb-2">
+          Enable the FTP and/or SFTP server in your config file. Both servers use the same shares and users configured above.
+        </p>
+        <pre class="p-3 bg-white border border-slate-200 rounded text-[11px] font-mono text-slate-600 overflow-x-auto">server:
+  ftp_serve:                # FTP server
+    enabled: true
+    port: 2121
+    passive_ports: "30000-30100"
+  sftp_serve:               # SFTP server (over SSH)
+    enabled: true
+    port: 2222
+    # host_key_path: /etc/pika/ssh_host_key
+  tftp_serve:               # TFTP server (UDP, no auth)
+    enabled: true
+    port: 69</pre>
+        <p class="mt-2 text-[11px] text-slate-400">
+          FTP and SFTP use the users configured above. TFTP has no authentication (UDP protocol) — use it only for PXE boot or firmware serving on trusted networks.
+          Files are accessed as <code class="px-1 py-0.5 bg-white border border-slate-200 rounded text-[10px]">share_name/path/to/file</code>.
+        </p>
+      </div>
+    </div>
+  {/if}
+
+  <!-- ══════════════════════════════════════════ -->
   <!-- Key Rotation Section -->
   <!-- ══════════════════════════════════════════ -->
   {#if activeSection === 'rotation'}
@@ -1062,15 +2105,75 @@
           Users, tokens, and the admin secret hash are not included in the backup.
         </p>
 
+        <!-- Encryption Password for Export -->
+        <div class="mb-4">
+          <label for="export-encryption-password" class="block text-xs font-medium text-slate-500 mb-1.5">Encryption Password (optional)</label>
+          <div class="relative">
+            <input
+              id="export-encryption-password"
+              type={showEncryptionPassword ? 'text' : 'password'}
+              bind:value={encryptionPassword}
+              placeholder="Enter a password to encrypt the backup"
+              class="w-full px-3 py-2 pr-9 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+            />
+            <button
+              type="button"
+              class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 bg-transparent border-none cursor-pointer hover:text-slate-600 transition-colors"
+              onclick={() => showEncryptionPassword = !showEncryptionPassword}
+              title={showEncryptionPassword ? 'Hide' : 'Show'}
+            >
+              {#if showEncryptionPassword}<EyeOff size={15} />{:else}<Eye size={15} />{/if}
+            </button>
+          </div>
+          <p class="mt-1 text-[11px] text-slate-400">If set, the backup file will be encrypted. You will need this password to import it later.</p>
+        </div>
+
         <button
           class="flex items-center justify-center gap-2 w-full px-4 py-2.5 text-sm font-medium text-white bg-blue-500 rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           onclick={handleExportBackup}
           disabled={isExporting || !backupAdminSecret.trim()}
         >
           <Download size={14} />
-          {isExporting ? 'Exporting...' : 'Download Backup'}
+          {isExporting ? 'Exporting...' : encryptionPassword.trim() ? 'Download Encrypted Backup' : 'Download Backup'}
         </button>
       </div>
+
+      <!-- Unencrypted Export Warning Modal -->
+      {#if showUnencryptedWarning}
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+            <div class="flex items-start gap-3 mb-4">
+              <div class="p-2 bg-amber-100 rounded-full shrink-0">
+                <ShieldAlert size={20} class="text-amber-600" />
+              </div>
+              <div>
+                <h3 class="text-sm font-semibold text-slate-800 mb-1">Export without encryption?</h3>
+                <p class="text-xs text-slate-500 leading-relaxed">
+                  You are about to export a backup without encryption. The backup file will contain all your configuration data in plain text.
+                  Anyone who obtains this file will be able to read its contents.
+                </p>
+                <p class="text-xs text-slate-500 leading-relaxed mt-2">
+                  To encrypt the backup, cancel and enter an encryption password above.
+                </p>
+              </div>
+            </div>
+            <div class="flex justify-end gap-2">
+              <button
+                class="px-4 py-2 text-sm text-slate-600 bg-white border border-slate-200 rounded-md hover:bg-slate-50 transition-colors"
+                onclick={cancelUnencryptedExport}
+              >
+                Cancel
+              </button>
+              <button
+                class="px-4 py-2 text-sm font-medium text-white bg-amber-500 rounded-md hover:bg-amber-600 transition-colors"
+                onclick={confirmUnencryptedExport}
+              >
+                Continue without encryption
+              </button>
+            </div>
+          </div>
+        </div>
+      {/if}
 
       <!-- Import Section -->
       <div class="p-5 bg-white border border-slate-200 rounded-lg shadow-sm">
@@ -1099,7 +2202,7 @@
             {#if importFile}
               <button
                 class="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                onclick={() => { importFile = null; importFileName = ''; }}
+                onclick={() => { importFile = null; importFileName = ''; importFileIsEncrypted = false; importEncryptionPassword = ''; }}
                 title="Clear selection"
               >
                 <Trash2 size={14} />
@@ -1107,6 +2210,56 @@
             {/if}
           </div>
         </div>
+
+        <!-- Encrypted file indicator & password -->
+        {#if importFileIsEncrypted}
+          <div class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+            <div class="flex items-center gap-2 mb-2">
+              <Lock size={14} class="text-blue-600 shrink-0" />
+              <p class="text-xs font-medium text-blue-800 m-0">This backup file is encrypted</p>
+            </div>
+            <p class="text-[11px] text-blue-600 mb-3">An encryption password is required to import this backup.</p>
+            <div class="relative">
+              <input
+                id="import-encryption-password"
+                type={showImportEncryptionPassword ? 'text' : 'password'}
+                bind:value={importEncryptionPassword}
+                placeholder="Enter the encryption password"
+                class="w-full px-3 py-2 pr-9 text-sm border border-blue-200 rounded-md bg-white focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+              />
+              <button
+                type="button"
+                class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 bg-transparent border-none cursor-pointer hover:text-slate-600 transition-colors"
+                onclick={() => showImportEncryptionPassword = !showImportEncryptionPassword}
+                title={showImportEncryptionPassword ? 'Hide' : 'Show'}
+              >
+                {#if showImportEncryptionPassword}<EyeOff size={15} />{:else}<Eye size={15} />{/if}
+              </button>
+            </div>
+          </div>
+        {:else if importFile}
+          <div class="mb-4">
+            <label for="import-encryption-password-opt" class="block text-xs font-medium text-slate-500 mb-1.5">Encryption Password (optional)</label>
+            <div class="relative">
+              <input
+                id="import-encryption-password-opt"
+                type={showImportEncryptionPassword ? 'text' : 'password'}
+                bind:value={importEncryptionPassword}
+                placeholder="Enter password if the backup is encrypted"
+                class="w-full px-3 py-2 pr-9 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+              />
+              <button
+                type="button"
+                class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 bg-transparent border-none cursor-pointer hover:text-slate-600 transition-colors"
+                onclick={() => showImportEncryptionPassword = !showImportEncryptionPassword}
+                title={showImportEncryptionPassword ? 'Hide' : 'Show'}
+              >
+                {#if showImportEncryptionPassword}<EyeOff size={15} />{:else}<Eye size={15} />{/if}
+              </button>
+            </div>
+            <p class="mt-1 text-[11px] text-slate-400">Only needed if the backup was exported with encryption</p>
+          </div>
+        {/if}
 
         <!-- Mode Selection -->
         <div class="mb-4">
@@ -1143,7 +2296,7 @@
           class="flex items-center justify-center gap-2 w-full px-4 py-2.5 text-sm font-medium text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed
             {importMode === 'replace' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-500 hover:bg-blue-600'}"
           onclick={handleImportBackup}
-          disabled={isImporting || !backupAdminSecret.trim() || !importFile}
+          disabled={isImporting || !backupAdminSecret.trim() || !importFile || (importFileIsEncrypted && !importEncryptionPassword.trim())}
         >
           <Upload size={14} />
           {isImporting ? 'Importing...' : importMode === 'replace' ? 'Replace & Import' : 'Merge & Import'}
@@ -1151,5 +2304,6 @@
       </div>
     </div>
   {/if}
+</div>
 </div>
 </div>

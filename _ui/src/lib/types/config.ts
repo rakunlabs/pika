@@ -120,9 +120,67 @@ export interface ExternalResource {
   kubernetes?: KubernetesConfig;
 }
 
+// S3 configuration for raw mounts
+export interface S3ConfigEntry {
+  bucket: string;
+  region?: string;
+  endpoint?: string;
+  access_key?: string;
+  secret_key?: string;
+  path_style?: boolean;
+  prefix?: string;
+  secure?: boolean;
+}
+
+// FTP configuration for raw mounts
+export interface FTPConfigEntry {
+  host: string;
+  username?: string;
+  password?: string;
+  tls?: boolean;
+  base_path?: string;
+}
+
+// SFTP configuration for raw mounts
+export interface SFTPConfigEntry {
+  host: string;
+  username?: string;
+  password?: string;
+  private_key?: string;
+  base_path?: string;
+}
+
+// Raw mount entry stored in settings
+export interface RawMountEntry {
+  prefix: string;
+  type?: string;           // "local" (default), "s3", "ftp", "sftp"
+  path?: string;           // for type=local
+  s3?: S3ConfigEntry;      // for type=s3
+  ftp?: FTPConfigEntry;    // for type=ftp
+  sftp?: SFTPConfigEntry;  // for type=sftp
+}
+
+// FTP user entry stored in settings
+export interface FTPUserEntry {
+  username: string;
+  password: string;
+  shares?: string[];   // allowed share names; empty = all
+  read_only: boolean;
+}
+
+// FTP share entry stored in settings
+export interface FTPShareEntry {
+  name: string;
+  paths: string[];     // e.g., ["configs", "assets/images", "backup/2024"]
+  read_only: boolean;
+}
+
 // Settings from API
 export interface Settings {
   external?: Record<string, ExternalResource>;
+  raw_mounts?: RawMountEntry[];
+  ftp_shares?: FTPShareEntry[];
+  ftp_users?: FTPUserEntry[];
 }
 
 // API response types
@@ -165,4 +223,53 @@ export interface PatchTokenRequest {
   scopes?: TokenScope[];
   active?: boolean;
   expires_at?: string;
+}
+
+// Raw mount info from /api/v1/info
+export interface RawMount {
+  prefix: string;
+  type: string;    // "local", "s3", "ftp"
+  writable: boolean;
+}
+
+// Directory entry from raw file listing API
+export interface RawDirEntry {
+  name: string;
+  is_dir: boolean;
+  size: number;
+}
+
+// Tree node for raw file tree UI
+export interface RawTreeNode {
+  name: string;
+  path: string;       // e.g., "configs/subdir/file.txt"
+  mount: string;      // mount prefix e.g., "configs"
+  type: 'mount' | 'folder' | 'file';
+  expanded?: boolean;
+  children?: RawTreeNode[];
+  loaded?: boolean;
+  size?: number;
+  writable?: boolean; // mount supports write operations
+  mountType?: string; // "local", "s3", "ftp"
+}
+
+// View state for raw file viewer
+export type RawViewerMode = 'text' | 'image' | 'binary-placeholder' | 'binary-loading' | 'hex' | 'pdf' | 'video' | 'audio';
+
+// Open tab in raw file browser
+export interface RawTab {
+  id: string;          // Unique ID: "mount/path"
+  mount: string;       // Mount prefix
+  path: string;        // Relative path within mount
+  name: string;        // Display name (file name)
+  size: number;        // File size in bytes
+  contentType: string; // MIME type from response
+  viewerMode: RawViewerMode;
+  textContent?: string;    // Text content (for text/code files)
+  rawUrl?: string;         // URL for image/pdf viewing
+  hexData?: string;        // Base64 data for hex viewer
+  loaded: boolean;         // Whether content has been fetched
+  forceHex?: boolean;      // User clicked "Open Anyway" on binary placeholder
+  truncated?: boolean;     // Text content was truncated due to size limit
+  tooLargeForHex?: boolean; // File is too large even for hex viewer
 }

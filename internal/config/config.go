@@ -54,6 +54,114 @@ type Server struct {
 	// Compat configures optional compatibility endpoints on the public server.
 	// Requires PublicPort to be set.
 	Compat *Compat `cfg:"compat"`
+
+	// Raw configures raw filesystem directory serving.
+	// Each mount maps a URL prefix to a local directory.
+	// Files are served at /raw/{prefix}/...
+	Raw []RawMount `cfg:"raw"`
+
+	// FTPServe configures the built-in FTP server that exposes shared folders.
+	FTPServe FTPServeConfig `cfg:"ftp_serve"`
+
+	// SFTPServe configures the built-in SFTP server that exposes shared folders over SSH.
+	SFTPServe SFTPServeConfig `cfg:"sftp_serve"`
+
+	// TFTPServe configures the built-in TFTP server for PXE boot and firmware serving.
+	TFTPServe TFTPServeConfig `cfg:"tftp_serve"`
+}
+
+// TFTPServeConfig configures the built-in TFTP server.
+type TFTPServeConfig struct {
+	// Enabled activates the TFTP server.
+	Enabled bool `cfg:"enabled"`
+	// Port is the TFTP UDP port (default: 69).
+	Port int `cfg:"port" default:"69"`
+	// Host is the hostname to bind to (default: all interfaces).
+	Host string `cfg:"host"`
+}
+
+// FTPServeConfig configures the built-in FTP server.
+type FTPServeConfig struct {
+	// Enabled activates the FTP server.
+	Enabled bool `cfg:"enabled"`
+	// Port is the FTP control port (default: 2121).
+	Port int `cfg:"port" default:"2121"`
+	// Host is the hostname to bind to (default: all interfaces).
+	Host string `cfg:"host"`
+	// PublicIP is the public IP for passive mode connections.
+	PublicIP string `cfg:"public_ip"`
+	// PassivePorts is the range of passive ports (e.g., "30000-30100").
+	PassivePorts string `cfg:"passive_ports" default:"30000-30100"`
+	// Username is the FTP login username (default: "pika").
+	Username string `cfg:"username" default:"pika"`
+	// Password is the FTP login password.
+	Password string `cfg:"password"`
+}
+
+// RawMount maps a URL path prefix to a filesystem backend.
+// Supported types: "local" (default), "s3", "ftp".
+type RawMount struct {
+	// Prefix is the URL path prefix (e.g., "configs", "certs").
+	// Files will be served at /raw/{prefix}/...
+	Prefix string `cfg:"prefix"`
+
+	// Type is the backend type: "local" (default), "s3", "ftp".
+	Type string `cfg:"type"`
+
+	// Path is the local filesystem directory to serve (type=local).
+	Path string `cfg:"path"`
+
+	// S3 configures an S3-compatible backend (type=s3).
+	S3 *S3Config `cfg:"s3"`
+
+	// FTP configures an FTP/FTPS backend (type=ftp).
+	FTP *FTPConfig `cfg:"ftp"`
+
+	// SFTP configures an SFTP backend (type=sftp).
+	SFTP *SFTPConfig `cfg:"sftp"`
+}
+
+// S3Config holds S3-compatible storage configuration.
+type S3Config struct {
+	Bucket    string `cfg:"bucket"`
+	Region    string `cfg:"region" default:"us-east-1"`
+	Endpoint  string `cfg:"endpoint"` // for MinIO, R2, etc.
+	AccessKey string `cfg:"access_key"`
+	SecretKey string `cfg:"secret_key"`
+	PathStyle bool   `cfg:"path_style"` // use path-style addressing (MinIO)
+	Prefix    string `cfg:"prefix"`     // key prefix within bucket
+	Secure    *bool  `cfg:"secure"`     // use HTTPS (default: true)
+}
+
+// FTPConfig holds FTP/FTPS connection configuration.
+type FTPConfig struct {
+	Host     string `cfg:"host"` // host:port
+	Username string `cfg:"username"`
+	Password string `cfg:"password"`
+	TLS      bool   `cfg:"tls"`       // use FTPS (explicit TLS)
+	BasePath string `cfg:"base_path"` // remote directory root
+}
+
+// SFTPServeConfig configures the built-in SFTP server.
+type SFTPServeConfig struct {
+	// Enabled activates the SFTP server.
+	Enabled bool `cfg:"enabled"`
+	// Port is the SSH port for SFTP (default: 2222).
+	Port int `cfg:"port" default:"2222"`
+	// Host is the hostname to bind to (default: all interfaces).
+	Host string `cfg:"host"`
+	// HostKeyPath is the path to the SSH host key file (PEM).
+	// If empty, a key is auto-generated (not persisted across restarts).
+	HostKeyPath string `cfg:"host_key_path"`
+}
+
+// SFTPConfig holds SFTP (SSH) connection configuration.
+type SFTPConfig struct {
+	Host       string `cfg:"host"` // host:port (default port 22)
+	Username   string `cfg:"username"`
+	Password   string `cfg:"password"`    // password auth
+	PrivateKey string `cfg:"private_key"` // PEM-encoded private key (alternative to password)
+	BasePath   string `cfg:"base_path"`   // remote directory root
 }
 
 // Compat configures compatibility endpoints that emulate other tools' APIs.

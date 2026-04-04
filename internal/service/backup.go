@@ -2,10 +2,14 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/rakunlabs/pika/internal/external"
+	"github.com/rakunlabs/pika/internal/secret/crypto"
 )
 
 // BackupData represents the full backup payload.
@@ -218,4 +222,73 @@ func (s *Service) settingsFromStorage(ctx context.Context, tx Storage) (*Setting
 // isNotFound checks if the error is ErrNotFound.
 func isNotFound(err error) bool {
 	return err == ErrNotFound
+}
+
+// EncryptedBackup is a JSON envelope for encrypted backup payloads.
+type EncryptedBackup struct {
+	Encrypted bool   `json:"encrypted"`
+	Version   int    `json:"version"`
+	Data      string `json:"data"` // base64-encoded ciphertext
+}
+
+// ExportEncrypted exports backup data and encrypts it with the given password.
+// The password is hashed with SHA-256 to derive a 32-byte key, then encrypted
+// with XChaCha20-Poly1305.
+func (s *Service) ExportEncrypted(ctx context.Context, password string) (*EncryptedBackup, error) {
+	backup, err := s.Export(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	plaintext, err := json.Marshal(backup)
+	if err != nil {
+		return nil, fmt.Errorf("marshalling backup data: %w", err)
+	}
+
+	key := sha256.Sum256([]byte(password))
+	encryptor, err := crypto.NewChaCha20(key[:])
+	if err != nil {
+		return nil, fmt.Errorf("creating encryptor: %w", err)
+	}
+
+	ciphertext, err := encryptor.Encrypt(plaintext)
+	if err != nil {
+		return nil, fmt.Errorf("encrypting backup: %w", err)
+	}
+
+	return &EncryptedBackup{
+		Encrypted: true,
+		Version:   BackupVersion,
+		Data:      base64.StdEncoding.EncodeToString(ciphertext),
+	}, nil
+}
+
+// DecryptBackupData decrypts an EncryptedBackup envelope and returns the BackupData.
+func DecryptBackupData(envelope *EncryptedBackup, password string) (*BackupData, error) {
+	if password == "" {
+		return nil, fmt.Errorf("encryption password is required for encrypted backups: %w", ErrBadRequest)
+	}
+
+	ciphertext, err := base64.StdEncoding.DecodeString(envelope.Data)
+	if err != nil {
+		return nil, fmt.Errorf("decoding backup data: %w", ErrBadRequest)
+	}
+
+	key := sha256.Sum256([]byte(password))
+	encryptor, err := crypto.NewChaCha20(key[:])
+	if err != nil {
+		return nil, fmt.Errorf("creating decryptor: %w", err)
+	}
+
+	plaintext, err := encryptor.Decrypt(ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("decrypting backup (wrong password?): %w", ErrBadRequest)
+	}
+
+	var backup BackupData
+	if err := json.Unmarshal(plaintext, &backup); err != nil {
+		return nil, fmt.Errorf("parsing decrypted backup: %w", err)
+	}
+
+	return &backup, nil
 }

@@ -1,5 +1,7 @@
 import axios from 'axios';
 
+import type { RawMount } from '@/lib/types/config';
+
 export interface AppInfo {
   name: string;
   version: string;
@@ -8,6 +10,7 @@ export interface AppInfo {
   user?: string;
   auth_enabled?: boolean;
   setup_required?: boolean;
+  raw_mounts?: RawMount[];
 }
 
 export interface UserInfo {

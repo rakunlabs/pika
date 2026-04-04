@@ -1,15 +1,21 @@
 <script lang="ts">
   import { link, location } from 'svelte-spa-router';
   import { appStore } from '@/lib/store/store.svelte';
-  import { Blocks, Settings, User, Users, LogOut } from 'lucide-svelte';
+  import { Blocks, Settings, User, Users, LogOut, HardDrive } from 'lucide-svelte';
 
   const info = $derived(appStore.info);
   const authEnabled = $derived(info?.auth_enabled ?? false);
 
+  const hasRawMounts = $derived((info?.raw_mounts?.length ?? 0) > 0);
+
   const navItems = $derived.by(() => {
-    const items = [
-      { path: '/settings', label: 'Settings', icon: Settings },
-    ];
+    const items: { path: string; label: string; icon: typeof Settings }[] = [];
+
+    if (hasRawMounts) {
+      items.push({ path: '/files', label: 'Files', icon: HardDrive });
+    }
+
+    items.push({ path: '/settings', label: 'Settings', icon: Settings });
 
     if (authEnabled) {
       items.push({ path: '/users', label: 'Users', icon: Users });

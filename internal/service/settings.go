@@ -10,14 +10,82 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// RawMountEntry is a single raw mount configured via the UI.
+type RawMountEntry struct {
+	Prefix string           `json:"prefix"`
+	Type   string           `json:"type,omitempty"` // "local" (default), "s3", "ftp", "sftp"
+	Path   string           `json:"path,omitempty"` // for type=local
+	S3     *S3ConfigEntry   `json:"s3,omitempty"`
+	FTP    *FTPConfigEntry  `json:"ftp,omitempty"`
+	SFTP   *SFTPConfigEntry `json:"sftp,omitempty"`
+}
+
+// S3ConfigEntry holds S3 configuration stored in settings.
+type S3ConfigEntry struct {
+	Bucket    string `json:"bucket"`
+	Region    string `json:"region,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty"`
+	AccessKey string `json:"access_key,omitempty"`
+	SecretKey string `json:"secret_key,omitempty"`
+	PathStyle bool   `json:"path_style,omitempty"`
+	Prefix    string `json:"prefix,omitempty"`
+	Secure    *bool  `json:"secure,omitempty"`
+}
+
+// FTPConfigEntry holds FTP configuration stored in settings.
+type FTPConfigEntry struct {
+	Host     string `json:"host"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	TLS      bool   `json:"tls,omitempty"`
+	BasePath string `json:"base_path,omitempty"`
+}
+
+// SFTPConfigEntry holds SFTP (SSH) configuration stored in settings.
+type SFTPConfigEntry struct {
+	Host       string `json:"host"`
+	Username   string `json:"username,omitempty"`
+	Password   string `json:"password,omitempty"`
+	PrivateKey string `json:"private_key,omitempty"`
+	BasePath   string `json:"base_path,omitempty"`
+}
+
 type Settings struct {
 	External        map[string]external.External `json:"external,omitempty"`
 	AdminSecretHash string                       `json:"admin_secret_hash,omitempty"`
+	RawMounts       []RawMountEntry              `json:"raw_mounts,omitempty"`
+	FTPShares       []FTPShareEntry              `json:"ftp_shares,omitempty"`
+	FTPUsers        []FTPUserEntry               `json:"ftp_users,omitempty"`
+}
+
+// FTPUserEntry defines an FTP user account stored in settings.
+type FTPUserEntry struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	// Shares lists the share names this user can access. Empty = all shares.
+	Shares   []string `json:"shares,omitempty"`
+	ReadOnly bool     `json:"read_only"`
+}
+
+// FTPShareEntry defines a folder shared via the built-in FTP server.
+// A share can reference one or more mount paths. When multiple paths are
+// specified, their contents are merged into a single virtual directory.
+type FTPShareEntry struct {
+	// Name is the FTP folder name visible to clients.
+	Name string `json:"name"`
+	// Paths lists the mount paths included in this share.
+	// Each path is formatted as "mount_prefix" or "mount_prefix/sub/folder".
+	Paths []string `json:"paths"`
+	// ReadOnly restricts FTP clients to read-only access on this share.
+	ReadOnly bool `json:"read_only"`
 }
 
 type PatchSettings struct {
-	Action   ActionKey                    `json:"action"`
-	External map[string]external.External `json:"external,omitempty"`
+	Action    ActionKey                    `json:"action"`
+	External  map[string]external.External `json:"external,omitempty"`
+	RawMounts *[]RawMountEntry             `json:"raw_mounts,omitempty"` // pointer to distinguish nil (not provided) from empty
+	FTPShares *[]FTPShareEntry             `json:"ftp_shares,omitempty"` // pointer to distinguish nil from empty
+	FTPUsers  *[]FTPUserEntry              `json:"ftp_users,omitempty"`
 }
 
 type ActionKey string
@@ -62,6 +130,21 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 		}
 	default:
 		return ErrBadRequest
+	}
+
+	// Handle raw mounts update (if provided)
+	if patch.RawMounts != nil {
+		settings.RawMounts = *patch.RawMounts
+	}
+
+	// Handle FTP shares update (if provided)
+	if patch.FTPShares != nil {
+		settings.FTPShares = *patch.FTPShares
+	}
+
+	// Handle FTP users update (if provided)
+	if patch.FTPUsers != nil {
+		settings.FTPUsers = *patch.FTPUsers
 	}
 
 	return s.UpdateSettings(ctx, settings)

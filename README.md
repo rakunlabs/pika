@@ -225,6 +225,151 @@ Pull only specific fields and inject them at a target path:
   inject: database.connection   # Place under this key
 ```
 
+## Raw Filesystem Serving
+
+Pika can serve files directly from local filesystem directories over HTTP. This is useful for serving static assets, certificates, or any files that don't need versioning or the config management features.
+
+### Configuration
+
+Raw mounts support three backend types: **local** (filesystem), **S3** (compatible), and **FTP/FTPS**. Mounts can be configured via config file, environment variables, or the Settings UI.
+
+#### Local Directory
+
+```yaml
+server:
+  raw:
+    - prefix: configs
+      type: local        # default, can be omitted
+      path: /opt/configs
+```
+
+#### S3-Compatible Storage
+
+```yaml
+server:
+  raw:
+    - prefix: assets
+      type: s3
+      s3:
+        bucket: my-assets
+        region: us-east-1
+        endpoint: ""              # leave empty for AWS S3
+        access_key: AKIA...
+        secret_key: wJal...
+        prefix: ""                # optional key prefix within bucket
+        path_style: false         # set true for MinIO
+        secure: true              # use HTTPS
+```
+
+Works with AWS S3, MinIO, Cloudflare R2, DigitalOcean Spaces, and any S3-compatible storage.
+
+#### FTP/FTPS
+
+```yaml
+server:
+  raw:
+    - prefix: legacy
+      type: ftp
+      ftp:
+        host: ftp.example.com:21
+        username: admin
+        password: secret
+        tls: false                # set true for FTPS
+        base_path: /data          # remote directory root
+```
+
+#### FUSE Mounts
+
+FUSE mounts (e.g., `s3fs`, `rclone mount`, `sshfs`, `gcsfuse`) appear as normal directories on the host. Use `type: local` with the FUSE mount path:
+
+```yaml
+server:
+  raw:
+    - prefix: remote-bucket
+      type: local
+      path: /mnt/s3-fuse          # FUSE mount point
+```
+
+#### Environment Variables
+
+```sh
+PIKA_SERVER_RAW_0_PREFIX=configs
+PIKA_SERVER_RAW_0_TYPE=local
+PIKA_SERVER_RAW_0_PATH=/opt/configs
+PIKA_SERVER_RAW_1_PREFIX=assets
+PIKA_SERVER_RAW_1_TYPE=s3
+PIKA_SERVER_RAW_1_S3_BUCKET=my-assets
+PIKA_SERVER_RAW_1_S3_REGION=us-east-1
+PIKA_SERVER_RAW_1_S3_ACCESS_KEY=AKIA...
+PIKA_SERVER_RAW_1_S3_SECRET_KEY=wJal...
+```
+
+### API
+
+Files are served at `/raw/{prefix}/{path}`:
+
+```sh
+# Read a file (main server — requires Bearer token)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/raw/configs/app.json
+
+# Read a file (public server — no auth)
+curl http://localhost:9090/raw/configs/app.json
+
+# Directory listing (returns JSON array)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/raw/configs/
+
+# Upload a file (S3 mounts only — requires write scope)
+curl -X PUT -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --data-binary @app.json \
+  http://localhost:8080/raw/assets/app.json
+
+# Delete a file (S3 mounts only — requires delete scope)
+curl -X DELETE -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/raw/assets/app.json
+```
+
+Directory listings return a JSON array of entries:
+
+```json
+[
+  { "name": "app.json", "is_dir": false, "size": 1234 },
+  { "name": "subdir", "is_dir": true, "size": 0 }
+]
+```
+
+Token scopes match against `raw/{prefix}/{path}` — for example, a token with scope `raw/**` can access all raw mounts, or `raw/configs/**` for a specific mount. Write operations require `write` permission, delete requires `delete`.
+
+### Web UI — File Browser
+
+When raw mounts are configured, a **Files** link appears in the navigation bar. The file browser provides:
+
+- **Tree navigation** — mount points shown as top-level nodes with backend type badges (Local, S3, FTP), directories expand on click
+- **Smart file viewing** — files open with the appropriate viewer based on their extension:
+  - **Text/Code** — syntax-highlighted read-only editor for known text formats (JSON, YAML, Go, Python, Markdown, etc.)
+  - **Images** — inline preview for PNG, JPG, SVG, WebP, etc.
+  - **Video/Audio** — native browser player with controls for MP4, WebM, MP3, WAV, etc.
+  - **PDF** — embedded PDF viewer
+  - **Binary** — a placeholder with an "Open Anyway" button that shows a hex dump viewer
+- **Tabs** — multiple files can be open simultaneously with right-click context menu (Close, Close Others, Close All)
+- **File info panel** — shows file metadata (name, mount, path, size, content type)
+- **Download button** — always available in the toolbar to download any file
+- **Large file protection** — text files over 5 MB are truncated with a warning; hex viewer limited to 10 MB
+- **Write operations** (S3 mounts only):
+  - **Upload** — upload files via the tree (upload button on hover)
+  - **Create folder** — create new directories
+  - **Delete** — delete files (delete button on hover)
+
+### Settings UI
+
+Raw mounts can also be managed from **Settings > Raw Mounts** in the web UI. The form supports all three backend types with conditional fields:
+
+- **Local**: directory path input
+- **S3**: bucket, region, endpoint, credentials, key prefix, path-style toggle
+- **FTP**: host, credentials, base path, TLS toggle
+
+Changes take effect immediately — no server restart required.
+
 ## Configuration
 
 Pika is configured via environment variables (prefixed with `PIKA_`) or a config file.
@@ -237,6 +382,11 @@ Pika is configured via environment variables (prefixed with `PIKA_`) or a config
 | `PIKA_SERVER_BASE_PATH`      | `/`                | Base URL path                                |
 | `PIKA_STORAGE_PATH`          | `pika.db`          | SQLite database path                         |
 | `PIKA_SECRET_ENCRYPTION_KEY` |                    | Encryption key — setting this enables encryption |
+| `PIKA_SERVER_RAW_N_PREFIX`   |                    | URL prefix for raw mount N (e.g., `configs`) |
+| `PIKA_SERVER_RAW_N_TYPE`     | `local`            | Backend type: `local`, `s3`, `ftp`           |
+| `PIKA_SERVER_RAW_N_PATH`     |                    | Local directory for raw mount N              |
+| `PIKA_SERVER_RAW_N_S3_*`     |                    | S3 config: `BUCKET`, `REGION`, `ENDPOINT`, etc. |
+| `PIKA_SERVER_RAW_N_FTP_*`    |                    | FTP config: `HOST`, `USERNAME`, `PASSWORD`, etc. |
 | `PIKA_LOG_LEVEL`             | `info`             | Log level                                    |
 
 ### Built-in Authentication

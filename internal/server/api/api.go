@@ -8,12 +8,21 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+
+	"log/slog"
 
 	"github.com/rakunlabs/ada"
+	"github.com/rakunlabs/pika/internal/config"
+	"github.com/rakunlabs/pika/internal/ftpserve"
+	"github.com/rakunlabs/pika/internal/rawfs"
+	"github.com/rakunlabs/pika/internal/rawfs/localfs"
 	"github.com/rakunlabs/pika/internal/secret"
 	"github.com/rakunlabs/pika/internal/secret/crypto"
 	"github.com/rakunlabs/pika/internal/server/session"
 	"github.com/rakunlabs/pika/internal/service"
+	"github.com/rakunlabs/pika/internal/sftpserve"
+	"github.com/rakunlabs/pika/internal/tftpserve"
 )
 
 // userMiddleware extracts the X-User header and injects it into the request context.
@@ -40,6 +49,7 @@ type api struct {
 	info         Info
 	encStore     *secret.Storage // nil if encryption is disabled
 	sessionStore *session.Store  // nil if built-in auth is disabled
+	rawHandler   *rawHandler     // nil if no raw mounts configured
 }
 
 // SessionStore is the interface for session management.
@@ -57,17 +67,19 @@ type response struct {
 }
 
 // HandlePublic registers unauthenticated endpoints for the public port.
-// Only /data/* and /healthz are exposed — no admin API, no UI.
-func HandlePublic(m *ada.Mux, svc *service.Service) error {
-	a := &api{svc: svc}
+// Only /data/*, /raw/* and /healthz are exposed — no admin API, no UI.
+func HandlePublic(m *ada.Mux, svc *service.Service, rh *rawHandler) error {
+	a := &api{svc: svc, rawHandler: rh}
+
 	m.ErrorHandler(a.errorHandler)
 	m.GET("/data/*", m.Wrap(a.getDataPublic))
+	m.GET("/raw/*", m.Wrap(a.getRawPublic))
 	m.GET("/healthz", m.Wrap(a.healthzHandler))
 	return nil
 }
 
-func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, sessionStore *session.Store) error {
-	api := &api{svc: svc, info: info, encStore: encStore, sessionStore: sessionStore}
+func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, sessionStore *session.Store, rh *rawHandler) error {
+	api := &api{svc: svc, info: info, encStore: encStore, sessionStore: sessionStore, rawHandler: rh}
 
 	// Inject X-User header into context for all API requests
 	m.Use(userMiddleware)
@@ -77,6 +89,11 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	mData.ErrorHandler(api.errorHandler)
 	// Data endpoint — consumer-facing, returns resolved config (with token auth)
 	mData.GET("/data/*", mData.Wrap(api.getData))
+
+	// Raw file endpoints (with token auth)
+	mData.GET("/raw/*", mData.Wrap(api.getRaw))
+	mData.PUT("/raw/*", mData.Wrap(api.putRaw))
+	mData.DELETE("/raw/*", mData.Wrap(api.deleteRaw))
 
 	// Auth endpoints — registered on the unprotected mux (no session middleware)
 	if sessionStore != nil {
@@ -140,6 +157,15 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.GET("/api/v1/backup", m.Wrap(api.exportBackup))
 	m.POST("/api/v1/backup", m.Wrap(api.importBackup))
 
+	// Raw filesystem browsing and management (for UI, uses session auth)
+	m.GET("/api/v1/raw/*", m.Wrap(api.rawHandler.serveRaw))
+	m.PUT("/api/v1/raw/*", m.Wrap(api.rawHandler.writeFile))
+	m.DELETE("/api/v1/raw/*", m.Wrap(api.rawHandler.deleteFile))
+	m.POST("/api/v1/raw-mkdir/*", m.Wrap(api.rawHandler.mkDir))
+	m.POST("/api/v1/raw-rename", m.Wrap(api.rawHandler.renameFile))
+	m.POST("/api/v1/raw-copy", m.Wrap(api.rawHandler.copyFile))
+	m.POST("/api/v1/raw-move", m.Wrap(api.rawHandler.moveFile))
+
 	// External resource browsing
 	m.GET("/api/v1/external/*/paths", m.Wrap(api.listExternalPaths))
 
@@ -177,12 +203,14 @@ func (a *api) infoHandler(c *ada.Context) error {
 
 	resp := struct {
 		Info
-		User        string `json:"user,omitempty"`
-		AuthEnabled bool   `json:"auth_enabled"`
+		User        string      `json:"user,omitempty"`
+		AuthEnabled bool        `json:"auth_enabled"`
+		RawMounts   []MountInfo `json:"raw_mounts,omitempty"`
 	}{
 		Info:        a.info,
 		User:        user,
 		AuthEnabled: a.sessionStore != nil,
+		RawMounts:   a.rawHandler.MountsInfo(),
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(resp)
@@ -207,7 +235,375 @@ func (a *api) postSettings(c *ada.Context) error {
 		return err
 	}
 
+	// If raw mounts were updated, reload them into the handler
+	if patchSettings.RawMounts != nil {
+		if err := a.reloadRawMounts(c.Request.Context()); err != nil {
+			return err
+		}
+	}
+
+	// If FTP shares or users were updated, reload them
+	if patchSettings.FTPShares != nil {
+		a.reloadFTPShares(c.Request.Context())
+	}
+	if patchSettings.FTPUsers != nil {
+		a.reloadFTPUsers(c.Request.Context())
+	}
+
 	return c.SetStatus(http.StatusOK).SendJSON(patchSettings)
+}
+
+// reloadRawMounts reads the current settings and rebuilds mount entries.
+func (a *api) reloadRawMounts(ctx context.Context) error {
+	settings, err := a.svc.Settings(ctx)
+	if err != nil {
+		return fmt.Errorf("reading settings for raw mount reload: %w", err)
+	}
+
+	entries, errs := BuildMountEntries(settings.RawMounts)
+	for _, e := range errs {
+		slog.Warn("skipping invalid raw mount from settings", "error", e)
+	}
+
+	a.rawHandler.UpdateMounts(entries)
+	return nil
+}
+
+// reloadFTPShares rebuilds shares and updates FTP, SFTP, and TFTP servers.
+func (a *api) reloadFTPShares(ctx context.Context) {
+	shares := BuildFTPShares(ctx, a.svc, a.rawHandler)
+
+	a.rawHandler.mu.RLock()
+	ftpSrv := a.rawHandler.ftpServer
+	sftpSrv := a.rawHandler.sftpServer
+	tftpSrv := a.rawHandler.tftpServer
+	a.rawHandler.mu.RUnlock()
+
+	if ftpSrv != nil {
+		ftpSrv.UpdateShares(shares)
+	}
+	if sftpSrv != nil {
+		sftpSrv.UpdateShares(shares)
+	}
+	if tftpSrv != nil {
+		tftpSrv.UpdateShares(shares)
+	}
+	slog.Info("file shares reloaded", "count", len(shares))
+}
+
+// reloadFTPUsers rebuilds users and updates both FTP and SFTP servers.
+func (a *api) reloadFTPUsers(ctx context.Context) {
+	users := BuildFTPUsers(ctx, a.svc)
+
+	a.rawHandler.mu.RLock()
+	ftpSrv := a.rawHandler.ftpServer
+	sftpSrv := a.rawHandler.sftpServer
+	a.rawHandler.mu.RUnlock()
+
+	if ftpSrv != nil {
+		ftpSrv.UpdateUsers(users)
+	}
+	if sftpSrv != nil {
+		sftpSrv.UpdateUsers(users)
+	}
+	slog.Info("file server users reloaded", "count", len(users))
+}
+
+// BuildMountEntries creates mountEntry instances from settings entries.
+// Returns successfully created entries and any errors for failed ones.
+func BuildMountEntries(settingsEntries []service.RawMountEntry) ([]mountEntry, []error) {
+	var entries []mountEntry
+	var errs []error
+	seen := make(map[string]bool)
+
+	for _, m := range settingsEntries {
+		if m.Prefix == "" {
+			errs = append(errs, fmt.Errorf("raw mount prefix must not be empty"))
+			continue
+		}
+		if seen[m.Prefix] {
+			errs = append(errs, fmt.Errorf("duplicate raw mount prefix %q", m.Prefix))
+			continue
+		}
+		seen[m.Prefix] = true
+
+		mountType := m.Type
+		if mountType == "" {
+			mountType = "local"
+		}
+
+		fs, err := newRawFSFromSettings(mountType, m)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("mount %q: %w", m.Prefix, err))
+			continue
+		}
+
+		entries = append(entries, mountEntry{
+			Prefix:   m.Prefix,
+			FS:       fs,
+			Type:     mountType,
+			Writable: rawfs.IsWritable(fs),
+		})
+	}
+
+	return entries, errs
+}
+
+// newRawFSFromSettings creates a RawFS from a settings entry.
+func newRawFSFromSettings(mountType string, m service.RawMountEntry) (rawfs.RawFS, error) {
+	switch mountType {
+	case "local", "":
+		if m.Path == "" {
+			return nil, fmt.Errorf("path is required for local mount")
+		}
+		return localfs.New(m.Path)
+	case "s3":
+		if m.S3 == nil {
+			return nil, fmt.Errorf("s3 config is required")
+		}
+		if rawfs.NewS3FSFunc == nil {
+			return nil, fmt.Errorf("s3 backend not available")
+		}
+		return rawfs.NewS3FSFunc(m.S3.Bucket, m.S3.Region, m.S3.Endpoint, m.S3.AccessKey, m.S3.SecretKey, m.S3.Prefix, m.S3.PathStyle, m.S3.Secure)
+	case "ftp":
+		if m.FTP == nil {
+			return nil, fmt.Errorf("ftp config is required")
+		}
+		if rawfs.NewFTPFSFunc == nil {
+			return nil, fmt.Errorf("ftp backend not available")
+		}
+		return rawfs.NewFTPFSFunc(m.FTP.Host, m.FTP.Username, m.FTP.Password, m.FTP.BasePath, m.FTP.TLS)
+	case "sftp":
+		if m.SFTP == nil {
+			return nil, fmt.Errorf("sftp config is required")
+		}
+		if rawfs.NewSFTPFSFunc == nil {
+			return nil, fmt.Errorf("sftp backend not available")
+		}
+		return rawfs.NewSFTPFSFunc(m.SFTP.Host, m.SFTP.Username, m.SFTP.Password, m.SFTP.PrivateKey, m.SFTP.BasePath)
+	default:
+		return nil, fmt.Errorf("unknown mount type %q", mountType)
+	}
+}
+
+// NewRawFSFromConfig creates a RawFS from a config-file RawMount.
+func NewRawFSFromConfig(m config.RawMount) (rawfs.RawFS, error) {
+	mountType := m.Type
+	if mountType == "" {
+		mountType = "local"
+	}
+	switch mountType {
+	case "local":
+		if m.Path == "" {
+			return nil, fmt.Errorf("path is required for local mount")
+		}
+		return localfs.New(m.Path)
+	case "s3":
+		if m.S3 == nil {
+			return nil, fmt.Errorf("s3 config is required")
+		}
+		if rawfs.NewS3FSFunc == nil {
+			return nil, fmt.Errorf("s3 backend not available")
+		}
+		return rawfs.NewS3FSFunc(m.S3.Bucket, m.S3.Region, m.S3.Endpoint, m.S3.AccessKey, m.S3.SecretKey, m.S3.Prefix, m.S3.PathStyle, m.S3.Secure)
+	case "ftp":
+		if m.FTP == nil {
+			return nil, fmt.Errorf("ftp config is required")
+		}
+		if rawfs.NewFTPFSFunc == nil {
+			return nil, fmt.Errorf("ftp backend not available")
+		}
+		return rawfs.NewFTPFSFunc(m.FTP.Host, m.FTP.Username, m.FTP.Password, m.FTP.BasePath, m.FTP.TLS)
+	case "sftp":
+		if m.SFTP == nil {
+			return nil, fmt.Errorf("sftp config is required")
+		}
+		if rawfs.NewSFTPFSFunc == nil {
+			return nil, fmt.Errorf("sftp backend not available")
+		}
+		return rawfs.NewSFTPFSFunc(m.SFTP.Host, m.SFTP.Username, m.SFTP.Password, m.SFTP.PrivateKey, m.SFTP.BasePath)
+	default:
+		return nil, fmt.Errorf("unknown mount type %q", mountType)
+	}
+}
+
+// BuildMountEntriesFromConfig creates mount entries from config-file RawMounts.
+func BuildMountEntriesFromConfig(cfgMounts []config.RawMount) ([]mountEntry, []error) {
+	var entries []mountEntry
+	var errs []error
+	seen := make(map[string]bool)
+
+	for _, m := range cfgMounts {
+		if m.Prefix == "" {
+			errs = append(errs, fmt.Errorf("raw mount prefix must not be empty"))
+			continue
+		}
+		if seen[m.Prefix] {
+			errs = append(errs, fmt.Errorf("duplicate raw mount prefix %q", m.Prefix))
+			continue
+		}
+		seen[m.Prefix] = true
+
+		fs, err := NewRawFSFromConfig(m)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("mount %q: %w", m.Prefix, err))
+			continue
+		}
+
+		mountType := m.Type
+		if mountType == "" {
+			mountType = "local"
+		}
+
+		entries = append(entries, mountEntry{
+			Prefix:   m.Prefix,
+			FS:       fs,
+			Type:     mountType,
+			Writable: rawfs.IsWritable(fs),
+		})
+
+		slog.Info("raw mount configured", "prefix", "/raw/"+m.Prefix, "type", mountType)
+	}
+
+	return entries, errs
+}
+
+// BuildInitialRawHandler creates a rawHandler from config-file mounts merged with DB settings.
+func BuildInitialRawHandler(ctx context.Context, cfgMounts []config.RawMount, svc *service.Service) *rawHandler {
+	// Build config-file mount entries
+	entries, cfgErrs := BuildMountEntriesFromConfig(cfgMounts)
+	for _, err := range cfgErrs {
+		slog.Warn("skipping invalid config-file raw mount", "error", err)
+	}
+
+	// Merge DB-stored mounts (config-file mounts take precedence)
+	settings, err := svc.Settings(ctx)
+	if err != nil {
+		slog.Warn("could not load settings for raw mounts", "error", err)
+	} else if len(settings.RawMounts) > 0 {
+		seen := make(map[string]bool)
+		for _, e := range entries {
+			seen[e.Prefix] = true
+		}
+
+		dbEntries, dbErrs := BuildMountEntries(settings.RawMounts)
+		for _, err := range dbErrs {
+			slog.Warn("skipping invalid DB raw mount", "error", err)
+		}
+
+		for _, e := range dbEntries {
+			if seen[e.Prefix] {
+				slog.Info("skipping DB raw mount (overridden by config file)", "prefix", e.Prefix)
+				continue
+			}
+			entries = append(entries, e)
+		}
+	}
+
+	return NewRawHandler(entries)
+}
+
+// BuildFTPShares creates FTP share entries from the current settings, resolving
+// each path's mount prefix to the corresponding RawFS backend via the rawHandler.
+func BuildFTPShares(ctx context.Context, svc *service.Service, rh *rawHandler) []ftpserve.Share {
+	settings, err := svc.Settings(ctx)
+	if err != nil {
+		slog.Warn("could not load settings for FTP shares", "error", err)
+		return nil
+	}
+
+	rh.mu.RLock()
+	defer rh.mu.RUnlock()
+
+	// Build a mount lookup map
+	mountMap := make(map[string]rawfs.RawFS, len(rh.mounts))
+	for _, m := range rh.mounts {
+		mountMap[m.Prefix] = m.FS
+	}
+
+	var shares []ftpserve.Share
+	for _, s := range settings.FTPShares {
+		var sources []ftpserve.ShareSource
+		for _, p := range s.Paths {
+			// Parse "mount_prefix" or "mount_prefix/sub/path"
+			mountPrefix, subPath := parseMountPath(p)
+			fs, ok := mountMap[mountPrefix]
+			if !ok {
+				slog.Warn("FTP share path references unknown mount", "share", s.Name, "path", p, "mount", mountPrefix)
+				continue
+			}
+			sources = append(sources, ftpserve.ShareSource{
+				Mount: mountPrefix,
+				Path:  subPath,
+				FS:    fs,
+			})
+		}
+
+		if len(sources) == 0 {
+			slog.Warn("FTP share has no valid sources, skipping", "share", s.Name)
+			continue
+		}
+
+		shares = append(shares, ftpserve.Share{
+			Name:     s.Name,
+			Sources:  sources,
+			ReadOnly: s.ReadOnly,
+		})
+	}
+
+	return shares
+}
+
+// parseMountPath splits "mount_prefix/sub/path" into ("mount_prefix", "sub/path").
+func parseMountPath(p string) (string, string) {
+	p = strings.TrimPrefix(p, "/")
+	idx := strings.IndexByte(p, '/')
+	if idx < 0 {
+		return p, ""
+	}
+	return p[:idx], p[idx+1:]
+}
+
+// BuildFTPUsers creates FTP user entries from the current settings.
+func BuildFTPUsers(ctx context.Context, svc *service.Service) []ftpserve.User {
+	settings, err := svc.Settings(ctx)
+	if err != nil {
+		slog.Warn("could not load settings for FTP users", "error", err)
+		return nil
+	}
+
+	var users []ftpserve.User
+	for _, u := range settings.FTPUsers {
+		users = append(users, ftpserve.User{
+			Username: u.Username,
+			Password: u.Password,
+			Shares:   u.Shares,
+			ReadOnly: u.ReadOnly,
+		})
+	}
+
+	return users
+}
+
+// SetFTPServer stores the FTP server reference in the rawHandler for share reloading.
+func SetFTPServer(rh *rawHandler, ftpSrv *ftpserve.Server) {
+	rh.mu.Lock()
+	rh.ftpServer = ftpSrv
+	rh.mu.Unlock()
+}
+
+// SetSFTPServer stores the SFTP server reference in the rawHandler for share reloading.
+func SetSFTPServer(rh *rawHandler, sftpSrv *sftpserve.Server) {
+	rh.mu.Lock()
+	rh.sftpServer = sftpSrv
+	rh.mu.Unlock()
+}
+
+// SetTFTPServer stores the TFTP server reference in the rawHandler for share reloading.
+func SetTFTPServer(rh *rawHandler, tftpSrv *tftpserve.Server) {
+	rh.mu.Lock()
+	rh.tftpServer = tftpSrv
+	rh.mu.Unlock()
 }
 
 func (a *api) listExternalPaths(c *ada.Context) error {
