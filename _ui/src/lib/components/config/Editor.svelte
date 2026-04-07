@@ -267,9 +267,9 @@
           <input
             type="text"
             bind:value={saveConstraint}
-            placeholder=">= 0.0.0"
+            placeholder="Constraint (e.g. >= 1.0.0)"
             title="Semver constraint for this version (optional)"
-            class="w-20 px-1.5 py-0.5 text-[10px] font-mono bg-[#1e1e1e] border border-[#3c3c3c] rounded text-gray-400 placeholder:text-gray-600 focus:outline-none focus:border-amber-500"
+            class="w-40 px-2 py-1 text-[11px] font-mono bg-[#1e1e1e] border border-[#3c3c3c] rounded text-gray-400 placeholder:text-gray-600 focus:outline-none focus:border-amber-500"
           />
           <button
             class="flex items-center gap-1 px-2.5 py-1 bg-green-600 text-white border-none rounded text-[11px] font-medium cursor-pointer transition-colors hover:bg-green-500"

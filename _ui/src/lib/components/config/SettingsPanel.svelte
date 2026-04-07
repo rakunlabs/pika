@@ -241,57 +241,57 @@
                 {@const isCurrent = activeTab.version === ver.version || (activeTab.version === 0 && ver.version === activeTab.latestVersion)}
                 {@const isEditing = editingConstraintVersion === ver.version}
                 <div
-                  class="flex items-center justify-between w-full px-2.5 py-1.5 text-left text-[11px] border-b border-slate-100 last:border-b-0 transition-colors
+                  class="flex flex-col gap-1 w-full px-2.5 py-2 text-left border-b border-slate-100 last:border-b-0 transition-colors
                     {isCurrent ? 'bg-blue-50 text-blue-700' : 'hover:bg-slate-50 text-slate-600'}"
                 >
-                  <span class="flex items-center gap-1.5 min-w-0 flex-1">
+                  <span class="flex items-center gap-2 min-w-0">
                     <button
-                      class="font-mono font-medium shrink-0 cursor-pointer hover:underline"
+                      class="font-mono font-medium text-[12px] shrink-0 cursor-pointer hover:underline"
                       onclick={() => configStore.loadVersion(activeTab.id, ver.version)}
                       title="Load version {ver.version}"
                     >v{ver.version}</button>
                     {#if isEditing}
                       <!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
-                      <span class="flex items-center gap-1" onclick={(e) => e.stopPropagation()}>
+                      <span class="flex items-center gap-1.5" onclick={(e) => e.stopPropagation()}>
                         <input
                           type="text"
                           data-constraint-input
                           bind:value={editingConstraintValue}
                           onkeydown={(e) => handleConstraintKeydown(e, ver.version)}
                           placeholder=">= 0.0.0"
-                          class="w-20 px-1 py-0 text-[9px] font-mono border border-amber-400 rounded bg-white text-amber-700 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20"
+                          class="w-28 px-2 py-1 text-[11px] font-mono border border-amber-400 rounded bg-white text-amber-700 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20"
                         />
                         <button
-                          class="px-1 py-0 text-[9px] text-white bg-amber-500 rounded cursor-pointer hover:bg-amber-600 transition-colors"
+                          class="px-1.5 py-0.5 text-[10px] text-white bg-amber-500 rounded cursor-pointer hover:bg-amber-600 transition-colors"
                           onclick={() => saveConstraint(ver.version)}
                           title="Save constraint (Enter)"
                         >OK</button>
                         <button
-                          class="px-1 py-0 text-[9px] text-slate-500 bg-slate-100 rounded cursor-pointer hover:bg-slate-200 transition-colors"
+                          class="px-1.5 py-0.5 text-[10px] text-slate-500 bg-slate-100 rounded cursor-pointer hover:bg-slate-200 transition-colors"
                           onclick={cancelEditConstraint}
                           title="Cancel (Esc)"
                         >X</button>
                       </span>
                     {:else if ver.constraint}
                       <button
-                        class="px-1 py-0 text-[9px] font-mono bg-amber-100 text-amber-700 rounded cursor-pointer hover:bg-amber-200 transition-colors"
+                        class="px-1.5 py-0.5 text-[11px] font-mono bg-amber-100 text-amber-700 rounded cursor-pointer hover:bg-amber-200 transition-colors"
                         onclick={() => startEditConstraint(ver.version, ver.constraint ?? '')}
                         title="Click to edit constraint"
                       >{ver.constraint}</button>
                     {:else}
                       <button
-                        class="px-0.5 py-0 text-slate-300 cursor-pointer hover:text-amber-500 transition-colors"
+                        class="p-1 text-slate-300 cursor-pointer hover:text-amber-500 transition-colors"
                         onclick={() => startEditConstraint(ver.version, '')}
                         title="Add constraint"
                       >
-                        <Pencil size={10} />
+                        <Pencil size={12} />
                       </button>
                     {/if}
                   </span>
-                  <span class="flex items-center gap-1.5 text-[10px] text-slate-400 shrink-0">
+                  <span class="flex items-center gap-1.5 text-[10px] text-slate-400 pl-0.5">
                     {#if lastStatus?.author && lastStatus.author !== 'system'}
                       <span class="text-slate-500">{lastStatus.author}</span>
-                      <span class="text-slate-300">·</span>
+                      <span class="text-slate-300">&middot;</span>
                     {/if}
                     {#if lastStatus?.timestamp}
                       <span>{new Date(lastStatus.timestamp * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
