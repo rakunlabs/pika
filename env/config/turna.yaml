@@ -1,0 +1,23 @@
+server:
+  entrypoints:
+    web:
+      address: ":8080"
+  http:
+    middlewares:
+      hello:
+        hello:
+          message: "Got it!"
+      log:
+        access_log:
+          level: info
+          path:
+            enabled:
+              - url: /**
+                log_details:
+                  response_body: false
+    routers:
+      test:
+        path: /*
+        middlewares:
+          - log
+          - hello

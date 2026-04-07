@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/tummy"
 )
 
@@ -213,13 +214,22 @@ func (s *Service) SetFile(ctx context.Context, key string, data *File, expectedV
 		return tx.Files().Set(ctx, key, newVersion, data)
 	})
 
+	if err == nil {
+		s.emitHook(hook.Event{
+			Type:          hook.EventConfigCreated,
+			ConfigKey:     key,
+			ConfigVersion: createdVersion,
+			User:          UserFromContext(ctx),
+		})
+	}
+
 	return createdVersion, err
 }
 
 // DeleteFile deletes a file from storage at the given path.
 //   - if version is 0, delete completely
 func (s *Service) DeleteFile(ctx context.Context, key string, version int64) error {
-	return s.store.Tx(ctx, func(ctx context.Context, tx Storage) error {
+	err := s.store.Tx(ctx, func(ctx context.Context, tx Storage) error {
 		if version == 0 {
 			// delete completely
 			// Remove file from folder
@@ -264,6 +274,17 @@ func (s *Service) DeleteFile(ctx context.Context, key string, version int64) err
 		// Delete file data at versioned key
 		return tx.Files().Delete(ctx, key, version)
 	})
+
+	if err == nil {
+		s.emitHook(hook.Event{
+			Type:          hook.EventConfigDeleted,
+			ConfigKey:     key,
+			ConfigVersion: version,
+			User:          UserFromContext(ctx),
+		})
+	}
+
+	return err
 }
 
 // UpdateConstraint updates the semver constraint on an existing version.

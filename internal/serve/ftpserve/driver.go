@@ -5,6 +5,7 @@ package ftpserve
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path"
 	"strings"
@@ -163,6 +164,7 @@ func (fs *clientFS) Open(name string) (afero.File, error) {
 func (fs *clientFS) OpenFile(name string, flag int, perm os.FileMode) (afero.File, error) {
 	share, rest, err := fs.resolveShare(name)
 	if err != nil {
+		slog.Debug("FTP OpenFile: resolveShare failed", "name", name, "error", err)
 		return nil, err
 	}
 
@@ -178,13 +180,15 @@ func (fs *clientFS) OpenFile(name string, flag int, perm os.FileMode) (afero.Fil
 		return &dirFile{name: displayName, fs: fs, share: share}, nil
 	}
 
+	isWrite := flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC) != 0
+
 	// Check if target is a directory
 	if fi, statErr := fs.Stat(name); statErr == nil && fi.IsDir() {
 		return &dirFile{name: path.Base(name), fs: fs, share: share, rest: rest}, nil
 	}
 
 	// Write mode
-	if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC) != 0 {
+	if isWrite {
 		if fs.isReadOnly(share) {
 			return nil, fmt.Errorf("share %q is read-only", share.Name)
 		}
@@ -194,9 +198,10 @@ func (fs *clientFS) OpenFile(name string, flag int, perm os.FileMode) (afero.Fil
 		return fs.openWrite(share, rest, name)
 	}
 
-	// Read mode
+	// Read mode — file must exist
 	src, err := findInSources(share, rest)
 	if err != nil {
+		slog.Debug("FTP OpenFile: file not found in read mode", "name", name, "rest", rest, "error", err)
 		return nil, err
 	}
 
@@ -218,6 +223,7 @@ func (fs *clientFS) openWrite(share *Share, rest, fullName string) (afero.File, 
 	if findErr == nil {
 		wfs, ok := src.FS.(rawfs.WritableRawFS)
 		if !ok {
+			slog.Debug("FTP openWrite: existing source not writable", "share", share.Name, "rest", rest)
 			return nil, fmt.Errorf("source is not writable")
 		}
 		return newWriteFile(path.Base(fullName), wfs, sourceFSPath(src, rest)), nil
@@ -226,6 +232,7 @@ func (fs *clientFS) openWrite(share *Share, rest, fullName string) (afero.File, 
 	// New file — write to first writable source
 	wsrc, wfs, err := firstWritableSource(share)
 	if err != nil {
+		slog.Debug("FTP openWrite: no writable source", "share", share.Name, "rest", rest, "error", err)
 		return nil, fmt.Errorf("share %q: %w", share.Name, err)
 	}
 	return newWriteFile(path.Base(fullName), wfs, sourceFSPath(wsrc, rest)), nil

@@ -207,6 +207,86 @@ export interface TFTPServeSettings {
   host?: string;
 }
 
+// HTTP webhook target configuration
+export interface HTTPTarget {
+  url: string;
+  method?: string;         // default: "POST"
+  headers?: Record<string, string>;
+  timeout?: string;        // e.g., "10s", default: "30s"
+}
+
+// Kafka SASL/PLAIN authentication
+export interface KafkaSASLPlain {
+  enabled?: boolean;
+  user?: string;
+  pass?: string;
+}
+
+// Kafka SASL/SCRAM authentication
+export interface KafkaSASLSCRAM {
+  enabled?: boolean;
+  algorithm?: string;   // "SCRAM-SHA-256" or "SCRAM-SHA-512"
+  user?: string;
+  pass?: string;
+  is_token?: boolean;
+}
+
+// Kafka SASL mechanism (plain or scram)
+export interface KafkaSASLEntry {
+  plain?: KafkaSASLPlain;
+  scram?: KafkaSASLSCRAM;
+}
+
+// Kafka TLS configuration
+// Each field supports: file path, inline PEM text, or reference (raw://mount/path, config://key)
+export interface KafkaTLS {
+  enabled?: boolean;
+  cert_file?: string;    // path to client cert file
+  cert_pem?: string;     // inline PEM or raw://... or config://...
+  key_file?: string;     // path to client key file
+  key_pem?: string;      // inline PEM or raw://... or config://...
+  ca_file?: string;      // path to CA cert file
+  ca_pem?: string;       // inline PEM or raw://... or config://...
+}
+
+// Kafka security (TLS + SASL)
+export interface KafkaSecurity {
+  tls?: KafkaTLS;
+  sasl?: KafkaSASLEntry[];
+}
+
+// Kafka producer target configuration
+export interface KafkaTarget {
+  brokers: string[];
+  topic: string;
+  key_template?: string;   // Go template for Kafka message key
+  auto_topic_creation?: boolean; // enable broker-side auto topic creation
+  security?: KafkaSecurity;
+}
+
+// A single push destination for hook events
+export interface HookTarget {
+  type: string;            // "http" or "kafka"
+  http?: HTTPTarget;
+  kafka?: KafkaTarget;
+  body_template?: string;  // Go text/template for custom payload
+}
+
+// Filter to restrict which events a hook receives
+export interface HookFilter {
+  mounts?: string[];       // restrict to specific mount prefixes
+  path_pattern?: string;   // glob pattern for matching file paths
+}
+
+// Hook definition — an event hook with filters and targets
+export interface Hook {
+  name: string;
+  enabled: boolean;
+  events: string[];        // e.g., ["file.created", "file.deleted", "*"]
+  filter?: HookFilter;
+  targets: HookTarget[];
+}
+
 // Settings from API
 export interface Settings {
   external?: Record<string, ExternalResource>;
@@ -216,6 +296,7 @@ export interface Settings {
   ftp_serve?: FTPServeSettings;
   sftp_serve?: SFTPServeSettings;
   tftp_serve?: TFTPServeSettings;
+  hooks?: Hook[];
 }
 
 // API response types

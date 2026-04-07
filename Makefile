@@ -29,12 +29,21 @@ build-container: build ## Build the container image with test tag
 	docker build -t $(PROJECT):test -f ci/Dockerfile dist/$(BINARY)_linux_amd64_v1/
 
 .PHONY: run
+run: export LOG_LEVEL := debug
 run: ## Run the application
 	go run $(MAIN_FILE)
 
 .PHONY: run-ui
 run-ui: ## Run the frontend development server
 	@cd _ui && pnpm run dev
+
+.PHONY: env
+env: ## Start the local development environment with Docker Compose
+	docker compose -f env/compose.yaml up
+
+.PHONY: env-down
+env-down: ## Stop the local development environment
+	docker compose -f env/compose.yaml down
 
 .PHONY: lint
 lint: ## Lint Go files

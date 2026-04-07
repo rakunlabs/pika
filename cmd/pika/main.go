@@ -29,6 +29,7 @@ var (
 )
 
 func main() {
+	config.Version = version
 	config.Service += "/" + version
 
 	into.Init(run,

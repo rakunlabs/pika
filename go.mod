@@ -29,6 +29,7 @@ require (
 	github.com/rakunlabs/tell v0.1.2
 	github.com/rakunlabs/tummy v0.1.2
 	github.com/spf13/afero v1.15.0
+	github.com/twmb/franz-go v1.20.7
 	golang.org/x/crypto v0.49.0
 	modernc.org/sqlite v1.47.0
 )
@@ -47,7 +48,7 @@ require (
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-envparse v0.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
-	github.com/klauspost/compress v1.18.2 // indirect
+	github.com/klauspost/compress v1.18.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.11 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
@@ -58,10 +59,12 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
+	github.com/pierrec/lz4/v4 v4.1.25 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/tinylib/msgp v1.6.1 // indirect
+	github.com/twmb/franz-go/pkg/kmsg v1.12.0 // indirect
 	github.com/twmb/tlscfg v1.3.0 // indirect
 	github.com/worldline-go/struct2 v1.4.0 // indirect
 	github.com/xhit/go-str2duration/v2 v2.1.0 // indirect

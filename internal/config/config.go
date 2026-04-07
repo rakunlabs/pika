@@ -16,6 +16,7 @@ import (
 var (
 	ServiceName = "pika"
 	Service     = ServiceName
+	Version     = "v0.0.0"
 )
 
 type Config struct {

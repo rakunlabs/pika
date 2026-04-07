@@ -33,8 +33,13 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		return fmt.Errorf("forward_auth and auth are mutually exclusive; configure only one")
 	}
 
-	// Build initial raw mount handler from config + DB settings
+	// Build initial raw mount handler from config + DB settings (includes hook dispatcher)
 	rh := api.BuildInitialRawHandler(ctx, cfg.Server.Raw, svc)
+
+	// Wire the hook dispatcher into the service for config-level events
+	if d := api.GetDispatcher(rh); d != nil {
+		svc.SetHookDispatcher(d)
+	}
 
 	server := ada.New()
 	server.Use(

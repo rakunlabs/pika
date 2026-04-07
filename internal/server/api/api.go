@@ -14,6 +14,7 @@ import (
 
 	"github.com/rakunlabs/ada"
 	"github.com/rakunlabs/pika/internal/config"
+	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/rawfs"
 	"github.com/rakunlabs/pika/internal/rawfs/localfs"
 	"github.com/rakunlabs/pika/internal/secret"
@@ -79,6 +80,10 @@ func HandlePublic(m *ada.Mux, svc *service.Service, rh *rawHandler) error {
 }
 
 func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, sessionStore *session.Store, rh *rawHandler) error {
+	// Set hook service identification from config
+	hook.ServiceName = config.ServiceName
+	hook.Version = config.Version
+
 	api := &api{svc: svc, info: info, encStore: encStore, sessionStore: sessionStore, rawHandler: rh}
 
 	// Inject X-User header into context for all API requests
@@ -144,6 +149,8 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 
 	// Key rotation endpoint (requires admin_secret)
 	m.POST("/api/v1/rotate", m.Wrap(api.rotateKey))
+	m.POST("/api/v1/tls-generate", m.Wrap(api.generateTLS))
+	m.POST("/api/v1/ssh-keygen", m.Wrap(api.generateSSHKey))
 
 	// Admin secret management endpoints
 	m.GET("/api/v1/admin-secret/status", m.Wrap(api.adminSecretStatus))
@@ -250,6 +257,11 @@ func (a *api) postSettings(c *ada.Context) error {
 		a.reloadFTPUsers(c.Request.Context())
 	}
 
+	// If hooks were updated, reload them in the dispatcher
+	if patchSettings.Hooks != nil {
+		a.reloadHooks(c.Request.Context())
+	}
+
 	// If serve settings were updated, reload the corresponding servers
 	if patchSettings.FTPServe != nil || patchSettings.SFTPServe != nil || patchSettings.TFTPServe != nil {
 		settings, err := a.svc.Settings(c.Request.Context())
@@ -269,6 +281,20 @@ func (a *api) postSettings(c *ada.Context) error {
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(patchSettings)
+}
+
+// reloadHooks reads hooks from settings and updates the dispatcher.
+func (a *api) reloadHooks(ctx context.Context) {
+	settings, err := a.svc.Settings(ctx)
+	if err != nil {
+		slog.Error("failed to read settings for hook reload", "error", err)
+		return
+	}
+
+	if a.rawHandler != nil && a.rawHandler.dispatcher != nil {
+		a.rawHandler.dispatcher.UpdateHooks(settings.Hooks)
+		slog.Info("hooks reloaded", "count", len(settings.Hooks))
+	}
 }
 
 // reloadRawMounts reads the current settings and rebuilds mount entries.
@@ -614,6 +640,7 @@ func BuildMountEntriesFromConfig(cfgMounts []config.RawMount) ([]mountEntry, []e
 }
 
 // BuildInitialRawHandler creates a rawHandler from config-file mounts merged with DB settings.
+// It also creates the hook dispatcher and loads hooks from the database.
 func BuildInitialRawHandler(ctx context.Context, cfgMounts []config.RawMount, svc *service.Service) *rawHandler {
 	// Build config-file mount entries
 	entries, cfgErrs := BuildMountEntriesFromConfig(cfgMounts)
@@ -645,7 +672,42 @@ func BuildInitialRawHandler(ctx context.Context, cfgMounts []config.RawMount, sv
 		}
 	}
 
-	return NewRawHandler(entries, ctx)
+	// Create and start the hook dispatcher
+	dispatcher := hook.NewDispatcher(256)
+	dispatcher.Start(ctx)
+
+	rh := NewRawHandler(entries, ctx, dispatcher)
+
+	// Set up the resolver so PEM references (raw://, config://) can be resolved
+	resolver := hook.NewResolver(
+		// rawMounts provider: returns a map of mount prefix -> RawFS
+		func() map[string]rawfs.RawFS {
+			rh.mu.RLock()
+			defer rh.mu.RUnlock()
+			m := make(map[string]rawfs.RawFS, len(rh.mounts))
+			for _, me := range rh.mounts {
+				// Use the inner FS (unwrap the hook decorator) to avoid recursive events
+				m[me.Prefix] = hook.Inner(me.FS)
+			}
+			return m
+		},
+		// configData provider: reads config file data by key
+		func(ctx context.Context, key string) ([]byte, error) {
+			file, err := svc.File(ctx, key, 0) // version 0 = latest
+			if err != nil {
+				return nil, err
+			}
+			return file.Data, nil
+		},
+	)
+	dispatcher.SetResolver(resolver)
+
+	// Load hooks from settings (if any)
+	if settings != nil && len(settings.Hooks) > 0 {
+		dispatcher.UpdateHooks(settings.Hooks)
+	}
+
+	return rh
 }
 
 // BuildFTPShares creates FTP share entries from the current settings, resolving
@@ -730,6 +792,11 @@ func BuildFTPUsers(ctx context.Context, svc *service.Service) []ftpserve.User {
 	}
 
 	return users
+}
+
+// GetDispatcher returns the hook dispatcher from the rawHandler.
+func GetDispatcher(rh *rawHandler) *hook.Dispatcher {
+	return rh.Dispatcher()
 }
 
 // SetFTPServer stores the FTP server reference and its cancel func in the rawHandler.

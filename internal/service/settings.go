@@ -7,6 +7,7 @@ import (
 	"maps"
 
 	"github.com/rakunlabs/pika/internal/external"
+	"github.com/rakunlabs/pika/internal/hook"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -59,6 +60,7 @@ type Settings struct {
 	FTPServe        *FTPServeSettings            `json:"ftp_serve,omitempty"`
 	SFTPServe       *SFTPServeSettings           `json:"sftp_serve,omitempty"`
 	TFTPServe       *TFTPServeSettings           `json:"tftp_serve,omitempty"`
+	Hooks           []hook.Hook                  `json:"hooks,omitempty"`
 }
 
 // FTPServeSettings configures the built-in FTP server (stored in DB).
@@ -135,6 +137,7 @@ type PatchSettings struct {
 	FTPServe  *FTPServeSettings            `json:"ftp_serve,omitempty"`
 	SFTPServe *SFTPServeSettings           `json:"sftp_serve,omitempty"`
 	TFTPServe *TFTPServeSettings           `json:"tftp_serve,omitempty"`
+	Hooks     *[]hook.Hook                 `json:"hooks,omitempty"` // pointer to distinguish nil from empty
 }
 
 type ActionKey string
@@ -215,6 +218,11 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 	}
 	if patch.TFTPServe != nil {
 		settings.TFTPServe = patch.TFTPServe
+	}
+
+	// Handle hooks update (if provided)
+	if patch.Hooks != nil {
+		settings.Hooks = *patch.Hooks
 	}
 
 	return s.UpdateSettings(ctx, settings)

@@ -16,11 +16,12 @@ import (
 	"time"
 
 	"github.com/rakunlabs/ada"
-	"github.com/rakunlabs/pika/internal/serve/ftpserve"
+	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/rawfs"
-	"github.com/rakunlabs/pika/internal/service"
+	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/serve/sftpserve"
 	"github.com/rakunlabs/pika/internal/serve/tftpserve"
+	"github.com/rakunlabs/pika/internal/service"
 )
 
 // mountEntry holds a prefix and its associated filesystem backend.
@@ -43,11 +44,15 @@ type rawHandler struct {
 	sftpCancel context.CancelFunc
 	tftpCancel context.CancelFunc
 	appCtx     context.Context
+	dispatcher *hook.Dispatcher
 }
 
 // NewRawHandler creates a new rawHandler with initial mount entries.
-func NewRawHandler(entries []mountEntry, appCtx context.Context) *rawHandler {
-	return &rawHandler{mounts: entries, appCtx: appCtx}
+// If dispatcher is non-nil, all mount FS backends are wrapped with hook event emission.
+func NewRawHandler(entries []mountEntry, appCtx context.Context, dispatcher *hook.Dispatcher) *rawHandler {
+	rh := &rawHandler{appCtx: appCtx, dispatcher: dispatcher}
+	rh.mounts = rh.wrapMounts(entries)
+	return rh
 }
 
 // MountInfo holds serializable info about a mount for the API.
@@ -72,10 +77,29 @@ func (h *rawHandler) MountsInfo() []MountInfo {
 	return out
 }
 
+// wrapMounts wraps each mount's FS with the hook dispatcher (if set).
+func (h *rawHandler) wrapMounts(entries []mountEntry) []mountEntry {
+	if h.dispatcher == nil {
+		return entries
+	}
+	wrapped := make([]mountEntry, len(entries))
+	for i, m := range entries {
+		wrapped[i] = mountEntry{
+			Prefix:   m.Prefix,
+			FS:       hook.NewHookedFS(m.FS, h.dispatcher, m.Prefix, "http"),
+			Type:     m.Type,
+			Writable: m.Writable,
+		}
+	}
+	return wrapped
+}
+
 // UpdateMounts replaces the current mounts.
 func (h *rawHandler) UpdateMounts(entries []mountEntry) {
+	wrapped := h.wrapMounts(entries)
+
 	h.mu.Lock()
-	h.mounts = entries
+	h.mounts = wrapped
 	h.mu.Unlock()
 
 	for _, m := range entries {
@@ -404,6 +428,14 @@ func (a *api) deleteRaw(c *ada.Context) error {
 	}
 
 	return a.rawHandler.deleteFile(c)
+}
+
+// Dispatcher returns the hook dispatcher (may be nil if no mounts are configured).
+func (h *rawHandler) Dispatcher() *hook.Dispatcher {
+	if h == nil {
+		return nil
+	}
+	return h.dispatcher
 }
 
 // getRawPublic serves raw files without authentication.

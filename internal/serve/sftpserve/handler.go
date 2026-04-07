@@ -237,6 +237,9 @@ func (h *sftpHandler) Filecmd(r *sftp.Request) error {
 	case "Symlink":
 		return sftp.ErrSSHFxOpUnsupported
 
+	case "Setstat":
+		return nil // no-op: virtual FS does not support permissions/timestamps
+
 	default:
 		return sftp.ErrSSHFxOpUnsupported
 	}

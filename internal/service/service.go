@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/rakunlabs/pika/internal/external"
+	"github.com/rakunlabs/pika/internal/hook"
 )
 
 type Service struct {
@@ -18,6 +19,10 @@ type Service struct {
 	// kubeClients caches Kubernetes clients keyed by kubeconfig path (or "" for in-cluster).
 	kubeMu      sync.RWMutex
 	kubeClients map[string]*external.KubeClient
+
+	// hookDispatcher emits events when config operations occur.
+	// May be nil if hooks are not configured.
+	hookDispatcher *hook.Dispatcher
 }
 
 func New(store Storage) *Service {
@@ -25,6 +30,18 @@ func New(store Storage) *Service {
 		store:        store,
 		vaultClients: make(map[string]*external.VaultClient),
 		kubeClients:  make(map[string]*external.KubeClient),
+	}
+}
+
+// SetHookDispatcher sets the hook dispatcher for emitting config events.
+func (s *Service) SetHookDispatcher(d *hook.Dispatcher) {
+	s.hookDispatcher = d
+}
+
+// emitHook emits a hook event if the dispatcher is set.
+func (s *Service) emitHook(event hook.Event) {
+	if s.hookDispatcher != nil {
+		s.hookDispatcher.Emit(event)
 	}
 }
 

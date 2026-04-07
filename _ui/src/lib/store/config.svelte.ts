@@ -716,6 +716,25 @@ function createConfigStore() {
     }
   }
 
+  async function saveHooks(hooks: import('@/lib/types/config').Hook[]): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', {
+        action: 'set',
+        hooks: hooks
+      });
+      if (settings) {
+        settings = { ...settings, hooks: hooks };
+      } else {
+        settings = { hooks: hooks };
+      }
+      addToast('Hooks saved', 'success');
+    } catch (error: any) {
+      const msg = error.response?.data?.message || 'Failed to save hooks';
+      addToast(msg, 'alert');
+      throw error;
+    }
+  }
+
   async function saveRawMounts(mounts: import('@/lib/types/config').RawMountEntry[]): Promise<void> {
     try {
       await axios.post('/api/v1/settings', {
@@ -1085,6 +1104,7 @@ function createConfigStore() {
     saveFTPShares,
     saveFTPUsers,
     saveServeSettings,
+    saveHooks,
     listExternalPaths,
 
     // Token operations
