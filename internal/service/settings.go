@@ -68,6 +68,13 @@ type FTPServeSettings struct {
 	Host         string `json:"host,omitempty"`
 	PublicIP     string `json:"public_ip,omitempty"`
 	PassivePorts string `json:"passive_ports,omitempty"`
+	// TLSCertFile is the path to a PEM-encoded TLS certificate file (or certificate chain).
+	TLSCertFile string `json:"tls_cert_file,omitempty"`
+	// TLSKeyFile is the path to the PEM-encoded TLS private key file.
+	TLSKeyFile string `json:"tls_key_file,omitempty"`
+	// TLSRequired controls TLS mode: 0 = disabled/optional, 1 = explicit FTPS (AUTH TLS required),
+	// 2 = implicit FTPS (entire connection is TLS from the start).
+	TLSRequired int `json:"tls_required,omitempty"`
 }
 
 // SFTPServeSettings configures the built-in SFTP server (stored in DB).
@@ -88,10 +95,13 @@ type TFTPServeSettings struct {
 // FTPUserEntry defines an FTP user account stored in settings.
 type FTPUserEntry struct {
 	Username string `json:"username"`
-	Password string `json:"password"`
+	Password string `json:"password,omitempty"`
 	// Shares lists the share names this user can access. Empty = all shares.
-	Shares   []string `json:"shares,omitempty"`
-	ReadOnly bool     `json:"read_only"`
+	Shares []string `json:"shares,omitempty"`
+	// AuthorizedKeys holds SSH public keys (one per line, OpenSSH authorized_keys format)
+	// that are allowed to authenticate as this user via the SFTP server.
+	AuthorizedKeys string `json:"authorized_keys,omitempty"`
+	ReadOnly       bool   `json:"read_only"`
 }
 
 // FTPShareEntry defines a folder shared via the built-in FTP server.

@@ -163,8 +163,9 @@ export interface RawMountEntry {
 // FTP user entry stored in settings
 export interface FTPUserEntry {
   username: string;
-  password: string;
-  shares?: string[];   // allowed share names; empty = all
+  password?: string;
+  shares?: string[];          // allowed share names; empty = all
+  authorized_keys?: string;   // SSH public keys (OpenSSH authorized_keys format, one per line)
   read_only: boolean;
 }
 
@@ -182,6 +183,9 @@ export interface FTPServeSettings {
   host?: string;
   public_ip?: string;
   passive_ports?: string;
+  tls_cert_file?: string;   // path to PEM certificate file
+  tls_key_file?: string;    // path to PEM private key file
+  tls_required?: number;    // 0=disabled, 1=explicit FTPS (AUTH TLS), 2=implicit FTPS
 }
 
 // SFTP server settings stored in DB

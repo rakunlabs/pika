@@ -3,9 +3,11 @@
 package sftpserve
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -13,8 +15,6 @@ import (
 	"net"
 	"os"
 	"sync"
-
-	"crypto/x509"
 
 	"github.com/pkg/sftp"
 	"github.com/rakunlabs/pika/internal/serve/ftpserve"
@@ -45,7 +45,8 @@ func NewServer(cfg *service.SFTPServeSettings, shares []ftpserve.Share, users []
 	}
 
 	sshCfg := &ssh.ServerConfig{
-		PasswordCallback: s.passwordCallback,
+		PasswordCallback:  s.passwordCallback,
+		PublicKeyCallback: s.publicKeyCallback,
 	}
 
 	// Load or generate host key
@@ -71,8 +72,44 @@ func (s *Server) passwordCallback(conn ssh.ConnMetadata, password []byte) (*ssh.
 	defer s.mu.RUnlock()
 
 	for _, u := range s.users {
-		if u.Username == conn.User() && u.Password == string(password) {
+		if u.Username == conn.User() && u.Password != "" && u.Password == string(password) {
 			return &ssh.Permissions{}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("authentication failed")
+}
+
+func (s *Server) publicKeyCallback(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	offered := key.Marshal()
+
+	for _, u := range s.users {
+		if u.Username != conn.User() || u.AuthorizedKeys == "" {
+			continue
+		}
+
+		rest := []byte(u.AuthorizedKeys)
+		for len(rest) > 0 {
+			var parsed ssh.PublicKey
+			var err error
+			parsed, _, _, rest, err = ssh.ParseAuthorizedKey(rest)
+			if err != nil {
+				// Skip unparseable lines (blank lines, comments, etc.)
+				// Advance past the next newline.
+				if idx := bytes.IndexByte(rest, '\n'); idx >= 0 {
+					rest = rest[idx+1:]
+				} else {
+					break
+				}
+				continue
+			}
+
+			if bytes.Equal(parsed.Marshal(), offered) {
+				return &ssh.Permissions{}, nil
+			}
 		}
 	}
 
@@ -173,6 +210,11 @@ func (s *Server) UpdateUsers(users []ftpserve.User) {
 	s.mu.Unlock()
 }
 
+// loadOrGenerateHostKey loads an SSH private key from path (PEM-encoded, any
+// type supported by ssh.ParsePrivateKey: Ed25519, RSA, ECDSA) or generates an
+// ephemeral Ed25519 key if path is empty. A persistent key avoids
+// "host key changed" warnings for SFTP clients across server restarts.
+// Generate one with: ssh-keygen -t ed25519 -f /path/to/host_key -N ""
 func loadOrGenerateHostKey(path string) (ssh.Signer, error) {
 	if path != "" {
 		data, err := os.ReadFile(path)

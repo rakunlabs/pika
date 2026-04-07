@@ -26,6 +26,9 @@ type mainDriver struct {
 	shares   []Share
 	auth     *MultiUserAuth
 	settings *ftpserver.Settings
+
+	tlsCertFile string
+	tlsKeyFile  string
 }
 
 var _ ftpserver.MainDriver = (*mainDriver)(nil)
@@ -53,7 +56,19 @@ func (d *mainDriver) AuthUser(cc ftpserver.ClientContext, user, pass string) (ft
 }
 
 func (d *mainDriver) GetTLSConfig() (*tls.Config, error) {
-	return nil, nil
+	if d.tlsCertFile == "" || d.tlsKeyFile == "" {
+		return nil, nil
+	}
+
+	cert, err := tls.LoadX509KeyPair(d.tlsCertFile, d.tlsKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("loading FTP TLS certificate: %w", err)
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }
 
 // NewServer creates a new FTP server with the given config, shares, and users.
@@ -84,10 +99,17 @@ func NewServer(cfg *service.FTPServeSettings, shares []Share, users []User) (*Se
 		settings.PassiveTransferPortRange = pr
 	}
 
+	// TLS configuration
+	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+		settings.TLSRequired = ftpserver.TLSRequirement(cfg.TLSRequired)
+	}
+
 	drv := &mainDriver{
-		shares:   shares,
-		auth:     auth,
-		settings: settings,
+		shares:      shares,
+		auth:        auth,
+		settings:    settings,
+		tlsCertFile: cfg.TLSCertFile,
+		tlsKeyFile:  cfg.TLSKeyFile,
 	}
 
 	ftpSrv := ftpserver.NewFtpServer(drv)

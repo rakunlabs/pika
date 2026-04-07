@@ -59,6 +59,7 @@
   let newUserShares = $state<string[]>([]);
   let newUserShareInput = $state('');
   let newUserReadOnly = $state(false);
+  let newUserAuthorizedKeys = $state('');
   let editingUserIndex = $state<number | null>(null);
   let isSavingUsers = $state(false);
   let showUserPassword = $state(false);
@@ -69,6 +70,9 @@
   let ftpServeHost = $state('');
   let ftpServePublicIP = $state('');
   let ftpServePassivePorts = $state('30000-30100');
+  let ftpServeTLSCertFile = $state('');
+  let ftpServeTLSKeyFile = $state('');
+  let ftpServeTLSRequired = $state(0);
   let sftpServeEnabled = $state(false);
   let sftpServePort = $state(2222);
   let sftpServeHost = $state('');
@@ -85,6 +89,9 @@
     ftpServeHost = s?.ftp_serve?.host ?? '';
     ftpServePublicIP = s?.ftp_serve?.public_ip ?? '';
     ftpServePassivePorts = s?.ftp_serve?.passive_ports || '30000-30100';
+    ftpServeTLSCertFile = s?.ftp_serve?.tls_cert_file ?? '';
+    ftpServeTLSKeyFile = s?.ftp_serve?.tls_key_file ?? '';
+    ftpServeTLSRequired = s?.ftp_serve?.tls_required ?? 0;
     sftpServeEnabled = s?.sftp_serve?.enabled ?? false;
     sftpServePort = s?.sftp_serve?.port || 2222;
     sftpServeHost = s?.sftp_serve?.host ?? '';
@@ -110,6 +117,9 @@
         host: ftpServeHost || undefined,
         public_ip: ftpServePublicIP || undefined,
         passive_ports: ftpServePassivePorts || undefined,
+        tls_cert_file: ftpServeTLSCertFile || undefined,
+        tls_key_file: ftpServeTLSKeyFile || undefined,
+        tls_required: ftpServeTLSRequired || undefined,
       };
       if (JSON.stringify(ftpServe) !== JSON.stringify(s?.ftp_serve ?? {})) {
         patch.ftp_serve = ftpServe;
@@ -624,6 +634,7 @@
     newUserShares = [];
     newUserShareInput = '';
     newUserReadOnly = false;
+    newUserAuthorizedKeys = '';
     editingUserIndex = null;
     showUserPassword = false;
   }
@@ -631,10 +642,11 @@
   function handleEditUser(index: number) {
     const user = ftpUsers[index];
     newUserUsername = user.username;
-    newUserPassword = user.password;
+    newUserPassword = user.password || '';
     newUserShares = [...(user.shares || [])];
     newUserShareInput = '';
     newUserReadOnly = user.read_only;
+    newUserAuthorizedKeys = user.authorized_keys || '';
     editingUserIndex = index;
     showAddUser = true;
   }
@@ -660,8 +672,9 @@
       addToast('Username is required', 'alert');
       return;
     }
-    if (!newUserPassword) {
-      addToast('Password is required', 'alert');
+    const hasKeys = newUserAuthorizedKeys.trim().length > 0;
+    if (!newUserPassword && !hasKeys) {
+      addToast('Password or authorized keys required', 'alert');
       return;
     }
     if (ftpUsers.some((u, i) => u.username === username && i !== editingUserIndex)) {
@@ -671,8 +684,9 @@
 
     const entry: FTPUserEntry = {
       username,
-      password: newUserPassword,
+      password: newUserPassword || undefined,
       shares: newUserShares.length > 0 ? [...newUserShares] : undefined,
+      authorized_keys: hasKeys ? newUserAuthorizedKeys.trim() : undefined,
       read_only: newUserReadOnly,
     };
 
@@ -1862,6 +1876,18 @@
             </div>
 
             <div class="mb-4">
+              <label for="ftp-user-authorized-keys" class="block text-xs font-medium text-slate-500 mb-1.5">Authorized Keys (optional)</label>
+              <textarea id="ftp-user-authorized-keys" bind:value={newUserAuthorizedKeys}
+                placeholder="ssh-ed25519 AAAA... user@host"
+                rows="3"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 resize-y"></textarea>
+              <p class="mt-1 text-[11px] text-slate-400">
+                SSH public keys for SFTP key-based authentication (OpenSSH <code class="px-0.5 bg-slate-100 rounded">authorized_keys</code> format, one key per line).
+                When set, password becomes optional. Paste the contents of a client's <code class="px-0.5 bg-slate-100 rounded">~/.ssh/id_ed25519.pub</code> file here.
+              </p>
+            </div>
+
+            <div class="mb-4">
               <label for="ftp-user-shares" class="block text-xs font-medium text-slate-500 mb-1.5">Allowed Shares (optional)</label>
               <div class="flex gap-2">
                 <input id="ftp-user-shares" type="text" bind:value={newUserShareInput}
@@ -1924,6 +1950,9 @@
                       <span class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700">Read-only</span>
                     {:else}
                       <span class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-emerald-100 text-emerald-700">Read+Write</span>
+                    {/if}
+                    {#if user.authorized_keys}
+                      <span class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-violet-100 text-violet-700">SSH Key</span>
                     {/if}
                   </div>
                   <div class="mt-1">
@@ -2000,6 +2029,40 @@
               <input id="ftp-passive-ports" type="text" bind:value={ftpServePassivePorts} placeholder="30000-30100"
                 class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
             </div>
+            <div class="col-span-2">
+              <label for="ftp-tls-mode" class="block text-xs font-medium text-slate-500 mb-1.5">TLS Mode</label>
+              <select id="ftp-tls-mode"
+                value={ftpServeTLSRequired}
+                onchange={(e) => { ftpServeTLSRequired = Number((e.target as HTMLSelectElement).value); }}
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 bg-white">
+                <option value={0}>Disabled (plain FTP)</option>
+                <option value={1}>Explicit FTPS (AUTH TLS)</option>
+                <option value={2}>Implicit FTPS</option>
+              </select>
+              <p class="mt-1 text-[11px] text-slate-400">
+                Explicit FTPS: clients connect in plain text and upgrade via AUTH TLS command.
+                Implicit FTPS: entire connection is TLS from the start (typically port 990).
+              </p>
+            </div>
+            {#if ftpServeTLSRequired > 0}
+              <div>
+                <label for="ftp-tls-cert" class="block text-xs font-medium text-slate-500 mb-1.5">TLS Certificate Path</label>
+                <input id="ftp-tls-cert" type="text" bind:value={ftpServeTLSCertFile} placeholder="/path/to/cert.pem"
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+              <div>
+                <label for="ftp-tls-key" class="block text-xs font-medium text-slate-500 mb-1.5">TLS Key Path</label>
+                <input id="ftp-tls-key" type="text" bind:value={ftpServeTLSKeyFile} placeholder="/path/to/key.pem"
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+              <div class="col-span-2">
+                <p class="text-[11px] text-slate-400">
+                  PEM-encoded TLS certificate and private key files (same format as HTTPS).
+                  Generate a self-signed pair with:
+                  <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px] font-mono">openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout key.pem -out cert.pem -days 3650 -nodes</code>
+                </p>
+              </div>
+            {/if}
           </div>
         {/if}
       </div>
@@ -2031,7 +2094,12 @@
               <label for="sftp-host-key" class="block text-xs font-medium text-slate-500 mb-1.5">Host Key Path</label>
               <input id="sftp-host-key" type="text" bind:value={sftpServeHostKeyPath} placeholder="(auto-generated if empty)"
                 class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
-              <p class="mt-1 text-[11px] text-slate-400">Path to SSH host key PEM file. Leave empty for auto-generated ephemeral key.</p>
+              <p class="mt-1 text-[11px] text-slate-400">
+                Path to the server's SSH private key file (PEM format). This key identifies the server to connecting clients.
+                Supported key types: Ed25519, RSA, ECDSA.
+                Generate one with: <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px] font-mono">ssh-keygen -t ed25519 -f /path/to/host_key -N ""</code>.
+                Leave empty to auto-generate an ephemeral Ed25519 key on each start (clients will see host-key-changed warnings after restarts).
+              </p>
             </div>
           </div>
         {/if}

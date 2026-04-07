@@ -14,15 +14,15 @@ import (
 
 	"github.com/rakunlabs/ada"
 	"github.com/rakunlabs/pika/internal/config"
-	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/rawfs"
 	"github.com/rakunlabs/pika/internal/rawfs/localfs"
 	"github.com/rakunlabs/pika/internal/secret"
 	"github.com/rakunlabs/pika/internal/secret/crypto"
-	"github.com/rakunlabs/pika/internal/server/session"
-	"github.com/rakunlabs/pika/internal/service"
+	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/serve/sftpserve"
 	"github.com/rakunlabs/pika/internal/serve/tftpserve"
+	"github.com/rakunlabs/pika/internal/server/session"
+	"github.com/rakunlabs/pika/internal/service"
 )
 
 // userMiddleware extracts the X-User header and injects it into the request context.
@@ -710,10 +710,11 @@ func BuildFTPUsers(ctx context.Context, svc *service.Service) []ftpserve.User {
 	var users []ftpserve.User
 	for _, u := range settings.FTPUsers {
 		users = append(users, ftpserve.User{
-			Username: u.Username,
-			Password: u.Password,
-			Shares:   u.Shares,
-			ReadOnly: u.ReadOnly,
+			Username:       u.Username,
+			Password:       u.Password,
+			Shares:         u.Shares,
+			AuthorizedKeys: u.AuthorizedKeys,
+			ReadOnly:       u.ReadOnly,
 		})
 	}
 

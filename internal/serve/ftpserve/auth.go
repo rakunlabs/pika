@@ -7,10 +7,11 @@ import (
 
 // User represents an FTP user with optional share restrictions.
 type User struct {
-	Username string
-	Password string
-	Shares   []string // allowed share names; empty = all
-	ReadOnly bool
+	Username       string
+	Password       string
+	Shares         []string // allowed share names; empty = all
+	AuthorizedKeys string   // SSH public keys in OpenSSH authorized_keys format (one per line)
+	ReadOnly       bool
 }
 
 // MultiUserAuth manages FTP users with thread-safe access.
