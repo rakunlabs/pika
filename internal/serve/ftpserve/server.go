@@ -29,6 +29,8 @@ type mainDriver struct {
 
 	tlsCertFile string
 	tlsKeyFile  string
+	tlsCertPEM  string
+	tlsKeyPEM   string
 }
 
 var _ ftpserver.MainDriver = (*mainDriver)(nil)
@@ -56,13 +58,39 @@ func (d *mainDriver) AuthUser(cc ftpserver.ClientContext, user, pass string) (ft
 }
 
 func (d *mainDriver) GetTLSConfig() (*tls.Config, error) {
-	if d.tlsCertFile == "" || d.tlsKeyFile == "" {
-		return nil, nil
-	}
+	var cert tls.Certificate
+	var err error
 
-	cert, err := tls.LoadX509KeyPair(d.tlsCertFile, d.tlsKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("loading FTP TLS certificate: %w", err)
+	if d.tlsCertFile != "" && d.tlsKeyFile != "" {
+		// Load from file paths
+		cert, err = tls.LoadX509KeyPair(d.tlsCertFile, d.tlsKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("loading FTP TLS certificate from files: %w", err)
+		}
+	} else if d.tlsCertPEM != "" && d.tlsKeyPEM != "" {
+		// Validate PEM types before parsing to give clear error messages
+		if !strings.Contains(d.tlsCertPEM, "BEGIN CERTIFICATE") {
+			hint := "expected PEM block starting with -----BEGIN CERTIFICATE-----"
+			if strings.Contains(d.tlsCertPEM, "PUBLIC KEY") {
+				hint = "it looks like a public key was pasted instead of an X.509 certificate"
+			}
+			return nil, fmt.Errorf("invalid TLS certificate PEM content: %s", hint)
+		}
+		if !strings.Contains(d.tlsKeyPEM, "PRIVATE KEY") {
+			hint := "expected PEM block containing PRIVATE KEY"
+			if strings.Contains(d.tlsKeyPEM, "PUBLIC KEY") {
+				hint = "it looks like a public key was pasted instead of a private key"
+			}
+			return nil, fmt.Errorf("invalid TLS key PEM content: %s", hint)
+		}
+
+		// Load from PEM content pasted via UI
+		cert, err = tls.X509KeyPair([]byte(d.tlsCertPEM), []byte(d.tlsKeyPEM))
+		if err != nil {
+			return nil, fmt.Errorf("loading FTP TLS certificate from PEM content: %w", err)
+		}
+	} else {
+		return nil, nil
 	}
 
 	return &tls.Config{
@@ -100,7 +128,8 @@ func NewServer(cfg *service.FTPServeSettings, shares []Share, users []User) (*Se
 	}
 
 	// TLS configuration
-	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+	hasTLS := (cfg.TLSCertFile != "" && cfg.TLSKeyFile != "") || (cfg.TLSCertPEM != "" && cfg.TLSKeyPEM != "")
+	if hasTLS {
 		settings.TLSRequired = ftpserver.TLSRequirement(cfg.TLSRequired)
 	}
 
@@ -110,6 +139,8 @@ func NewServer(cfg *service.FTPServeSettings, shares []Share, users []User) (*Se
 		settings:    settings,
 		tlsCertFile: cfg.TLSCertFile,
 		tlsKeyFile:  cfg.TLSKeyFile,
+		tlsCertPEM:  cfg.TLSCertPEM,
+		tlsKeyPEM:   cfg.TLSKeyPEM,
 	}
 
 	ftpSrv := ftpserver.NewFtpServer(drv)

@@ -28,6 +28,7 @@ type Share struct {
 	Name     string
 	Sources  []ShareSource
 	ReadOnly bool
+	Root     bool // mount at "/" instead of "/Name/"
 }
 
 // clientFS implements afero.Fs (ftpserver.ClientDriver) for per-user file access.
@@ -65,13 +66,34 @@ func (fs *clientFS) userShares() []Share {
 	return filtered
 }
 
+// findRootShare returns the root-mounted share visible to this user, if any.
+func (fs *clientFS) findRootShare() *Share {
+	shares := fs.userShares()
+	for i := range shares {
+		if shares[i].Root {
+			return &shares[i]
+		}
+	}
+	return nil
+}
+
 // resolveShare maps an FTP path to a share and relative path within it.
+// When a root share is configured, all paths resolve through it directly
+// and other shares are not accessible.
 func (fs *clientFS) resolveShare(ftpPath string) (*Share, string, error) {
 	ftpPath = path.Clean(ftpPath)
 	ftpPath = strings.TrimPrefix(ftpPath, "/")
 
+	if root := fs.findRootShare(); root != nil {
+		// Root share: every path maps directly into it.
+		if ftpPath == "" || ftpPath == "." {
+			return root, "", nil
+		}
+		return root, ftpPath, nil
+	}
+
 	if ftpPath == "" || ftpPath == "." {
-		return nil, "", nil // root directory
+		return nil, "", nil // root directory (virtual share listing)
 	}
 
 	parts := strings.SplitN(ftpPath, "/", 2)
@@ -107,7 +129,11 @@ func (fs *clientFS) Stat(name string) (os.FileInfo, error) {
 		return &virtualFileInfo{name: "/", isDir: true}, nil
 	}
 	if rest == "" {
-		return &virtualFileInfo{name: share.Name, isDir: true}, nil
+		displayName := share.Name
+		if share.Root {
+			displayName = "/"
+		}
+		return &virtualFileInfo{name: displayName, isDir: true}, nil
 	}
 
 	src, err := findInSources(share, rest)
@@ -145,7 +171,11 @@ func (fs *clientFS) OpenFile(name string, flag int, perm os.FileMode) (afero.Fil
 		return &dirFile{name: "/", fs: fs}, nil
 	}
 	if rest == "" {
-		return &dirFile{name: share.Name, fs: fs, share: share}, nil
+		displayName := share.Name
+		if share.Root {
+			displayName = "/"
+		}
+		return &dirFile{name: displayName, fs: fs, share: share}, nil
 	}
 
 	// Check if target is a directory
@@ -215,6 +245,9 @@ func (fs *clientFS) Mkdir(name string, perm os.FileMode) error {
 	if share == nil {
 		return fmt.Errorf("cannot create directory at root")
 	}
+	if rest == "" {
+		return fmt.Errorf("cannot create directory at share root")
+	}
 	if fs.isReadOnly(share) {
 		return fmt.Errorf("share %q is read-only", share.Name)
 	}
@@ -240,6 +273,9 @@ func (fs *clientFS) Remove(name string) error {
 	}
 	if share == nil {
 		return fmt.Errorf("cannot delete root")
+	}
+	if rest == "" {
+		return fmt.Errorf("cannot delete share root")
 	}
 	if fs.isReadOnly(share) {
 		return fmt.Errorf("share %q is read-only", share.Name)
@@ -268,8 +304,8 @@ func (fs *clientFS) Rename(oldname, newname string) error {
 	return fmt.Errorf("rename not supported")
 }
 
-func (fs *clientFS) Chmod(name string, mode os.FileMode) error            { return nil }
-func (fs *clientFS) Chown(name string, uid, gid int) error                { return nil }
+func (fs *clientFS) Chmod(name string, mode os.FileMode) error                   { return nil }
+func (fs *clientFS) Chown(name string, uid, gid int) error                       { return nil }
 func (fs *clientFS) Chtimes(name string, atime time.Time, mtime time.Time) error { return nil }
 
 // ReadDir implements ftpserver.ClientDriverExtensionFileList for directory listing.
@@ -359,18 +395,20 @@ type readFile struct {
 
 var _ afero.File = (*readFile)(nil)
 
-func (f *readFile) Name() string                                    { return f.name }
-func (f *readFile) Read(p []byte) (int, error)                      { return f.reader.Read(p) }
-func (f *readFile) ReadAt(p []byte, off int64) (int, error)         { return 0, os.ErrInvalid }
-func (f *readFile) Seek(offset int64, whence int) (int64, error)    { return f.reader.Seek(offset, whence) }
-func (f *readFile) Write(p []byte) (int, error)                     { return 0, os.ErrInvalid }
-func (f *readFile) WriteAt(p []byte, off int64) (int, error)        { return 0, os.ErrInvalid }
-func (f *readFile) Close() error                                    { return f.reader.Close() }
-func (f *readFile) Readdir(count int) ([]os.FileInfo, error)        { return nil, os.ErrInvalid }
-func (f *readFile) Readdirnames(count int) ([]string, error)        { return nil, os.ErrInvalid }
-func (f *readFile) Sync() error                                     { return nil }
-func (f *readFile) Truncate(size int64) error                       { return os.ErrInvalid }
-func (f *readFile) WriteString(s string) (int, error)               { return 0, os.ErrInvalid }
+func (f *readFile) Name() string                            { return f.name }
+func (f *readFile) Read(p []byte) (int, error)              { return f.reader.Read(p) }
+func (f *readFile) ReadAt(p []byte, off int64) (int, error) { return 0, os.ErrInvalid }
+func (f *readFile) Seek(offset int64, whence int) (int64, error) {
+	return f.reader.Seek(offset, whence)
+}
+func (f *readFile) Write(p []byte) (int, error)              { return 0, os.ErrInvalid }
+func (f *readFile) WriteAt(p []byte, off int64) (int, error) { return 0, os.ErrInvalid }
+func (f *readFile) Close() error                             { return f.reader.Close() }
+func (f *readFile) Readdir(count int) ([]os.FileInfo, error) { return nil, os.ErrInvalid }
+func (f *readFile) Readdirnames(count int) ([]string, error) { return nil, os.ErrInvalid }
+func (f *readFile) Sync() error                              { return nil }
+func (f *readFile) Truncate(size int64) error                { return os.ErrInvalid }
+func (f *readFile) WriteString(s string) (int, error)        { return 0, os.ErrInvalid }
 func (f *readFile) Stat() (os.FileInfo, error) {
 	return &virtualFileInfo{name: f.name, size: f.size}, nil
 }
@@ -395,17 +433,17 @@ func newWriteFile(name string, wfs rawfs.WritableRawFS, fsPath string) *writeFil
 	return &writeFile{name: name, pw: pw, done: done}
 }
 
-func (f *writeFile) Name() string                                    { return f.name }
-func (f *writeFile) Read(p []byte) (int, error)                      { return 0, os.ErrInvalid }
-func (f *writeFile) ReadAt(p []byte, off int64) (int, error)         { return 0, os.ErrInvalid }
-func (f *writeFile) Seek(offset int64, whence int) (int64, error)    { return 0, os.ErrInvalid }
-func (f *writeFile) Write(p []byte) (int, error)                     { return f.pw.Write(p) }
-func (f *writeFile) WriteAt(p []byte, off int64) (int, error)        { return 0, os.ErrInvalid }
-func (f *writeFile) Readdir(count int) ([]os.FileInfo, error)        { return nil, os.ErrInvalid }
-func (f *writeFile) Readdirnames(count int) ([]string, error)        { return nil, os.ErrInvalid }
-func (f *writeFile) Sync() error                                     { return nil }
-func (f *writeFile) Truncate(size int64) error                       { return os.ErrInvalid }
-func (f *writeFile) WriteString(s string) (int, error)               { return f.pw.Write([]byte(s)) }
+func (f *writeFile) Name() string                                 { return f.name }
+func (f *writeFile) Read(p []byte) (int, error)                   { return 0, os.ErrInvalid }
+func (f *writeFile) ReadAt(p []byte, off int64) (int, error)      { return 0, os.ErrInvalid }
+func (f *writeFile) Seek(offset int64, whence int) (int64, error) { return 0, os.ErrInvalid }
+func (f *writeFile) Write(p []byte) (int, error)                  { return f.pw.Write(p) }
+func (f *writeFile) WriteAt(p []byte, off int64) (int, error)     { return 0, os.ErrInvalid }
+func (f *writeFile) Readdir(count int) ([]os.FileInfo, error)     { return nil, os.ErrInvalid }
+func (f *writeFile) Readdirnames(count int) ([]string, error)     { return nil, os.ErrInvalid }
+func (f *writeFile) Sync() error                                  { return nil }
+func (f *writeFile) Truncate(size int64) error                    { return os.ErrInvalid }
+func (f *writeFile) WriteString(s string) (int, error)            { return f.pw.Write([]byte(s)) }
 func (f *writeFile) Stat() (os.FileInfo, error) {
 	return &virtualFileInfo{name: f.name}, nil
 }
@@ -424,16 +462,16 @@ type dirFile struct {
 
 var _ afero.File = (*dirFile)(nil)
 
-func (f *dirFile) Name() string                                    { return f.name }
-func (f *dirFile) Read(p []byte) (int, error)                      { return 0, os.ErrInvalid }
-func (f *dirFile) ReadAt(p []byte, off int64) (int, error)         { return 0, os.ErrInvalid }
-func (f *dirFile) Seek(offset int64, whence int) (int64, error)    { return 0, os.ErrInvalid }
-func (f *dirFile) Write(p []byte) (int, error)                     { return 0, os.ErrInvalid }
-func (f *dirFile) WriteAt(p []byte, off int64) (int, error)        { return 0, os.ErrInvalid }
-func (f *dirFile) Close() error                                    { return nil }
-func (f *dirFile) Sync() error                                     { return nil }
-func (f *dirFile) Truncate(size int64) error                       { return os.ErrInvalid }
-func (f *dirFile) WriteString(s string) (int, error)               { return 0, os.ErrInvalid }
+func (f *dirFile) Name() string                                 { return f.name }
+func (f *dirFile) Read(p []byte) (int, error)                   { return 0, os.ErrInvalid }
+func (f *dirFile) ReadAt(p []byte, off int64) (int, error)      { return 0, os.ErrInvalid }
+func (f *dirFile) Seek(offset int64, whence int) (int64, error) { return 0, os.ErrInvalid }
+func (f *dirFile) Write(p []byte) (int, error)                  { return 0, os.ErrInvalid }
+func (f *dirFile) WriteAt(p []byte, off int64) (int, error)     { return 0, os.ErrInvalid }
+func (f *dirFile) Close() error                                 { return nil }
+func (f *dirFile) Sync() error                                  { return nil }
+func (f *dirFile) Truncate(size int64) error                    { return os.ErrInvalid }
+func (f *dirFile) WriteString(s string) (int, error)            { return 0, os.ErrInvalid }
 
 func (f *dirFile) Stat() (os.FileInfo, error) {
 	return &virtualFileInfo{name: f.name, isDir: true}, nil
@@ -442,9 +480,16 @@ func (f *dirFile) Stat() (os.FileInfo, error) {
 func (f *dirFile) Readdir(count int) ([]os.FileInfo, error) {
 	fullPath := "/"
 	if f.share != nil {
-		fullPath = "/" + f.share.Name
-		if f.rest != "" {
-			fullPath += "/" + f.rest
+		if f.share.Root {
+			// Root share: path is just "/" + rest (no share name prefix)
+			if f.rest != "" {
+				fullPath = "/" + f.rest
+			}
+		} else {
+			fullPath = "/" + f.share.Name
+			if f.rest != "" {
+				fullPath += "/" + f.rest
+			}
 		}
 	}
 	return f.fs.ReadDir(fullPath)

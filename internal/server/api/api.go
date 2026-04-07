@@ -683,6 +683,7 @@ func BuildFTPShares(ctx context.Context, svc *service.Service, rh *rawHandler) [
 			Name:     s.Name,
 			Sources:  sources,
 			ReadOnly: s.ReadOnly,
+			Root:     s.Root,
 		})
 	}
 

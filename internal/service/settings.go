@@ -72,6 +72,10 @@ type FTPServeSettings struct {
 	TLSCertFile string `json:"tls_cert_file,omitempty"`
 	// TLSKeyFile is the path to the PEM-encoded TLS private key file.
 	TLSKeyFile string `json:"tls_key_file,omitempty"`
+	// TLSCertPEM is the PEM-encoded TLS certificate content (used when no file path is given).
+	TLSCertPEM string `json:"tls_cert_pem,omitempty"`
+	// TLSKeyPEM is the PEM-encoded TLS private key content (used when no file path is given).
+	TLSKeyPEM string `json:"tls_key_pem,omitempty"`
 	// TLSRequired controls TLS mode: 0 = disabled/optional, 1 = explicit FTPS (AUTH TLS required),
 	// 2 = implicit FTPS (entire connection is TLS from the start).
 	TLSRequired int `json:"tls_required,omitempty"`
@@ -83,6 +87,8 @@ type SFTPServeSettings struct {
 	Port        int    `json:"port,omitempty"`
 	Host        string `json:"host,omitempty"`
 	HostKeyPath string `json:"host_key_path,omitempty"`
+	// HostKeyPEM is the PEM-encoded SSH private key content (used when no file path is given).
+	HostKeyPEM string `json:"host_key_pem,omitempty"`
 }
 
 // TFTPServeSettings configures the built-in TFTP server (stored in DB).
@@ -115,6 +121,9 @@ type FTPShareEntry struct {
 	Paths []string `json:"paths"`
 	// ReadOnly restricts FTP clients to read-only access on this share.
 	ReadOnly bool `json:"read_only"`
+	// Root, when true, mounts this share at the FTP root "/" so clients see its
+	// contents directly instead of a /sharename/ prefix. Only one share may be root.
+	Root bool `json:"root,omitempty"`
 }
 
 type PatchSettings struct {
@@ -179,6 +188,16 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 
 	// Handle FTP shares update (if provided)
 	if patch.FTPShares != nil {
+		// Validate: at most one share can be root
+		rootCount := 0
+		for _, s := range *patch.FTPShares {
+			if s.Root {
+				rootCount++
+			}
+		}
+		if rootCount > 1 {
+			return fmt.Errorf("only one FTP share can be mounted at root: %w", ErrBadRequest)
+		}
 		settings.FTPShares = *patch.FTPShares
 	}
 

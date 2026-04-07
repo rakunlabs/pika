@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/pkg/sftp"
@@ -50,7 +51,7 @@ func NewServer(cfg *service.SFTPServeSettings, shares []ftpserve.Share, users []
 	}
 
 	// Load or generate host key
-	hostKey, err := loadOrGenerateHostKey(cfg.HostKeyPath)
+	hostKey, err := loadOrGenerateHostKey(cfg.HostKeyPath, cfg.HostKeyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("sftp serve: host key: %w", err)
 	}
@@ -211,17 +212,30 @@ func (s *Server) UpdateUsers(users []ftpserve.User) {
 }
 
 // loadOrGenerateHostKey loads an SSH private key from path (PEM-encoded, any
-// type supported by ssh.ParsePrivateKey: Ed25519, RSA, ECDSA) or generates an
-// ephemeral Ed25519 key if path is empty. A persistent key avoids
-// "host key changed" warnings for SFTP clients across server restarts.
+// type supported by ssh.ParsePrivateKey: Ed25519, RSA, ECDSA), parses it from
+// raw PEM content, or generates an ephemeral Ed25519 key if neither is provided.
+// A persistent key avoids "host key changed" warnings for SFTP clients across
+// server restarts.
 // Generate one with: ssh-keygen -t ed25519 -f /path/to/host_key -N ""
-func loadOrGenerateHostKey(path string) (ssh.Signer, error) {
+func loadOrGenerateHostKey(path string, pemContent string) (ssh.Signer, error) {
 	if path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("reading host key %s: %w", path, err)
 		}
 		return ssh.ParsePrivateKey(data)
+	}
+
+	if pemContent != "" {
+		// Validate PEM type before parsing to give a clear error message
+		if !strings.Contains(pemContent, "PRIVATE KEY") {
+			hint := "expected PEM block containing PRIVATE KEY (e.g. OPENSSH PRIVATE KEY or PRIVATE KEY)"
+			if strings.Contains(pemContent, "PUBLIC KEY") {
+				hint = "it looks like a public key was pasted instead of a private key"
+			}
+			return nil, fmt.Errorf("invalid host key PEM content: %s", hint)
+		}
+		return ssh.ParsePrivateKey([]byte(pemContent))
 	}
 
 	// Generate ephemeral Ed25519 key

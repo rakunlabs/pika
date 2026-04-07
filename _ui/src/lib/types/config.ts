@@ -174,6 +174,7 @@ export interface FTPShareEntry {
   name: string;
   paths: string[];     // e.g., ["configs", "assets/images", "backup/2024"]
   read_only: boolean;
+  root?: boolean;      // mount at "/" instead of "/name/"
 }
 
 // FTP server settings stored in DB
@@ -185,6 +186,8 @@ export interface FTPServeSettings {
   passive_ports?: string;
   tls_cert_file?: string;   // path to PEM certificate file
   tls_key_file?: string;    // path to PEM private key file
+  tls_cert_pem?: string;    // PEM certificate content (paste directly)
+  tls_key_pem?: string;     // PEM private key content (paste directly)
   tls_required?: number;    // 0=disabled, 1=explicit FTPS (AUTH TLS), 2=implicit FTPS
 }
 
@@ -194,6 +197,7 @@ export interface SFTPServeSettings {
   port?: number;
   host?: string;
   host_key_path?: string;
+  host_key_pem?: string;    // PEM host key content (paste directly)
 }
 
 // TFTP server settings stored in DB

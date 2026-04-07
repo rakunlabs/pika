@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
-	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/rawfs"
+	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 )
 
 // newHandler creates SFTP handlers for the given user.
@@ -63,6 +63,17 @@ func (h *sftpHandler) userShares() []ftpserve.Share {
 	return filtered
 }
 
+// findRootShare returns the root-mounted share visible to this user, if any.
+func (h *sftpHandler) findRootShare() *ftpserve.Share {
+	shares := h.userShares()
+	for i := range shares {
+		if shares[i].Root {
+			return &shares[i]
+		}
+	}
+	return nil
+}
+
 func (h *sftpHandler) isReadOnly() bool {
 	h.server.mu.RLock()
 	defer h.server.mu.RUnlock()
@@ -76,9 +87,20 @@ func (h *sftpHandler) isReadOnly() bool {
 }
 
 // resolveShare parses an SFTP path and returns the share and relative path.
+// When a root share is configured, all paths resolve through it directly
+// and other shares are not accessible.
 func (h *sftpHandler) resolveShare(p string) (*ftpserve.Share, string, error) {
 	p = path.Clean(p)
 	p = strings.TrimPrefix(p, "/")
+
+	if root := h.findRootShare(); root != nil {
+		// Root share: every path maps directly into it.
+		if p == "" || p == "." {
+			return root, "", nil
+		}
+		return root, p, nil
+	}
+
 	if p == "" || p == "." {
 		return nil, "", nil // root
 	}
@@ -154,7 +176,7 @@ func (h *sftpHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	if err != nil {
 		return nil, sftp.ErrSSHFxNoSuchFile
 	}
-	if share == nil || share.ReadOnly {
+	if share == nil || rest == "" || share.ReadOnly {
 		return nil, sftp.ErrSSHFxPermissionDenied
 	}
 
@@ -179,7 +201,7 @@ func (h *sftpHandler) Filecmd(r *sftp.Request) error {
 			return sftp.ErrSSHFxPermissionDenied
 		}
 		share, rest, err := h.resolveShare(r.Filepath)
-		if err != nil || share == nil || share.ReadOnly {
+		if err != nil || share == nil || rest == "" || share.ReadOnly {
 			return sftp.ErrSSHFxPermissionDenied
 		}
 		for i := range share.Sources {
@@ -194,7 +216,7 @@ func (h *sftpHandler) Filecmd(r *sftp.Request) error {
 			return sftp.ErrSSHFxPermissionDenied
 		}
 		share, rest, err := h.resolveShare(r.Filepath)
-		if err != nil || share == nil || share.ReadOnly {
+		if err != nil || share == nil || rest == "" || share.ReadOnly {
 			return sftp.ErrSSHFxPermissionDenied
 		}
 		src, err := findInSources(share, rest)
@@ -274,7 +296,11 @@ func (h *sftpHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 			return listerAt([]os.FileInfo{&vFileInfo{name: "/", isDir: true}}), nil
 		}
 		if rest == "" {
-			return listerAt([]os.FileInfo{&vFileInfo{name: share.Name, isDir: true}}), nil
+			displayName := share.Name
+			if share.Root {
+				displayName = "/"
+			}
+			return listerAt([]os.FileInfo{&vFileInfo{name: displayName, isDir: true}}), nil
 		}
 		src, err := findInSources(share, rest)
 		if err != nil {

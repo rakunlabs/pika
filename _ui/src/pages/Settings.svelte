@@ -48,6 +48,7 @@
   let newSharePaths = $state<string[]>([]);
   let newSharePathInput = $state('');
   let newShareReadOnly = $state(false);
+  let newShareRoot = $state(false);
   let editingShareIndex = $state<number | null>(null);
   let isSavingShares = $state(false);
 
@@ -72,11 +73,16 @@
   let ftpServePassivePorts = $state('30000-30100');
   let ftpServeTLSCertFile = $state('');
   let ftpServeTLSKeyFile = $state('');
+  let ftpServeTLSCertPEM = $state('');
+  let ftpServeTLSKeyPEM = $state('');
   let ftpServeTLSRequired = $state(0);
+  let ftpServeTLSInputMode = $state<'path' | 'paste'>('path');
   let sftpServeEnabled = $state(false);
   let sftpServePort = $state(2222);
   let sftpServeHost = $state('');
   let sftpServeHostKeyPath = $state('');
+  let sftpServeHostKeyPEM = $state('');
+  let sftpServeKeyInputMode = $state<'path' | 'paste'>('path');
   let tftpServeEnabled = $state(false);
   let tftpServePort = $state(69);
   let tftpServeHost = $state('');
@@ -91,11 +97,18 @@
     ftpServePassivePorts = s?.ftp_serve?.passive_ports || '30000-30100';
     ftpServeTLSCertFile = s?.ftp_serve?.tls_cert_file ?? '';
     ftpServeTLSKeyFile = s?.ftp_serve?.tls_key_file ?? '';
+    ftpServeTLSCertPEM = s?.ftp_serve?.tls_cert_pem ?? '';
+    ftpServeTLSKeyPEM = s?.ftp_serve?.tls_key_pem ?? '';
     ftpServeTLSRequired = s?.ftp_serve?.tls_required ?? 0;
+    // Auto-select input mode based on which fields have data
+    ftpServeTLSInputMode = (ftpServeTLSCertPEM || ftpServeTLSKeyPEM) ? 'paste' : 'path';
     sftpServeEnabled = s?.sftp_serve?.enabled ?? false;
     sftpServePort = s?.sftp_serve?.port || 2222;
     sftpServeHost = s?.sftp_serve?.host ?? '';
     sftpServeHostKeyPath = s?.sftp_serve?.host_key_path ?? '';
+    sftpServeHostKeyPEM = s?.sftp_serve?.host_key_pem ?? '';
+    // Auto-select input mode based on which fields have data
+    sftpServeKeyInputMode = sftpServeHostKeyPEM ? 'paste' : 'path';
     tftpServeEnabled = s?.tftp_serve?.enabled ?? false;
     tftpServePort = s?.tftp_serve?.port || 69;
     tftpServeHost = s?.tftp_serve?.host ?? '';
@@ -104,6 +117,36 @@
   async function handleSaveServers() {
     isSavingServers = true;
     try {
+      // ── PEM content validation ──
+      if (ftpServeEnabled && ftpServeTLSRequired > 0 && ftpServeTLSInputMode === 'paste') {
+        if (ftpServeTLSCertPEM && !ftpServeTLSCertPEM.includes('BEGIN CERTIFICATE')) {
+          const hasPublicKey = ftpServeTLSCertPEM.includes('PUBLIC KEY');
+          addToast(
+            hasPublicKey
+              ? 'TLS certificate field contains a public key, not a certificate. Paste the X.509 certificate (cert.pem) instead.'
+              : 'TLS certificate field does not contain a valid PEM certificate. Expected -----BEGIN CERTIFICATE-----.',
+            'alert'
+          );
+          return;
+        }
+        if (ftpServeTLSKeyPEM && !ftpServeTLSKeyPEM.includes('PRIVATE KEY')) {
+          addToast('TLS key field does not contain a private key. Expected -----BEGIN PRIVATE KEY----- (or RSA/EC PRIVATE KEY).', 'alert');
+          return;
+        }
+      }
+      if (sftpServeEnabled && sftpServeKeyInputMode === 'paste' && sftpServeHostKeyPEM) {
+        if (!sftpServeHostKeyPEM.includes('PRIVATE KEY')) {
+          const hasPublicKey = sftpServeHostKeyPEM.includes('PUBLIC KEY');
+          addToast(
+            hasPublicKey
+              ? 'SFTP host key field contains a public key. Paste the private key instead.'
+              : 'SFTP host key field does not contain a private key. Expected -----BEGIN OPENSSH PRIVATE KEY----- or -----BEGIN PRIVATE KEY-----.',
+            'alert'
+          );
+          return;
+        }
+      }
+
       const s = configStore.settings;
       const patch: {
         ftp_serve?: FTPServeSettings;
@@ -119,6 +162,8 @@
         passive_ports: ftpServePassivePorts || undefined,
         tls_cert_file: ftpServeTLSCertFile || undefined,
         tls_key_file: ftpServeTLSKeyFile || undefined,
+        tls_cert_pem: ftpServeTLSCertPEM || undefined,
+        tls_key_pem: ftpServeTLSKeyPEM || undefined,
         tls_required: ftpServeTLSRequired || undefined,
       };
       if (JSON.stringify(ftpServe) !== JSON.stringify(s?.ftp_serve ?? {})) {
@@ -130,6 +175,7 @@
         port: sftpServePort,
         host: sftpServeHost || undefined,
         host_key_path: sftpServeHostKeyPath || undefined,
+        host_key_pem: sftpServeHostKeyPEM || undefined,
       };
       if (JSON.stringify(sftpServe) !== JSON.stringify(s?.sftp_serve ?? {})) {
         patch.sftp_serve = sftpServe;
@@ -540,6 +586,7 @@
     newSharePaths = [];
     newSharePathInput = '';
     newShareReadOnly = false;
+    newShareRoot = false;
     editingShareIndex = null;
   }
 
@@ -549,6 +596,7 @@
     newSharePaths = [...share.paths];
     newSharePathInput = '';
     newShareReadOnly = share.read_only;
+    newShareRoot = share.root ?? false;
     editingShareIndex = index;
     showAddShare = true;
   }
@@ -582,11 +630,17 @@
       addToast(`A share named "${name}" already exists`, 'alert');
       return;
     }
+    // Only one share can be root
+    if (newShareRoot && ftpShares.some((s, i) => s.root && i !== editingShareIndex)) {
+      addToast('Another share is already mounted at root. Only one root share is allowed.', 'alert');
+      return;
+    }
 
     const entry: FTPShareEntry = {
       name,
       paths: [...newSharePaths],
       read_only: newShareReadOnly,
+      root: newShareRoot || undefined,
     };
 
     let updated: FTPShareEntry[];
@@ -1762,6 +1816,14 @@
             </label>
           </div>
 
+          <div class="mb-4">
+            <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+              <input type="checkbox" bind:checked={newShareRoot} class="rounded border-slate-300" />
+              Mount at root
+            </label>
+            <p class="mt-1 ml-5 text-[11px] text-slate-400">Serve this share's contents directly at <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px]">/</code> instead of <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px]">/{'{name}'}/</code>. Only one share can be root. Other shares will be hidden while a root share is active.</p>
+          </div>
+
           <div class="flex justify-end gap-2">
             <button
               class="px-3 py-2 text-sm text-slate-600 bg-white border border-slate-200 rounded-md hover:bg-slate-50 transition-colors"
@@ -1793,7 +1855,12 @@
             <div class="flex items-center gap-4 p-4 bg-white border border-slate-200 rounded-lg hover:border-slate-300 transition-colors">
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2">
-                  <span class="text-sm font-medium text-slate-800">{share.name}</span>
+                   <span class="text-sm font-medium text-slate-800">{share.name}</span>
+                   {#if share.root}
+                     <span class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-blue-100 text-blue-700">
+                       Root
+                     </span>
+                   {/if}
                   {#if share.read_only}
                     <span class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700">
                       Read-only
@@ -1803,7 +1870,7 @@
                       Read+Write
                     </span>
                   {/if}
-                  <span class="text-[10px] text-slate-400">→ ftp://.../{share.name}/</span>
+                  <span class="text-[10px] text-slate-400">{share.root ? '→ ftp://.../' : `→ ftp://.../${share.name}/`}</span>
                 </div>
                 <div class="mt-1 flex flex-wrap gap-1">
                   {#each share.paths as p}
@@ -2045,19 +2112,70 @@
               </p>
             </div>
             {#if ftpServeTLSRequired > 0}
-              <div>
-                <label for="ftp-tls-cert" class="block text-xs font-medium text-slate-500 mb-1.5">TLS Certificate Path</label>
-                <input id="ftp-tls-cert" type="text" bind:value={ftpServeTLSCertFile} placeholder="/path/to/cert.pem"
-                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
-              </div>
-              <div>
-                <label for="ftp-tls-key" class="block text-xs font-medium text-slate-500 mb-1.5">TLS Key Path</label>
-                <input id="ftp-tls-key" type="text" bind:value={ftpServeTLSKeyFile} placeholder="/path/to/key.pem"
-                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
-              </div>
               <div class="col-span-2">
-                <p class="text-[11px] text-slate-400">
-                  PEM-encoded TLS certificate and private key files (same format as HTTPS).
+                <div class="flex items-center gap-3 mb-3">
+                  <span class="text-xs font-medium text-slate-500">TLS Certificate & Key</span>
+                  <div class="flex items-center border border-slate-200 rounded-md overflow-hidden">
+                    <button
+                      type="button"
+                      class="px-2.5 py-1 text-[11px] font-medium transition-colors {ftpServeTLSInputMode === 'path' ? 'bg-slate-800 text-white' : 'bg-white text-slate-500 hover:text-slate-700'}"
+                      onclick={() => { ftpServeTLSInputMode = 'path'; }}
+                    >File Path</button>
+                    <button
+                      type="button"
+                      class="px-2.5 py-1 text-[11px] font-medium transition-colors {ftpServeTLSInputMode === 'paste' ? 'bg-slate-800 text-white' : 'bg-white text-slate-500 hover:text-slate-700'}"
+                      onclick={() => { ftpServeTLSInputMode = 'paste'; }}
+                    >Paste PEM</button>
+                  </div>
+                </div>
+
+                {#if ftpServeTLSInputMode === 'path'}
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="ftp-tls-cert" class="block text-xs font-medium text-slate-500 mb-1.5">TLS Certificate Path</label>
+                      <input id="ftp-tls-cert" type="text" bind:value={ftpServeTLSCertFile} placeholder="/path/to/cert.pem"
+                        class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                    </div>
+                    <div>
+                      <label for="ftp-tls-key" class="block text-xs font-medium text-slate-500 mb-1.5">TLS Key Path</label>
+                      <input id="ftp-tls-key" type="text" bind:value={ftpServeTLSKeyFile} placeholder="/path/to/key.pem"
+                        class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                    </div>
+                  </div>
+                {:else}
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label for="ftp-tls-cert-pem" class="block text-xs font-medium text-slate-500 mb-1.5">TLS Certificate (PEM)</label>
+                      <textarea id="ftp-tls-cert-pem" bind:value={ftpServeTLSCertPEM} placeholder="-----BEGIN CERTIFICATE-----&#10;MIIBxTCCAWugAwIBAgIU...&#10;-----END CERTIFICATE-----" rows="6"
+                        class="w-full px-3 py-2 text-xs font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 resize-y"></textarea>
+                      {#if ftpServeTLSCertPEM && !ftpServeTLSCertPEM.includes('BEGIN CERTIFICATE')}
+                        <p class="mt-1 text-[11px] text-red-600">
+                          This does not look like a certificate. Expected a PEM block starting with <code class="font-mono">-----BEGIN CERTIFICATE-----</code>.
+                          {#if ftpServeTLSCertPEM.includes('PUBLIC KEY')}You may have pasted a public key by mistake.{/if}
+                        </p>
+                      {/if}
+                      <p class="mt-1 text-[11px] text-slate-400">Paste the X.509 certificate (the contents of your <code class="font-mono">cert.pem</code>). This is not the public key.</p>
+                    </div>
+                    <div>
+                      <label for="ftp-tls-key-pem" class="block text-xs font-medium text-slate-500 mb-1.5">TLS Private Key (PEM)</label>
+                      <textarea id="ftp-tls-key-pem" bind:value={ftpServeTLSKeyPEM} placeholder="-----BEGIN PRIVATE KEY-----&#10;MIGHAgEAMBMGByqGSM49...&#10;-----END PRIVATE KEY-----" rows="6"
+                        class="w-full px-3 py-2 text-xs font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 resize-y"></textarea>
+                      {#if ftpServeTLSKeyPEM && !ftpServeTLSKeyPEM.includes('PRIVATE KEY')}
+                        <p class="mt-1 text-[11px] text-red-600">
+                          This does not look like a private key. Expected a PEM block starting with <code class="font-mono">-----BEGIN PRIVATE KEY-----</code> (or <code class="font-mono">RSA PRIVATE KEY</code> / <code class="font-mono">EC PRIVATE KEY</code>).
+                        </p>
+                      {/if}
+                      <p class="mt-1 text-[11px] text-slate-400">Paste the private key (the contents of your <code class="font-mono">key.pem</code>). Do not paste the public key.</p>
+                    </div>
+                  </div>
+                {/if}
+
+                <p class="mt-2 text-[11px] text-slate-400">
+                  {#if ftpServeTLSInputMode === 'path'}
+                    PEM-encoded TLS certificate and private key files on the server filesystem.
+                  {:else}
+                    Paste the PEM content directly. The certificate field expects an X.509 certificate (<code class="font-mono">BEGIN CERTIFICATE</code>), not a public key. The key field expects a private key (<code class="font-mono">BEGIN PRIVATE KEY</code>). Both are stored in the database.
+                  {/if}
                   Generate a self-signed pair with:
                   <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px] font-mono">openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout key.pem -out cert.pem -days 3650 -nodes</code>
                 </p>
@@ -2091,14 +2209,48 @@
                 class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
             </div>
             <div class="col-span-2">
-              <label for="sftp-host-key" class="block text-xs font-medium text-slate-500 mb-1.5">Host Key Path</label>
-              <input id="sftp-host-key" type="text" bind:value={sftpServeHostKeyPath} placeholder="(auto-generated if empty)"
-                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              <div class="flex items-center gap-3 mb-3">
+                <span class="text-xs font-medium text-slate-500">Host Key</span>
+                <div class="flex items-center border border-slate-200 rounded-md overflow-hidden">
+                  <button
+                    type="button"
+                    class="px-2.5 py-1 text-[11px] font-medium transition-colors {sftpServeKeyInputMode === 'path' ? 'bg-slate-800 text-white' : 'bg-white text-slate-500 hover:text-slate-700'}"
+                    onclick={() => { sftpServeKeyInputMode = 'path'; }}
+                  >File Path</button>
+                  <button
+                    type="button"
+                    class="px-2.5 py-1 text-[11px] font-medium transition-colors {sftpServeKeyInputMode === 'paste' ? 'bg-slate-800 text-white' : 'bg-white text-slate-500 hover:text-slate-700'}"
+                    onclick={() => { sftpServeKeyInputMode = 'paste'; }}
+                  >Paste PEM</button>
+                </div>
+              </div>
+
+              {#if sftpServeKeyInputMode === 'path'}
+                <label for="sftp-host-key" class="block text-xs font-medium text-slate-500 mb-1.5">Host Key Path</label>
+                <input id="sftp-host-key" type="text" bind:value={sftpServeHostKeyPath} placeholder="(auto-generated if empty)"
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              {:else}
+                <label for="sftp-host-key-pem" class="block text-xs font-medium text-slate-500 mb-1.5">Host Key (PEM)</label>
+                <textarea id="sftp-host-key-pem" bind:value={sftpServeHostKeyPEM} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;b3BlbnNzaC1rZXktdjEAAAA...&#10;-----END OPENSSH PRIVATE KEY-----" rows="6"
+                  class="w-full px-3 py-2 text-xs font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 resize-y"></textarea>
+                {#if sftpServeHostKeyPEM && !sftpServeHostKeyPEM.includes('PRIVATE KEY')}
+                  <p class="mt-1 text-[11px] text-red-600">
+                    This does not look like a private key. Expected a PEM block starting with <code class="font-mono">-----BEGIN OPENSSH PRIVATE KEY-----</code> or <code class="font-mono">-----BEGIN PRIVATE KEY-----</code>.
+                    {#if sftpServeHostKeyPEM.includes('PUBLIC KEY')}You may have pasted a public key by mistake. Paste the private key instead.{/if}
+                  </p>
+                {/if}
+                <p class="mt-1 text-[11px] text-slate-400">Paste the SSH private key content directly. This is stored in the database and avoids needing a file on disk.</p>
+              {/if}
+
               <p class="mt-1 text-[11px] text-slate-400">
-                Path to the server's SSH private key file (PEM format). This key identifies the server to connecting clients.
+                {#if sftpServeKeyInputMode === 'path'}
+                  Path to the server's SSH private key file (PEM format). This key identifies the server to connecting clients.
+                  Leave empty to auto-generate an ephemeral Ed25519 key on each start (clients will see host-key-changed warnings after restarts).
+                {:else}
+                  The host key must be a private key (e.g. <code class="font-mono">BEGIN OPENSSH PRIVATE KEY</code> or <code class="font-mono">BEGIN PRIVATE KEY</code>), not a public key.
+                {/if}
                 Supported key types: Ed25519, RSA, ECDSA.
                 Generate one with: <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px] font-mono">ssh-keygen -t ed25519 -f /path/to/host_key -N ""</code>.
-                Leave empty to auto-generate an ephemeral Ed25519 key on each start (clients will see host-key-changed warnings after restarts).
               </p>
             </div>
           </div>
