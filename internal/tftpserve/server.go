@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/pin/tftp/v3"
-	"github.com/rakunlabs/pika/internal/config"
 	"github.com/rakunlabs/pika/internal/ftpserve"
+	"github.com/rakunlabs/pika/internal/service"
 )
 
 // Server wraps the TFTP server.
@@ -27,7 +27,7 @@ type Server struct {
 }
 
 // NewServer creates a new TFTP server.
-func NewServer(cfg *config.TFTPServeConfig, shares []ftpserve.Share) (*Server, error) {
+func NewServer(cfg *service.TFTPServeSettings, shares []ftpserve.Share) (*Server, error) {
 	s := &Server{shares: shares}
 
 	tftpSrv := tftp.NewServer(s.readHandler, s.writeHandler)
@@ -38,7 +38,7 @@ func NewServer(cfg *config.TFTPServeConfig, shares []ftpserve.Share) (*Server, e
 }
 
 // Start starts the TFTP server.
-func (s *Server) Start(ctx context.Context, cfg *config.TFTPServeConfig) {
+func (s *Server) Start(ctx context.Context, cfg *service.TFTPServeSettings) {
 	port := cfg.Port
 	if port == 0 {
 		port = 69
@@ -58,6 +58,12 @@ func (s *Server) Start(ctx context.Context, cfg *config.TFTPServeConfig) {
 		slog.Info("shutting down TFTP server")
 		s.tftpSrv.Shutdown()
 	}()
+}
+
+// Stop gracefully shuts down the TFTP server.
+func (s *Server) Stop() {
+	slog.Info("stopping TFTP server")
+	s.tftpSrv.Shutdown()
 }
 
 // UpdateShares replaces the shares.

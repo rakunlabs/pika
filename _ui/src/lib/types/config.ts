@@ -175,12 +175,39 @@ export interface FTPShareEntry {
   read_only: boolean;
 }
 
+// FTP server settings stored in DB
+export interface FTPServeSettings {
+  enabled: boolean;
+  port?: number;
+  host?: string;
+  public_ip?: string;
+  passive_ports?: string;
+}
+
+// SFTP server settings stored in DB
+export interface SFTPServeSettings {
+  enabled: boolean;
+  port?: number;
+  host?: string;
+  host_key_path?: string;
+}
+
+// TFTP server settings stored in DB
+export interface TFTPServeSettings {
+  enabled: boolean;
+  port?: number;
+  host?: string;
+}
+
 // Settings from API
 export interface Settings {
   external?: Record<string, ExternalResource>;
   raw_mounts?: RawMountEntry[];
   ftp_shares?: FTPShareEntry[];
   ftp_users?: FTPUserEntry[];
+  ftp_serve?: FTPServeSettings;
+  sftp_serve?: SFTPServeSettings;
+  tftp_serve?: TFTPServeSettings;
 }
 
 // API response types

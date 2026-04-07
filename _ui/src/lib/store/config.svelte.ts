@@ -693,6 +693,31 @@ function createConfigStore() {
     }
   }
 
+  async function saveServeSettings(
+    ftpServe: import('@/lib/types/config').FTPServeSettings,
+    sftpServe: import('@/lib/types/config').SFTPServeSettings,
+    tftpServe: import('@/lib/types/config').TFTPServeSettings
+  ): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', {
+        action: 'set',
+        ftp_serve: ftpServe,
+        sftp_serve: sftpServe,
+        tftp_serve: tftpServe
+      });
+      if (settings) {
+        settings = { ...settings, ftp_serve: ftpServe, sftp_serve: sftpServe, tftp_serve: tftpServe };
+      } else {
+        settings = { ftp_serve: ftpServe, sftp_serve: sftpServe, tftp_serve: tftpServe };
+      }
+      addToast('Server settings saved.', 'success');
+    } catch (error: any) {
+      const msg = error.response?.data?.message || 'Failed to save server settings';
+      addToast(msg, 'alert');
+      throw error;
+    }
+  }
+
   async function saveRawMounts(mounts: import('@/lib/types/config').RawMountEntry[]): Promise<void> {
     try {
       await axios.post('/api/v1/settings', {
@@ -1061,6 +1086,7 @@ function createConfigStore() {
     saveRawMounts,
     saveFTPShares,
     saveFTPUsers,
+    saveServeSettings,
     listExternalPaths,
 
     // Token operations

@@ -59,43 +59,6 @@ type Server struct {
 	// Each mount maps a URL prefix to a local directory.
 	// Files are served at /raw/{prefix}/...
 	Raw []RawMount `cfg:"raw"`
-
-	// FTPServe configures the built-in FTP server that exposes shared folders.
-	FTPServe FTPServeConfig `cfg:"ftp_serve"`
-
-	// SFTPServe configures the built-in SFTP server that exposes shared folders over SSH.
-	SFTPServe SFTPServeConfig `cfg:"sftp_serve"`
-
-	// TFTPServe configures the built-in TFTP server for PXE boot and firmware serving.
-	TFTPServe TFTPServeConfig `cfg:"tftp_serve"`
-}
-
-// TFTPServeConfig configures the built-in TFTP server.
-type TFTPServeConfig struct {
-	// Enabled activates the TFTP server.
-	Enabled bool `cfg:"enabled"`
-	// Port is the TFTP UDP port (default: 69).
-	Port int `cfg:"port" default:"69"`
-	// Host is the hostname to bind to (default: all interfaces).
-	Host string `cfg:"host"`
-}
-
-// FTPServeConfig configures the built-in FTP server.
-type FTPServeConfig struct {
-	// Enabled activates the FTP server.
-	Enabled bool `cfg:"enabled"`
-	// Port is the FTP control port (default: 2121).
-	Port int `cfg:"port" default:"2121"`
-	// Host is the hostname to bind to (default: all interfaces).
-	Host string `cfg:"host"`
-	// PublicIP is the public IP for passive mode connections.
-	PublicIP string `cfg:"public_ip"`
-	// PassivePorts is the range of passive ports (e.g., "30000-30100").
-	PassivePorts string `cfg:"passive_ports" default:"30000-30100"`
-	// Username is the FTP login username (default: "pika").
-	Username string `cfg:"username" default:"pika"`
-	// Password is the FTP login password.
-	Password string `cfg:"password"`
 }
 
 // RawMount maps a URL path prefix to a filesystem backend.
@@ -140,19 +103,6 @@ type FTPConfig struct {
 	Password string `cfg:"password"`
 	TLS      bool   `cfg:"tls"`       // use FTPS (explicit TLS)
 	BasePath string `cfg:"base_path"` // remote directory root
-}
-
-// SFTPServeConfig configures the built-in SFTP server.
-type SFTPServeConfig struct {
-	// Enabled activates the SFTP server.
-	Enabled bool `cfg:"enabled"`
-	// Port is the SSH port for SFTP (default: 2222).
-	Port int `cfg:"port" default:"2222"`
-	// Host is the hostname to bind to (default: all interfaces).
-	Host string `cfg:"host"`
-	// HostKeyPath is the path to the SSH host key file (PEM).
-	// If empty, a key is auto-generated (not persisted across restarts).
-	HostKeyPath string `cfg:"host_key_path"`
 }
 
 // SFTPConfig holds SFTP (SSH) connection configuration.

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,11 +39,15 @@ type rawHandler struct {
 	ftpServer  *ftpserve.Server
 	sftpServer *sftpserve.Server
 	tftpServer *tftpserve.Server
+	ftpCancel  context.CancelFunc
+	sftpCancel context.CancelFunc
+	tftpCancel context.CancelFunc
+	appCtx     context.Context
 }
 
 // NewRawHandler creates a new rawHandler with initial mount entries.
-func NewRawHandler(entries []mountEntry) *rawHandler {
-	return &rawHandler{mounts: entries}
+func NewRawHandler(entries []mountEntry, appCtx context.Context) *rawHandler {
+	return &rawHandler{mounts: entries, appCtx: appCtx}
 }
 
 // MountInfo holds serializable info about a mount for the API.

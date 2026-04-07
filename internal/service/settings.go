@@ -56,6 +56,33 @@ type Settings struct {
 	RawMounts       []RawMountEntry              `json:"raw_mounts,omitempty"`
 	FTPShares       []FTPShareEntry              `json:"ftp_shares,omitempty"`
 	FTPUsers        []FTPUserEntry               `json:"ftp_users,omitempty"`
+	FTPServe        *FTPServeSettings            `json:"ftp_serve,omitempty"`
+	SFTPServe       *SFTPServeSettings           `json:"sftp_serve,omitempty"`
+	TFTPServe       *TFTPServeSettings           `json:"tftp_serve,omitempty"`
+}
+
+// FTPServeSettings configures the built-in FTP server (stored in DB).
+type FTPServeSettings struct {
+	Enabled      bool   `json:"enabled"`
+	Port         int    `json:"port,omitempty"`
+	Host         string `json:"host,omitempty"`
+	PublicIP     string `json:"public_ip,omitempty"`
+	PassivePorts string `json:"passive_ports,omitempty"`
+}
+
+// SFTPServeSettings configures the built-in SFTP server (stored in DB).
+type SFTPServeSettings struct {
+	Enabled     bool   `json:"enabled"`
+	Port        int    `json:"port,omitempty"`
+	Host        string `json:"host,omitempty"`
+	HostKeyPath string `json:"host_key_path,omitempty"`
+}
+
+// TFTPServeSettings configures the built-in TFTP server (stored in DB).
+type TFTPServeSettings struct {
+	Enabled bool   `json:"enabled"`
+	Port    int    `json:"port,omitempty"`
+	Host    string `json:"host,omitempty"`
 }
 
 // FTPUserEntry defines an FTP user account stored in settings.
@@ -86,6 +113,9 @@ type PatchSettings struct {
 	RawMounts *[]RawMountEntry             `json:"raw_mounts,omitempty"` // pointer to distinguish nil (not provided) from empty
 	FTPShares *[]FTPShareEntry             `json:"ftp_shares,omitempty"` // pointer to distinguish nil from empty
 	FTPUsers  *[]FTPUserEntry              `json:"ftp_users,omitempty"`
+	FTPServe  *FTPServeSettings            `json:"ftp_serve,omitempty"`
+	SFTPServe *SFTPServeSettings           `json:"sftp_serve,omitempty"`
+	TFTPServe *TFTPServeSettings           `json:"tftp_serve,omitempty"`
 }
 
 type ActionKey string
@@ -145,6 +175,17 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 	// Handle FTP users update (if provided)
 	if patch.FTPUsers != nil {
 		settings.FTPUsers = *patch.FTPUsers
+	}
+
+	// Handle server config updates (if provided)
+	if patch.FTPServe != nil {
+		settings.FTPServe = patch.FTPServe
+	}
+	if patch.SFTPServe != nil {
+		settings.SFTPServe = patch.SFTPServe
+	}
+	if patch.TFTPServe != nil {
+		settings.TFTPServe = patch.TFTPServe
 	}
 
 	return s.UpdateSettings(ctx, settings)

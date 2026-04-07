@@ -2,13 +2,13 @@
   import { configStore } from "@/lib/store/config.svelte";
   import { addToast } from "@/lib/store/toast.svelte";
   import { onMount } from "svelte";
-  import { Plus, Trash2, Copy, Eye, EyeOff, Shield, Globe, Key, RotateCw, Lock, Download, Upload, HardDrive, ShieldAlert, FolderOpen, Share2 } from "lucide-svelte";
-  import type { TokenScope, CreateTokenRequest, ExternalResource, RawMountEntry, FTPShareEntry, FTPUserEntry } from "@/lib/types/config";
+  import { Plus, Trash2, Copy, Eye, EyeOff, Shield, Globe, Key, RotateCw, Lock, Download, Upload, HardDrive, ShieldAlert, FolderOpen, Share2, Server } from "lucide-svelte";
+  import type { TokenScope, CreateTokenRequest, ExternalResource, RawMountEntry, FTPShareEntry, FTPUserEntry, FTPServeSettings, SFTPServeSettings, TFTPServeSettings } from "@/lib/types/config";
   import { appStore } from "@/lib/store/store.svelte";
   import axios from 'axios';
 
   // ── Tab state ──
-  let activeSection = $state<'tokens' | 'external' | 'raw_mounts' | 'ftp_shares' | 'rotation' | 'security' | 'backup'>('tokens');
+  let activeSection = $state<'tokens' | 'external' | 'raw_mounts' | 'ftp_shares' | 'file_servers' | 'rotation' | 'security' | 'backup'>('tokens');
 
   // ── Raw mounts state ──
   let rawMounts = $state<RawMountEntry[]>([]);
@@ -62,6 +62,66 @@
   let editingUserIndex = $state<number | null>(null);
   let isSavingUsers = $state(false);
   let showUserPassword = $state(false);
+
+  // ── File server state ──
+  let ftpServeEnabled = $state(false);
+  let ftpServePort = $state(2121);
+  let ftpServeHost = $state('');
+  let ftpServePublicIP = $state('');
+  let ftpServePassivePorts = $state('30000-30100');
+  let sftpServeEnabled = $state(false);
+  let sftpServePort = $state(2222);
+  let sftpServeHost = $state('');
+  let sftpServeHostKeyPath = $state('');
+  let tftpServeEnabled = $state(false);
+  let tftpServePort = $state(69);
+  let tftpServeHost = $state('');
+  let isSavingServers = $state(false);
+
+  function loadServeSettings() {
+    const s = configStore.settings;
+    ftpServeEnabled = s?.ftp_serve?.enabled ?? false;
+    ftpServePort = s?.ftp_serve?.port || 2121;
+    ftpServeHost = s?.ftp_serve?.host ?? '';
+    ftpServePublicIP = s?.ftp_serve?.public_ip ?? '';
+    ftpServePassivePorts = s?.ftp_serve?.passive_ports || '30000-30100';
+    sftpServeEnabled = s?.sftp_serve?.enabled ?? false;
+    sftpServePort = s?.sftp_serve?.port || 2222;
+    sftpServeHost = s?.sftp_serve?.host ?? '';
+    sftpServeHostKeyPath = s?.sftp_serve?.host_key_path ?? '';
+    tftpServeEnabled = s?.tftp_serve?.enabled ?? false;
+    tftpServePort = s?.tftp_serve?.port || 69;
+    tftpServeHost = s?.tftp_serve?.host ?? '';
+  }
+
+  async function handleSaveServers() {
+    isSavingServers = true;
+    try {
+      const ftpServe: FTPServeSettings = {
+        enabled: ftpServeEnabled,
+        port: ftpServePort,
+        host: ftpServeHost || undefined,
+        public_ip: ftpServePublicIP || undefined,
+        passive_ports: ftpServePassivePorts || undefined,
+      };
+      const sftpServe: SFTPServeSettings = {
+        enabled: sftpServeEnabled,
+        port: sftpServePort,
+        host: sftpServeHost || undefined,
+        host_key_path: sftpServeHostKeyPath || undefined,
+      };
+      const tftpServe: TFTPServeSettings = {
+        enabled: tftpServeEnabled,
+        port: tftpServePort,
+        host: tftpServeHost || undefined,
+      };
+      await configStore.saveServeSettings(ftpServe, sftpServe, tftpServe);
+    } catch {
+      // toast already shown by store
+    } finally {
+      isSavingServers = false;
+    }
+  }
 
   // ── Rotation state ──
   let rotationAdminSecret = $state('');
@@ -874,6 +934,14 @@
       >
         <Share2 size={15} class="shrink-0" />
         File Sharing
+      </button>
+      <button
+        class="flex items-center gap-2.5 w-full px-3 py-2 text-[13px] font-medium rounded-md cursor-pointer transition-colors text-left
+          {activeSection === 'file_servers' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-transparent text-slate-600 border border-transparent hover:bg-slate-100 hover:text-slate-800'}"
+        onclick={() => { activeSection = 'file_servers'; loadServeSettings(); }}
+      >
+        <Server size={15} class="shrink-0" />
+        File Servers
       </button>
       <button
         class="flex items-center gap-2.5 w-full px-3 py-2 text-[13px] font-medium rounded-md cursor-pointer transition-colors text-left
@@ -1861,28 +1929,126 @@
         {/if}
       </div>
 
-      <!-- Server Config Info -->
-      <div class="mt-6 p-4 bg-slate-50 border border-slate-200 rounded-lg">
-        <h4 class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">Server Configuration</h4>
-        <p class="text-xs text-slate-500 leading-relaxed mb-2">
-          Enable the FTP and/or SFTP server in your config file. Both servers use the same shares and users configured above.
-        </p>
-        <pre class="p-3 bg-white border border-slate-200 rounded text-[11px] font-mono text-slate-600 overflow-x-auto">server:
-  ftp_serve:                # FTP server
-    enabled: true
-    port: 2121
-    passive_ports: "30000-30100"
-  sftp_serve:               # SFTP server (over SSH)
-    enabled: true
-    port: 2222
-    # host_key_path: /etc/pika/ssh_host_key
-  tftp_serve:               # TFTP server (UDP, no auth)
-    enabled: true
-    port: 69</pre>
-        <p class="mt-2 text-[11px] text-slate-400">
-          FTP and SFTP use the users configured above. TFTP has no authentication (UDP protocol) — use it only for PXE boot or firmware serving on trusted networks.
-          Files are accessed as <code class="px-1 py-0.5 bg-white border border-slate-200 rounded text-[10px]">share_name/path/to/file</code>.
-        </p>
+
+    </div>
+  {/if}
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- File Servers Section -->
+  <!-- ══════════════════════════════════════════ -->
+  {#if activeSection === 'file_servers'}
+    <div>
+      <div class="mb-6">
+        <h2 class="text-lg font-semibold text-slate-800">File Servers</h2>
+        <p class="text-sm text-slate-500 mt-0.5">Configure built-in FTP, SFTP, and TFTP servers.</p>
+      </div>
+
+      <!-- FTP Server -->
+      <div class="mb-6 p-5 bg-white border border-slate-200 rounded-lg shadow-sm">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-semibold text-slate-700">FTP Server</h3>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" bind:checked={ftpServeEnabled}
+              class="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+            <span class="text-xs font-medium text-slate-600">Enabled</span>
+          </label>
+        </div>
+
+        {#if ftpServeEnabled}
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label for="ftp-port" class="block text-xs font-medium text-slate-500 mb-1.5">Port</label>
+              <input id="ftp-port" type="number" bind:value={ftpServePort} placeholder="2121"
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+            <div>
+              <label for="ftp-host" class="block text-xs font-medium text-slate-500 mb-1.5">Host</label>
+              <input id="ftp-host" type="text" bind:value={ftpServeHost} placeholder="0.0.0.0 (all interfaces)"
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+            <div>
+              <label for="ftp-public-ip" class="block text-xs font-medium text-slate-500 mb-1.5">Public IP</label>
+              <input id="ftp-public-ip" type="text" bind:value={ftpServePublicIP} placeholder="(for passive mode)"
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+            <div>
+              <label for="ftp-passive-ports" class="block text-xs font-medium text-slate-500 mb-1.5">Passive Ports</label>
+              <input id="ftp-passive-ports" type="text" bind:value={ftpServePassivePorts} placeholder="30000-30100"
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- SFTP Server -->
+      <div class="mb-6 p-5 bg-white border border-slate-200 rounded-lg shadow-sm">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-semibold text-slate-700">SFTP Server</h3>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" bind:checked={sftpServeEnabled}
+              class="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+            <span class="text-xs font-medium text-slate-600">Enabled</span>
+          </label>
+        </div>
+
+        {#if sftpServeEnabled}
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label for="sftp-port" class="block text-xs font-medium text-slate-500 mb-1.5">Port</label>
+              <input id="sftp-port" type="number" bind:value={sftpServePort} placeholder="2222"
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+            <div>
+              <label for="sftp-host" class="block text-xs font-medium text-slate-500 mb-1.5">Host</label>
+              <input id="sftp-host" type="text" bind:value={sftpServeHost} placeholder="0.0.0.0 (all interfaces)"
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+            <div class="col-span-2">
+              <label for="sftp-host-key" class="block text-xs font-medium text-slate-500 mb-1.5">Host Key Path</label>
+              <input id="sftp-host-key" type="text" bind:value={sftpServeHostKeyPath} placeholder="(auto-generated if empty)"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              <p class="mt-1 text-[11px] text-slate-400">Path to SSH host key PEM file. Leave empty for auto-generated ephemeral key.</p>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- TFTP Server -->
+      <div class="mb-6 p-5 bg-white border border-slate-200 rounded-lg shadow-sm">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-semibold text-slate-700">TFTP Server</h3>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" bind:checked={tftpServeEnabled}
+              class="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+            <span class="text-xs font-medium text-slate-600">Enabled</span>
+          </label>
+        </div>
+
+        {#if tftpServeEnabled}
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label for="tftp-port" class="block text-xs font-medium text-slate-500 mb-1.5">Port</label>
+              <input id="tftp-port" type="number" bind:value={tftpServePort} placeholder="69"
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+            <div>
+              <label for="tftp-host" class="block text-xs font-medium text-slate-500 mb-1.5">Host</label>
+              <input id="tftp-host" type="text" bind:value={tftpServeHost} placeholder="0.0.0.0 (all interfaces)"
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Save button -->
+      <div class="flex justify-end">
+        <button
+          class="px-4 py-2 bg-blue-500 text-white text-sm font-medium rounded-md hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          onclick={handleSaveServers}
+          disabled={isSavingServers}
+        >
+          {isSavingServers ? 'Saving...' : 'Save Server Settings'}
+        </button>
       </div>
     </div>
   {/if}

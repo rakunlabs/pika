@@ -1,6 +1,7 @@
 /pika.*
 /bin/
 /dist
+/_fork
 coverage.out
 .env
 .env.*

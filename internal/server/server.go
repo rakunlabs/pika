@@ -76,39 +76,48 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		return err
 	}
 
+	// Read serve settings from DB
+	settings, err := svc.Settings(ctx)
+	if err != nil {
+		return fmt.Errorf("reading settings for server startup: %w", err)
+	}
+
 	// Start FTP server if enabled
-	if cfg.Server.FTPServe.Enabled {
+	if settings.FTPServe != nil && settings.FTPServe.Enabled {
 		shares := api.BuildFTPShares(ctx, svc, rh)
 		users := api.BuildFTPUsers(ctx, svc)
-		ftpSrv, err := ftpserve.NewServer(&cfg.Server.FTPServe, shares, users)
+		ftpSrv, err := ftpserve.NewServer(settings.FTPServe, shares, users)
 		if err != nil {
 			return fmt.Errorf("init FTP server: %w", err)
 		}
-		ftpSrv.Start(ctx)
-		api.SetFTPServer(rh, ftpSrv)
+		ftpCtx, ftpCancel := context.WithCancel(ctx)
+		ftpSrv.Start(ftpCtx)
+		api.SetFTPServer(rh, ftpSrv, ftpCancel)
 	}
 
 	// Start SFTP server if enabled
-	if cfg.Server.SFTPServe.Enabled {
+	if settings.SFTPServe != nil && settings.SFTPServe.Enabled {
 		shares := api.BuildFTPShares(ctx, svc, rh)
 		users := api.BuildFTPUsers(ctx, svc)
-		sftpSrv, err := sftpserve.NewServer(&cfg.Server.SFTPServe, shares, users)
+		sftpSrv, err := sftpserve.NewServer(settings.SFTPServe, shares, users)
 		if err != nil {
 			return fmt.Errorf("init SFTP server: %w", err)
 		}
-		sftpSrv.Start(ctx)
-		api.SetSFTPServer(rh, sftpSrv)
+		sftpCtx, sftpCancel := context.WithCancel(ctx)
+		sftpSrv.Start(sftpCtx)
+		api.SetSFTPServer(rh, sftpSrv, sftpCancel)
 	}
 
 	// Start TFTP server if enabled
-	if cfg.Server.TFTPServe.Enabled {
+	if settings.TFTPServe != nil && settings.TFTPServe.Enabled {
 		shares := api.BuildFTPShares(ctx, svc, rh)
-		tftpSrv, err := tftpserve.NewServer(&cfg.Server.TFTPServe, shares)
+		tftpSrv, err := tftpserve.NewServer(settings.TFTPServe, shares)
 		if err != nil {
 			return fmt.Errorf("init TFTP server: %w", err)
 		}
-		tftpSrv.Start(ctx, &cfg.Server.TFTPServe)
-		api.SetTFTPServer(rh, tftpSrv)
+		tftpCtx, tftpCancel := context.WithCancel(ctx)
+		tftpSrv.Start(tftpCtx, settings.TFTPServe)
+		api.SetTFTPServer(rh, tftpSrv, tftpCancel)
 	}
 
 	if err := folderHandler(mAuth); err != nil {

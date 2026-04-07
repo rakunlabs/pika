@@ -17,8 +17,8 @@ import (
 	"crypto/x509"
 
 	"github.com/pkg/sftp"
-	"github.com/rakunlabs/pika/internal/config"
 	"github.com/rakunlabs/pika/internal/ftpserve"
+	"github.com/rakunlabs/pika/internal/service"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -33,7 +33,7 @@ type Server struct {
 }
 
 // NewServer creates a new SFTP server.
-func NewServer(cfg *config.SFTPServeConfig, shares []ftpserve.Share, users []ftpserve.User) (*Server, error) {
+func NewServer(cfg *service.SFTPServeSettings, shares []ftpserve.Share, users []ftpserve.User) (*Server, error) {
 	port := cfg.Port
 	if port == 0 {
 		port = 2222
@@ -151,6 +151,12 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		}
 		server.Close()
 	}
+}
+
+// Stop gracefully shuts down the SFTP server by closing the listener.
+func (s *Server) Stop() {
+	slog.Info("stopping SFTP server")
+	s.listener.Close()
 }
 
 // UpdateShares replaces the shares.

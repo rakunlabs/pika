@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { link, location } from 'svelte-spa-router';
+  import { link, router } from 'svelte-spa-router';
   import { appStore } from '@/lib/store/store.svelte';
   import { Blocks, Settings, User, Users, LogOut, HardDrive } from 'lucide-svelte';
 
@@ -44,7 +44,7 @@
   <!-- Nav Links -->
   <div class="flex items-center gap-1">
     {#each navItems as item (item.path)}
-      {@const isActive = $location === item.path || ($location === '/' && item.path === '/configurations')}
+      {@const isActive = router.location === item.path || (router.location === '/' && item.path === '/configurations')}
       <a
         href={item.path}
         use:link

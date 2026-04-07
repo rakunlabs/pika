@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/rakunlabs/pika/internal/config"
+	"github.com/rakunlabs/pika/internal/service"
 	ftpserver "goftp.io/server/v2"
 )
 
@@ -17,21 +17,8 @@ type Server struct {
 }
 
 // NewServer creates a new FTP server with the given config, shares, and users.
-func NewServer(cfg *config.FTPServeConfig, shares []Share, users []User) (*Server, error) {
+func NewServer(cfg *service.FTPServeSettings, shares []Share, users []User) (*Server, error) {
 	auth := NewMultiUserAuth(users)
-
-	// If no DB users configured, fall back to config-file credentials
-	if len(users) == 0 && cfg.Password != "" {
-		username := cfg.Username
-		if username == "" {
-			username = "pika"
-		}
-		auth.UpdateUsers([]User{{
-			Username: username,
-			Password: cfg.Password,
-		}})
-	}
-
 	driver := NewDriver(shares, auth)
 
 	port := cfg.Port
@@ -39,13 +26,27 @@ func NewServer(cfg *config.FTPServeConfig, shares []Share, users []User) (*Serve
 		port = 2121
 	}
 
+	passivePorts := cfg.PassivePorts
+	if passivePorts == "" {
+		passivePorts = "30000-30100"
+	}
+
+	// Default to IPv4 all-interfaces. The goftp library defaults to "::" (IPv6)
+	// which causes passive mode data connections to fail on systems where the
+	// dual-stack passive listener doesn't accept IPv4 connections.
+	host := cfg.Host
+	if host == "" {
+		host = "0.0.0.0"
+	}
+
 	opts := &ftpserver.Options{
 		Driver:       driver,
 		Auth:         auth,
+		Perm:         ftpserver.NewSimplePerm("pika", "pika"),
 		Port:         port,
-		Hostname:     cfg.Host,
+		Hostname:     host,
 		PublicIP:     cfg.PublicIP,
-		PassivePorts: cfg.PassivePorts,
+		PassivePorts: passivePorts,
 		Name:         "Pika FTP",
 	}
 
@@ -75,6 +76,12 @@ func (s *Server) Start(ctx context.Context) {
 		slog.Info("shutting down FTP server")
 		s.ftpSrv.Shutdown()
 	}()
+}
+
+// Stop gracefully shuts down the FTP server.
+func (s *Server) Stop() {
+	slog.Info("stopping FTP server")
+	s.ftpSrv.Shutdown()
 }
 
 // UpdateShares replaces the shares served by the FTP server.

@@ -250,6 +250,24 @@ func (a *api) postSettings(c *ada.Context) error {
 		a.reloadFTPUsers(c.Request.Context())
 	}
 
+	// If serve settings were updated, reload the corresponding servers
+	if patchSettings.FTPServe != nil || patchSettings.SFTPServe != nil || patchSettings.TFTPServe != nil {
+		settings, err := a.svc.Settings(c.Request.Context())
+		if err != nil {
+			slog.Error("failed to read settings for file server reload", "error", err)
+		} else {
+			if patchSettings.FTPServe != nil {
+				a.reloadFTPServe(settings)
+			}
+			if patchSettings.SFTPServe != nil {
+				a.reloadSFTPServe(settings)
+			}
+			if patchSettings.TFTPServe != nil {
+				a.reloadTFTPServe(settings)
+			}
+		}
+	}
+
 	return c.SetStatus(http.StatusOK).SendJSON(patchSettings)
 }
 
@@ -307,6 +325,123 @@ func (a *api) reloadFTPUsers(ctx context.Context) {
 		sftpSrv.UpdateUsers(users)
 	}
 	slog.Info("file server users reloaded", "count", len(users))
+}
+
+// reloadFTPServe stops the existing FTP server (if running) and starts a new one if enabled.
+func (a *api) reloadFTPServe(settings *service.Settings) {
+	shares := BuildFTPShares(context.Background(), a.svc, a.rawHandler)
+	users := BuildFTPUsers(context.Background(), a.svc)
+
+	a.rawHandler.mu.Lock()
+	oldServer := a.rawHandler.ftpServer
+	oldCancel := a.rawHandler.ftpCancel
+	a.rawHandler.ftpServer = nil
+	a.rawHandler.ftpCancel = nil
+	a.rawHandler.mu.Unlock()
+
+	// Cancel context first to trigger clean goroutine shutdown, then stop server to free port.
+	if oldCancel != nil {
+		oldCancel()
+	}
+	if oldServer != nil {
+		oldServer.Stop()
+	}
+
+	if settings.FTPServe != nil && settings.FTPServe.Enabled {
+		ftpSrv, err := ftpserve.NewServer(settings.FTPServe, shares, users)
+		if err != nil {
+			slog.Error("failed to start FTP server", "error", err)
+			return
+		}
+		ctx, cancel := context.WithCancel(a.rawHandler.appCtx)
+		ftpSrv.Start(ctx)
+
+		a.rawHandler.mu.Lock()
+		a.rawHandler.ftpServer = ftpSrv
+		a.rawHandler.ftpCancel = cancel
+		a.rawHandler.mu.Unlock()
+
+		slog.Info("FTP server reloaded")
+	} else {
+		slog.Info("FTP server disabled")
+	}
+}
+
+// reloadSFTPServe stops the existing SFTP server (if running) and starts a new one if enabled.
+func (a *api) reloadSFTPServe(settings *service.Settings) {
+	shares := BuildFTPShares(context.Background(), a.svc, a.rawHandler)
+	users := BuildFTPUsers(context.Background(), a.svc)
+
+	a.rawHandler.mu.Lock()
+	oldServer := a.rawHandler.sftpServer
+	oldCancel := a.rawHandler.sftpCancel
+	a.rawHandler.sftpServer = nil
+	a.rawHandler.sftpCancel = nil
+	a.rawHandler.mu.Unlock()
+
+	if oldCancel != nil {
+		oldCancel()
+	}
+	if oldServer != nil {
+		oldServer.Stop()
+	}
+
+	if settings.SFTPServe != nil && settings.SFTPServe.Enabled {
+		sftpSrv, err := sftpserve.NewServer(settings.SFTPServe, shares, users)
+		if err != nil {
+			slog.Error("failed to start SFTP server", "error", err)
+			return
+		}
+		ctx, cancel := context.WithCancel(a.rawHandler.appCtx)
+		sftpSrv.Start(ctx)
+
+		a.rawHandler.mu.Lock()
+		a.rawHandler.sftpServer = sftpSrv
+		a.rawHandler.sftpCancel = cancel
+		a.rawHandler.mu.Unlock()
+
+		slog.Info("SFTP server reloaded")
+	} else {
+		slog.Info("SFTP server disabled")
+	}
+}
+
+// reloadTFTPServe stops the existing TFTP server (if running) and starts a new one if enabled.
+func (a *api) reloadTFTPServe(settings *service.Settings) {
+	shares := BuildFTPShares(context.Background(), a.svc, a.rawHandler)
+
+	a.rawHandler.mu.Lock()
+	oldServer := a.rawHandler.tftpServer
+	oldCancel := a.rawHandler.tftpCancel
+	a.rawHandler.tftpServer = nil
+	a.rawHandler.tftpCancel = nil
+	a.rawHandler.mu.Unlock()
+
+	if oldCancel != nil {
+		oldCancel()
+	}
+	if oldServer != nil {
+		oldServer.Stop()
+	}
+
+	if settings.TFTPServe != nil && settings.TFTPServe.Enabled {
+		tftpSrv, err := tftpserve.NewServer(settings.TFTPServe, shares)
+		if err != nil {
+			slog.Error("failed to start TFTP server", "error", err)
+			return
+		}
+		ctx, cancel := context.WithCancel(a.rawHandler.appCtx)
+		tftpSrv.Start(ctx, settings.TFTPServe)
+
+		a.rawHandler.mu.Lock()
+		a.rawHandler.tftpServer = tftpSrv
+		a.rawHandler.tftpCancel = cancel
+		a.rawHandler.mu.Unlock()
+
+		slog.Info("TFTP server reloaded")
+	} else {
+		slog.Info("TFTP server disabled")
+	}
 }
 
 // BuildMountEntries creates mountEntry instances from settings entries.
@@ -500,7 +635,7 @@ func BuildInitialRawHandler(ctx context.Context, cfgMounts []config.RawMount, sv
 		}
 	}
 
-	return NewRawHandler(entries)
+	return NewRawHandler(entries, ctx)
 }
 
 // BuildFTPShares creates FTP share entries from the current settings, resolving
@@ -585,24 +720,27 @@ func BuildFTPUsers(ctx context.Context, svc *service.Service) []ftpserve.User {
 	return users
 }
 
-// SetFTPServer stores the FTP server reference in the rawHandler for share reloading.
-func SetFTPServer(rh *rawHandler, ftpSrv *ftpserve.Server) {
+// SetFTPServer stores the FTP server reference and its cancel func in the rawHandler.
+func SetFTPServer(rh *rawHandler, ftpSrv *ftpserve.Server, cancel context.CancelFunc) {
 	rh.mu.Lock()
 	rh.ftpServer = ftpSrv
+	rh.ftpCancel = cancel
 	rh.mu.Unlock()
 }
 
-// SetSFTPServer stores the SFTP server reference in the rawHandler for share reloading.
-func SetSFTPServer(rh *rawHandler, sftpSrv *sftpserve.Server) {
+// SetSFTPServer stores the SFTP server reference and its cancel func in the rawHandler.
+func SetSFTPServer(rh *rawHandler, sftpSrv *sftpserve.Server, cancel context.CancelFunc) {
 	rh.mu.Lock()
 	rh.sftpServer = sftpSrv
+	rh.sftpCancel = cancel
 	rh.mu.Unlock()
 }
 
-// SetTFTPServer stores the TFTP server reference in the rawHandler for share reloading.
-func SetTFTPServer(rh *rawHandler, tftpSrv *tftpserve.Server) {
+// SetTFTPServer stores the TFTP server reference and its cancel func in the rawHandler.
+func SetTFTPServer(rh *rawHandler, tftpSrv *tftpserve.Server, cancel context.CancelFunc) {
 	rh.mu.Lock()
 	rh.tftpServer = tftpSrv
+	rh.tftpCancel = cancel
 	rh.mu.Unlock()
 }
 
