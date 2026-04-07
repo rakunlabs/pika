@@ -16,11 +16,11 @@ import (
 	"time"
 
 	"github.com/rakunlabs/ada"
-	"github.com/rakunlabs/pika/internal/ftpserve"
+	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/rawfs"
 	"github.com/rakunlabs/pika/internal/service"
-	"github.com/rakunlabs/pika/internal/sftpserve"
-	"github.com/rakunlabs/pika/internal/tftpserve"
+	"github.com/rakunlabs/pika/internal/serve/sftpserve"
+	"github.com/rakunlabs/pika/internal/serve/tftpserve"
 )
 
 // mountEntry holds a prefix and its associated filesystem backend.

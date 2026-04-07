@@ -14,15 +14,15 @@ import (
 
 	"github.com/rakunlabs/ada"
 	"github.com/rakunlabs/pika/internal/config"
-	"github.com/rakunlabs/pika/internal/ftpserve"
+	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/rawfs"
 	"github.com/rakunlabs/pika/internal/rawfs/localfs"
 	"github.com/rakunlabs/pika/internal/secret"
 	"github.com/rakunlabs/pika/internal/secret/crypto"
 	"github.com/rakunlabs/pika/internal/server/session"
 	"github.com/rakunlabs/pika/internal/service"
-	"github.com/rakunlabs/pika/internal/sftpserve"
-	"github.com/rakunlabs/pika/internal/tftpserve"
+	"github.com/rakunlabs/pika/internal/serve/sftpserve"
+	"github.com/rakunlabs/pika/internal/serve/tftpserve"
 )
 
 // userMiddleware extracts the X-User header and injects it into the request context.

@@ -693,22 +693,20 @@ function createConfigStore() {
     }
   }
 
-  async function saveServeSettings(
-    ftpServe: import('@/lib/types/config').FTPServeSettings,
-    sftpServe: import('@/lib/types/config').SFTPServeSettings,
-    tftpServe: import('@/lib/types/config').TFTPServeSettings
-  ): Promise<void> {
+  async function saveServeSettings(patch: {
+    ftp_serve?: import('@/lib/types/config').FTPServeSettings,
+    sftp_serve?: import('@/lib/types/config').SFTPServeSettings,
+    tftp_serve?: import('@/lib/types/config').TFTPServeSettings,
+  }): Promise<void> {
     try {
       await axios.post('/api/v1/settings', {
         action: 'set',
-        ftp_serve: ftpServe,
-        sftp_serve: sftpServe,
-        tftp_serve: tftpServe
+        ...patch
       });
       if (settings) {
-        settings = { ...settings, ftp_serve: ftpServe, sftp_serve: sftpServe, tftp_serve: tftpServe };
+        settings = { ...settings, ...patch };
       } else {
-        settings = { ftp_serve: ftpServe, sftp_serve: sftpServe, tftp_serve: tftpServe };
+        settings = { ...patch };
       }
       addToast('Server settings saved.', 'success');
     } catch (error: any) {

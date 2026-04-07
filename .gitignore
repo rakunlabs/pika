@@ -2,6 +2,7 @@
 /bin/
 /dist
 /_fork
+/.claude
 coverage.out
 .env
 .env.*

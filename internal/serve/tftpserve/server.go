@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/pin/tftp/v3"
-	"github.com/rakunlabs/pika/internal/ftpserve"
+	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/service"
 )
 

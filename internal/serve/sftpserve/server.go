@@ -17,7 +17,7 @@ import (
 	"crypto/x509"
 
 	"github.com/pkg/sftp"
-	"github.com/rakunlabs/pika/internal/ftpserve"
+	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/service"
 	"golang.org/x/crypto/ssh"
 )

@@ -18,14 +18,14 @@ import (
 	mtelemetry "github.com/rakunlabs/ada/middleware/telemetry"
 
 	"github.com/rakunlabs/pika/internal/config"
-	"github.com/rakunlabs/pika/internal/ftpserve"
+	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/secret"
 	"github.com/rakunlabs/pika/internal/server/api"
 	"github.com/rakunlabs/pika/internal/server/compat"
 	"github.com/rakunlabs/pika/internal/server/session"
 	"github.com/rakunlabs/pika/internal/service"
-	"github.com/rakunlabs/pika/internal/sftpserve"
-	"github.com/rakunlabs/pika/internal/tftpserve"
+	"github.com/rakunlabs/pika/internal/serve/sftpserve"
+	"github.com/rakunlabs/pika/internal/serve/tftpserve"
 )
 
 func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info api.Info, encStore *secret.Storage) error {

@@ -5,6 +5,7 @@ go 1.26
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/doug-martin/goqu/v9 v9.19.0
+	github.com/fclairamb/ftpserverlib v0.30.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/jlaffaye/ftp v0.2.0
 	github.com/minio/minio-go/v7 v7.0.99
@@ -27,15 +28,10 @@ require (
 	github.com/rakunlabs/query v0.4.1
 	github.com/rakunlabs/tell v0.1.2
 	github.com/rakunlabs/tummy v0.1.2
-	goftp.io/server/v2 v2.0.2
+	github.com/spf13/afero v1.15.0
 	golang.org/x/crypto v0.49.0
 	modernc.org/sqlite v1.47.0
 )
-
-// Use local fork of goftp to fix passive mode data socket binding (tcp -> tcp4).
-// The upstream library creates IPv6 dual-stack listeners for passive data
-// connections, which fail to accept IPv4 connections on some systems.
-replace goftp.io/server/v2 => ./_fork/goftp-server-v2
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0 // indirect

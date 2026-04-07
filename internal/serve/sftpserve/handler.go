@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/pkg/sftp"
-	"github.com/rakunlabs/pika/internal/ftpserve"
+	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/rawfs"
 )
 

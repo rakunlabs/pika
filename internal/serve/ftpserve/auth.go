@@ -3,8 +3,6 @@ package ftpserve
 import (
 	"crypto/subtle"
 	"sync"
-
-	ftpserver "goftp.io/server/v2"
 )
 
 // User represents an FTP user with optional share restrictions.
@@ -15,7 +13,7 @@ type User struct {
 	ReadOnly bool
 }
 
-// MultiUserAuth implements goftp Auth with multiple users and per-user share access.
+// MultiUserAuth manages FTP users with thread-safe access.
 type MultiUserAuth struct {
 	mu    sync.RWMutex
 	users []User
@@ -33,21 +31,21 @@ func (a *MultiUserAuth) UpdateUsers(users []User) {
 	a.mu.Unlock()
 }
 
-// CheckPasswd implements goftp Auth.
-func (a *MultiUserAuth) CheckPasswd(ctx *ftpserver.Context, username, password string) (bool, error) {
+// Authenticate checks credentials and returns the matching user, or nil.
+func (a *MultiUserAuth) Authenticate(username, password string) *User {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	for _, u := range a.users {
-		if constantTimeEquals(u.Username, username) && constantTimeEquals(u.Password, password) {
-			return true, nil
+	for i := range a.users {
+		if constantTimeEquals(a.users[i].Username, username) && constantTimeEquals(a.users[i].Password, password) {
+			u := a.users[i]
+			return &u
 		}
 	}
-
-	return false, nil
+	return nil
 }
 
-// GetUser returns the user by username (after successful auth).
+// GetUser returns the user by username.
 func (a *MultiUserAuth) GetUser(username string) *User {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

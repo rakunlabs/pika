@@ -97,6 +97,13 @@
   async function handleSaveServers() {
     isSavingServers = true;
     try {
+      const s = configStore.settings;
+      const patch: {
+        ftp_serve?: FTPServeSettings;
+        sftp_serve?: SFTPServeSettings;
+        tftp_serve?: TFTPServeSettings;
+      } = {};
+
       const ftpServe: FTPServeSettings = {
         enabled: ftpServeEnabled,
         port: ftpServePort,
@@ -104,18 +111,35 @@
         public_ip: ftpServePublicIP || undefined,
         passive_ports: ftpServePassivePorts || undefined,
       };
+      if (JSON.stringify(ftpServe) !== JSON.stringify(s?.ftp_serve ?? {})) {
+        patch.ftp_serve = ftpServe;
+      }
+
       const sftpServe: SFTPServeSettings = {
         enabled: sftpServeEnabled,
         port: sftpServePort,
         host: sftpServeHost || undefined,
         host_key_path: sftpServeHostKeyPath || undefined,
       };
+      if (JSON.stringify(sftpServe) !== JSON.stringify(s?.sftp_serve ?? {})) {
+        patch.sftp_serve = sftpServe;
+      }
+
       const tftpServe: TFTPServeSettings = {
         enabled: tftpServeEnabled,
         port: tftpServePort,
         host: tftpServeHost || undefined,
       };
-      await configStore.saveServeSettings(ftpServe, sftpServe, tftpServe);
+      if (JSON.stringify(tftpServe) !== JSON.stringify(s?.tftp_serve ?? {})) {
+        patch.tftp_serve = tftpServe;
+      }
+
+      if (Object.keys(patch).length === 0) {
+        addToast('No changes detected.', 'info');
+        return;
+      }
+
+      await configStore.saveServeSettings(patch);
     } catch {
       // toast already shown by store
     } finally {
