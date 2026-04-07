@@ -33,8 +33,11 @@ type Server struct {
 	users  []ftpserve.User
 }
 
-// NewServer creates a new SFTP server.
-func NewServer(cfg *service.SFTPServeSettings, shares []ftpserve.Share, users []ftpserve.User) (*Server, error) {
+// NewServer creates a new SFTP server. The optional onKeyGenerated callback is
+// invoked with the PEM-encoded private key when an ephemeral host key is
+// generated (i.e. neither a file path nor PEM content was configured). Callers
+// should use this to persist the key so it survives restarts.
+func NewServer(cfg *service.SFTPServeSettings, shares []ftpserve.Share, users []ftpserve.User, onKeyGenerated func(pem string)) (*Server, error) {
 	port := cfg.Port
 	if port == 0 {
 		port = 2222
@@ -51,12 +54,17 @@ func NewServer(cfg *service.SFTPServeSettings, shares []ftpserve.Share, users []
 	}
 
 	// Load or generate host key
-	hostKey, err := loadOrGenerateHostKey(cfg.HostKeyPath, cfg.HostKeyPEM)
+	hostKey, generatedPEM, err := loadOrGenerateHostKey(cfg.HostKeyPath, cfg.HostKeyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("sftp serve: host key: %w", err)
 	}
 	sshCfg.AddHostKey(hostKey)
 	s.sshCfg = sshCfg
+
+	// Auto-persist the generated key so it survives restarts.
+	if generatedPEM != "" && onKeyGenerated != nil {
+		onKeyGenerated(generatedPEM)
+	}
 
 	addr := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", port))
 	listener, err := net.Listen("tcp", addr)
@@ -217,13 +225,17 @@ func (s *Server) UpdateUsers(users []ftpserve.User) {
 // A persistent key avoids "host key changed" warnings for SFTP clients across
 // server restarts.
 // Generate one with: ssh-keygen -t ed25519 -f /path/to/host_key -N ""
-func loadOrGenerateHostKey(path string, pemContent string) (ssh.Signer, error) {
+// loadOrGenerateHostKey returns (signer, generatedPEM, error).
+// generatedPEM is non-empty only when an ephemeral key was created (no path or
+// PEM content configured), allowing the caller to persist it.
+func loadOrGenerateHostKey(path string, pemContent string) (ssh.Signer, string, error) {
 	if path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("reading host key %s: %w", path, err)
+			return nil, "", fmt.Errorf("reading host key %s: %w", path, err)
 		}
-		return ssh.ParsePrivateKey(data)
+		signer, err := ssh.ParsePrivateKey(data)
+		return signer, "", err
 	}
 
 	if pemContent != "" {
@@ -233,20 +245,21 @@ func loadOrGenerateHostKey(path string, pemContent string) (ssh.Signer, error) {
 			if strings.Contains(pemContent, "PUBLIC KEY") {
 				hint = "it looks like a public key was pasted instead of a private key"
 			}
-			return nil, fmt.Errorf("invalid host key PEM content: %s", hint)
+			return nil, "", fmt.Errorf("invalid host key PEM content: %s", hint)
 		}
-		return ssh.ParsePrivateKey([]byte(pemContent))
+		signer, err := ssh.ParsePrivateKey([]byte(pemContent))
+		return signer, "", err
 	}
 
-	// Generate ephemeral Ed25519 key
+	// Generate Ed25519 key — will be persisted by the caller via onKeyGenerated.
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("generating host key: %w", err)
+		return nil, "", fmt.Errorf("generating host key: %w", err)
 	}
 
 	marshaled, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling host key: %w", err)
+		return nil, "", fmt.Errorf("marshaling host key: %w", err)
 	}
 
 	pemBlock := pem.EncodeToMemory(&pem.Block{
@@ -256,9 +269,9 @@ func loadOrGenerateHostKey(path string, pemContent string) (ssh.Signer, error) {
 
 	signer, err := ssh.ParsePrivateKey(pemBlock)
 	if err != nil {
-		return nil, fmt.Errorf("parsing generated host key: %w", err)
+		return nil, "", fmt.Errorf("parsing generated host key: %w", err)
 	}
 
-	slog.Warn("SFTP server using ephemeral host key (set sftp_serve.host_key_path for persistence)")
-	return signer, nil
+	slog.Info("SFTP server generated new host key (will be auto-persisted)")
+	return signer, string(pemBlock), nil
 }

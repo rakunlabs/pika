@@ -387,7 +387,17 @@ func (a *api) reloadSFTPServe(settings *service.Settings) {
 	}
 
 	if settings.SFTPServe != nil && settings.SFTPServe.Enabled {
-		sftpSrv, err := sftpserve.NewServer(settings.SFTPServe, shares, users)
+		sftpSrv, err := sftpserve.NewServer(settings.SFTPServe, shares, users, func(generatedPEM string) {
+			settings.SFTPServe.HostKeyPEM = generatedPEM
+			if err := a.svc.PatchSettings(context.Background(), &service.PatchSettings{
+				Action:    service.ActionKeySet,
+				SFTPServe: settings.SFTPServe,
+			}); err != nil {
+				slog.Error("failed to persist auto-generated SFTP host key", "error", err)
+			} else {
+				slog.Info("auto-generated SFTP host key persisted to database")
+			}
+		})
 		if err != nil {
 			slog.Error("failed to start SFTP server", "error", err)
 			return

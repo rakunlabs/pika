@@ -780,6 +780,91 @@
     }
   }
 
+  async function generateKeypair() {
+    try {
+      const keyPair = await crypto.subtle.generateKey('Ed25519' as any, true, ['sign', 'verify']);
+
+      // Export keys from Web Crypto
+      const privDer = new Uint8Array(await crypto.subtle.exportKey('pkcs8', keyPair.privateKey));
+      const rawPub = new Uint8Array(await crypto.subtle.exportKey('raw', keyPair.publicKey));
+
+      // Extract 32-byte seed from PKCS#8 DER (Ed25519 PKCS8 is always 48 bytes, seed at offset 16)
+      const seed = privDer.slice(16, 48);
+
+      // Build OpenSSH private key format (unencrypted)
+      const enc = new TextEncoder();
+      const kt = enc.encode('ssh-ed25519');
+      const comment = enc.encode('generated-by-pika');
+
+      // Helper: uint32 big-endian
+      const u32 = (n: number) => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, n); return b; };
+      // Helper: length-prefixed string/bytes
+      const sshStr = (d: Uint8Array) => { const r = new Uint8Array(4 + d.length); r.set(u32(d.length)); r.set(d, 4); return r; };
+      // Helper: concat multiple Uint8Arrays
+      const concat = (...arrs: Uint8Array[]) => { const r = new Uint8Array(arrs.reduce((s, a) => s + a.length, 0)); let o = 0; for (const a of arrs) { r.set(a, o); o += a.length; } return r; };
+
+      // Public key blob (SSH wire format)
+      const pubBlob = concat(sshStr(kt), sshStr(rawPub));
+
+      // Private key blob (64 bytes = seed || pubkey for Ed25519)
+      const privKeyData = concat(seed, rawPub);
+
+      // Random check integers (must match)
+      const checkBytes = crypto.getRandomValues(new Uint8Array(4));
+
+      // Assemble private section (before padding)
+      let privSection = concat(checkBytes, checkBytes, sshStr(kt), sshStr(rawPub), sshStr(privKeyData), sshStr(comment));
+
+      // Pad to block size (8 for cipher "none")
+      const padLen = 8 - (privSection.length % 8);
+      if (padLen < 8) {
+        const padding = new Uint8Array(padLen);
+        for (let i = 0; i < padLen; i++) padding[i] = i + 1;
+        privSection = concat(privSection, padding);
+      }
+
+      // Assemble full key
+      const magic = enc.encode('openssh-key-v1\0');
+      const none = enc.encode('none');
+      const fullKey = concat(
+        magic,
+        sshStr(none),          // cipher
+        sshStr(none),          // kdf
+        sshStr(new Uint8Array(0)), // kdf options
+        u32(1),                // number of keys
+        sshStr(pubBlob),       // public key
+        sshStr(privSection),   // private section
+      );
+
+      // Encode as PEM
+      const b64 = btoa(String.fromCharCode(...fullKey));
+      const privPem = '-----BEGIN OPENSSH PRIVATE KEY-----\n' +
+        b64.match(/.{1,70}/g)!.join('\n') +
+        '\n-----END OPENSSH PRIVATE KEY-----\n';
+
+      // Build OpenSSH public key line
+      const pubLine = 'ssh-ed25519 ' + btoa(String.fromCharCode(...pubBlob)) + ' generated-by-pika';
+
+      // Append public key to authorized_keys
+      const existing = newUserAuthorizedKeys.trim();
+      newUserAuthorizedKeys = existing ? existing + '\n' + pubLine : pubLine;
+
+      // Download private key file
+      const filename = (newUserUsername.trim() || 'pika') + '_id_ed25519';
+      const blob = new Blob([privPem], { type: 'application/x-pem-file' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      addToast('Keypair generated. Private key downloaded — keep it safe.', 'success');
+    } catch (err: any) {
+      addToast('Keypair generation failed: ' + (err?.message || 'Ed25519 may not be supported in this browser'), 'alert');
+    }
+  }
+
   async function handleRotateKey() {
     if (!rotationAdminSecret.trim()) {
       addToast('Admin secret is required', 'alert');
@@ -1943,15 +2028,44 @@
             </div>
 
             <div class="mb-4">
-              <label for="ftp-user-authorized-keys" class="block text-xs font-medium text-slate-500 mb-1.5">Authorized Keys (optional)</label>
+              <div class="flex items-center justify-between mb-1.5">
+                <label for="ftp-user-authorized-keys" class="block text-xs font-medium text-slate-500">Authorized Keys (optional)</label>
+                <button
+                  type="button"
+                  class="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-600 bg-slate-100 border border-slate-200 rounded hover:bg-slate-200 transition-colors"
+                  onclick={generateKeypair}
+                  title="Generate an Ed25519 keypair, auto-fill the public key, and download the private key"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+                  Generate Keypair
+                </button>
+              </div>
               <textarea id="ftp-user-authorized-keys" bind:value={newUserAuthorizedKeys}
                 placeholder="ssh-ed25519 AAAA... user@host"
                 rows="3"
                 class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 resize-y"></textarea>
               <p class="mt-1 text-[11px] text-slate-400">
                 SSH public keys for SFTP key-based authentication (OpenSSH <code class="px-0.5 bg-slate-100 rounded">authorized_keys</code> format, one key per line).
-                When set, password becomes optional. Paste the contents of a client's <code class="px-0.5 bg-slate-100 rounded">~/.ssh/id_ed25519.pub</code> file here.
+                When set, password becomes optional.
               </p>
+              {#if newUserAuthorizedKeys.trim()}
+                <div class="mt-2 p-2.5 bg-slate-50 border border-slate-200 rounded text-[11px] text-slate-500 space-y-1.5">
+                  <p class="font-medium text-slate-600">Connection instructions</p>
+                  <p>
+                    <span class="font-medium">Command line:</span>
+                    <code class="px-1 py-0.5 bg-slate-100 rounded font-mono text-[10px]">sftp -P {sftpServePort || 2222} -i /path/to/{newUserUsername.trim() || 'user'}_id_ed25519 {newUserUsername.trim() || 'user'}@your-host</code>
+                  </p>
+                  <p>
+                    <span class="font-medium">FileZilla:</span>
+                    Edit &rarr; Settings &rarr; SFTP &rarr; Add key file. Then connect with Host / Port / Username.
+                  </p>
+                  <p>
+                    <span class="font-medium">WinSCP:</span>
+                    Session &rarr; Advanced &rarr; SSH &rarr; Authentication &rarr; Private key file.
+                  </p>
+                  <p class="text-slate-400">Keep the private key file secure. Never share it.</p>
+                </div>
+              {/if}
             </div>
 
             <div class="mb-4">
@@ -2245,7 +2359,7 @@
               <p class="mt-1 text-[11px] text-slate-400">
                 {#if sftpServeKeyInputMode === 'path'}
                   Path to the server's SSH private key file (PEM format). This key identifies the server to connecting clients.
-                  Leave empty to auto-generate an ephemeral Ed25519 key on each start (clients will see host-key-changed warnings after restarts).
+                  Leave empty to auto-generate an Ed25519 key. The generated key is automatically saved to the database and reused across restarts.
                 {:else}
                   The host key must be a private key (e.g. <code class="font-mono">BEGIN OPENSSH PRIVATE KEY</code> or <code class="font-mono">BEGIN PRIVATE KEY</code>), not a public key.
                 {/if}

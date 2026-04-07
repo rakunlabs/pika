@@ -1,8 +1,9 @@
 <script lang="ts">
   import { configStore } from '@/lib/store/config.svelte';
   import { addToast } from '@/lib/store/toast.svelte';
+  import { basePath } from '@/lib/basepath';
   import type { FileFormat, InheritEntry } from '@/lib/types/config';
-  import { Play, Info, Clock, HardDrive, GitBranch, FileText, Plus, Trash2, Layers, ChevronDown, ChevronRight, Pencil } from 'lucide-svelte';
+  import { Play, Info, Clock, HardDrive, GitBranch, FileText, Plus, Trash2, Layers, ChevronDown, ChevronRight, Pencil, Link, Copy, Check } from 'lucide-svelte';
   import { onMount, tick } from 'svelte';
 
   interface Props {
@@ -67,6 +68,27 @@
   // Variant state
   let showAddVariant = $state(false);
   let newVariantKey = $state('');
+
+  // API endpoint copy state
+  let copiedEndpoint = $state(false);
+
+  const dataEndpoint = $derived(
+    activeTab
+      ? `${basePath}/data/${activeTab.path}${activeTab.variantKey ? `?variant=${activeTab.variantKey}` : ''}`
+      : ''
+  );
+
+  async function copyEndpoint() {
+    if (!dataEndpoint) return;
+    const fullUrl = `${window.location.origin}${dataEndpoint}`;
+    try {
+      await navigator.clipboard.writeText(fullUrl);
+      copiedEndpoint = true;
+      setTimeout(() => { copiedEndpoint = false; }, 1500);
+    } catch {
+      addToast('Failed to copy', 'alert');
+    }
+  }
 
   // Inheritance state
   let showInheritance = $state(true);
@@ -316,6 +338,38 @@
           <p class="text-[11px] text-slate-400 italic">No versions yet</p>
         {/if}
       </div>
+
+      <!-- API Endpoint -->
+      {#if activeTab}
+        <div class="mb-4">
+          <label class="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 mb-1.5 uppercase tracking-wide">
+            <span class="flex items-center text-gray-400"><Link size={12} /></span>
+            API Endpoint
+          </label>
+          <div class="border border-slate-200 rounded bg-white overflow-hidden">
+            <div class="flex items-center gap-1.5 px-2.5 py-2">
+              <code class="flex-1 text-[12px] font-mono text-slate-700 break-all select-all">{dataEndpoint}</code>
+              <button
+                class="shrink-0 p-1 text-slate-400 rounded cursor-pointer hover:text-slate-600 hover:bg-slate-100 transition-colors"
+                onclick={copyEndpoint}
+                title="Copy full URL"
+              >
+                {#if copiedEndpoint}
+                  <Check size={13} class="text-green-500" />
+                {:else}
+                  <Copy size={13} />
+                {/if}
+              </button>
+            </div>
+            <div class="px-2.5 py-1.5 bg-slate-50 border-t border-slate-100 text-[10px] text-slate-400 leading-relaxed">
+              <span class="text-slate-500">Query params:</span>
+              <code class="ml-1 px-1 py-0.5 bg-slate-100 rounded text-slate-500">?version=1.0.0</code>
+              <code class="ml-1 px-1 py-0.5 bg-slate-100 rounded text-slate-500">?variant=prod</code>
+              <code class="ml-1 px-1 py-0.5 bg-slate-100 rounded text-slate-500">?format=yaml</code>
+            </div>
+          </div>
+        </div>
+      {/if}
 
       <!-- Description -->
       <div class="mb-4">

@@ -18,14 +18,14 @@ import (
 	mtelemetry "github.com/rakunlabs/ada/middleware/telemetry"
 
 	"github.com/rakunlabs/pika/internal/config"
-	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/secret"
+	"github.com/rakunlabs/pika/internal/serve/ftpserve"
+	"github.com/rakunlabs/pika/internal/serve/sftpserve"
+	"github.com/rakunlabs/pika/internal/serve/tftpserve"
 	"github.com/rakunlabs/pika/internal/server/api"
 	"github.com/rakunlabs/pika/internal/server/compat"
 	"github.com/rakunlabs/pika/internal/server/session"
 	"github.com/rakunlabs/pika/internal/service"
-	"github.com/rakunlabs/pika/internal/serve/sftpserve"
-	"github.com/rakunlabs/pika/internal/serve/tftpserve"
 )
 
 func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info api.Info, encStore *secret.Storage) error {
@@ -99,7 +99,17 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	if settings.SFTPServe != nil && settings.SFTPServe.Enabled {
 		shares := api.BuildFTPShares(ctx, svc, rh)
 		users := api.BuildFTPUsers(ctx, svc)
-		sftpSrv, err := sftpserve.NewServer(settings.SFTPServe, shares, users)
+		sftpSrv, err := sftpserve.NewServer(settings.SFTPServe, shares, users, func(generatedPEM string) {
+			settings.SFTPServe.HostKeyPEM = generatedPEM
+			if err := svc.PatchSettings(ctx, &service.PatchSettings{
+				Action:    service.ActionKeySet,
+				SFTPServe: settings.SFTPServe,
+			}); err != nil {
+				slog.Error("failed to persist auto-generated SFTP host key", "error", err)
+			} else {
+				slog.Info("auto-generated SFTP host key persisted to database")
+			}
+		})
 		if err != nil {
 			return fmt.Errorf("init SFTP server: %w", err)
 		}
