@@ -11,6 +11,8 @@ import (
 
 	"github.com/rakunlabs/ok"
 	"github.com/rakunlabs/pika/internal/external"
+	"github.com/rakunlabs/pika/internal/rawfs"
+	"github.com/rakunlabs/pika/internal/rawfs/localfs"
 )
 
 // GetData retrieves a fully resolved configuration:
@@ -117,7 +119,7 @@ func (s *Service) RenderFile(ctx context.Context, filePath string, content strin
 // The current config data always takes precedence over inherited values.
 func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entries []InheritEntry) ([]byte, error) {
 	for _, entry := range entries {
-		if entry.Source == "" && entry.Resource == "" {
+		if entry.Source == "" && entry.Resource == "" && entry.Mount == "" {
 			continue
 		}
 
@@ -125,7 +127,11 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 		var sourceName string
 		var err error
 
-		if entry.Resource != "" {
+		if entry.Mount != "" {
+			// Raw mount: lookup mount by prefix and read file at path
+			sourceName = "mount:" + entry.Mount + "/" + entry.Path
+			sourceData, err = s.fetchRawMountConfig(ctx, entry.Mount, entry.Path)
+		} else if entry.Resource != "" {
 			// External resource: lookup by resource name and fetch with path
 			sourceName = entry.Resource + ":" + entry.Path
 			sourceData, err = s.fetchExternalConfig(ctx, entry.Resource, entry.Path)
@@ -141,11 +147,20 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 
 		// Ensure source data is JSON for merging
 		sourceJSON := sourceData
-		if entry.Resource == "" {
+		if entry.Resource == "" && entry.Mount == "" {
 			// For internal sources, try to detect format and convert
 			file, fileErr := s.File(ctx, entry.Source, 0)
 			if fileErr == nil && file.Meta.Format != "" && file.Meta.Format != "json" && file.Meta.Format != "raw" {
 				converted, convErr := ConvertFormat(sourceData, file.Meta.Format, "json")
+				if convErr == nil {
+					sourceJSON = converted
+				}
+			}
+		} else if entry.Mount != "" {
+			// For raw mount sources, try to detect format from file extension
+			format := detectFormatFromPath(entry.Path)
+			if format != "" && format != "json" && format != "raw" {
+				converted, convErr := ConvertFormat(sourceData, format, "json")
 				if convErr == nil {
 					sourceJSON = converted
 				}
@@ -393,4 +408,107 @@ func (s *Service) listKubernetesResources(ctx context.Context, k8s *external.Kub
 	}
 
 	return client.ListResources(ctx, prefix)
+}
+
+// fetchRawMountConfig reads a file from a raw mount and returns its contents.
+// The mountPrefix identifies which raw mount to use, and path is the file path within it.
+func (s *Service) fetchRawMountConfig(ctx context.Context, mountPrefix string, path string) ([]byte, error) {
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading settings: %w", err)
+	}
+
+	var mountEntry *RawMountEntry
+	for i := range settings.RawMounts {
+		if settings.RawMounts[i].Prefix == mountPrefix {
+			mountEntry = &settings.RawMounts[i]
+			break
+		}
+	}
+	if mountEntry == nil {
+		return nil, fmt.Errorf("raw mount %q not found in settings", mountPrefix)
+	}
+
+	fs, err := newRawFSFromMountEntry(*mountEntry)
+	if err != nil {
+		return nil, fmt.Errorf("creating filesystem for mount %q: %w", mountPrefix, err)
+	}
+
+	reader, _, err := fs.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading file %q from mount %q: %w", path, mountPrefix, err)
+	}
+	defer reader.Close()
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("reading file %q from mount %q: %w", path, mountPrefix, err)
+	}
+
+	return data, nil
+}
+
+// newRawFSFromMountEntry creates a RawFS instance from a RawMountEntry.
+func newRawFSFromMountEntry(m RawMountEntry) (rawfs.RawFS, error) {
+	mountType := m.Type
+	if mountType == "" {
+		mountType = "local"
+	}
+
+	switch mountType {
+	case "local":
+		if m.Path == "" {
+			return nil, fmt.Errorf("path is required for local mount")
+		}
+		return localfs.New(m.Path)
+	case "s3":
+		if m.S3 == nil {
+			return nil, fmt.Errorf("s3 config is required")
+		}
+		if rawfs.NewS3FSFunc == nil {
+			return nil, fmt.Errorf("s3 backend not available")
+		}
+		return rawfs.NewS3FSFunc(m.S3.Bucket, m.S3.Region, m.S3.Endpoint, m.S3.AccessKey, m.S3.SecretKey, m.S3.Prefix, m.S3.PathStyle, m.S3.Secure)
+	case "ftp":
+		if m.FTP == nil {
+			return nil, fmt.Errorf("ftp config is required")
+		}
+		if rawfs.NewFTPFSFunc == nil {
+			return nil, fmt.Errorf("ftp backend not available")
+		}
+		return rawfs.NewFTPFSFunc(m.FTP.Host, m.FTP.Username, m.FTP.Password, m.FTP.BasePath, m.FTP.TLS)
+	case "sftp":
+		if m.SFTP == nil {
+			return nil, fmt.Errorf("sftp config is required")
+		}
+		if rawfs.NewSFTPFSFunc == nil {
+			return nil, fmt.Errorf("sftp backend not available")
+		}
+		return rawfs.NewSFTPFSFunc(m.SFTP.Host, m.SFTP.Username, m.SFTP.Password, m.SFTP.PrivateKey, m.SFTP.BasePath)
+	case "webdav":
+		if m.WebDAV == nil {
+			return nil, fmt.Errorf("webdav config is required")
+		}
+		if rawfs.NewWebDAVFSFunc == nil {
+			return nil, fmt.Errorf("webdav backend not available")
+		}
+		return rawfs.NewWebDAVFSFunc(m.WebDAV.URL, m.WebDAV.Username, m.WebDAV.Password, m.WebDAV.BasePath)
+	default:
+		return nil, fmt.Errorf("unknown mount type %q", mountType)
+	}
+}
+
+// detectFormatFromPath guesses the file format from a file path extension.
+func detectFormatFromPath(path string) string {
+	lower := strings.ToLower(path)
+	switch {
+	case strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml"):
+		return "yaml"
+	case strings.HasSuffix(lower, ".toml"):
+		return "toml"
+	case strings.HasSuffix(lower, ".json"):
+		return "json"
+	default:
+		return ""
+	}
 }

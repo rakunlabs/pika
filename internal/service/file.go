@@ -16,14 +16,19 @@ import (
 // For external resources: Resource is the settings key (e.g., "my-vault"),
 // and Path is the resource-specific path (e.g., "myapp/database" for Vault secrets
 // or "/api/config" for HTTP endpoints).
+// For raw mounts: Mount is the raw mount prefix (e.g., "configs"),
+// and Path is the file path within the mount (e.g., "base/defaults.json").
 type InheritEntry struct {
 	// Source is the internal file path. Used for internal inheritance.
 	Source string `json:"source,omitempty"`
 	// Resource is the name of an external resource from settings.
 	Resource string `json:"resource,omitempty"`
-	// Path is the resource-specific path when using an external resource.
+	// Mount is the raw mount prefix. Used for raw mount inheritance.
+	Mount string `json:"mount,omitempty"`
+	// Path is the resource-specific path when using an external resource or raw mount.
 	// For Vault: the secret path under the mount (e.g., "myapp/database").
 	// For HTTP: appended to the base URL (e.g., "/api/config").
+	// For raw mounts: the file path within the mount (e.g., "base/defaults.json").
 	Path string `json:"path,omitempty"`
 	// Paths selectively includes only these fields from the source.
 	// Supports dot-notation (e.g., "database.host") and wildcards ("logging.*").

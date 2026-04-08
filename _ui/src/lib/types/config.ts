@@ -22,7 +22,8 @@ export interface FileVersion {
 export interface InheritEntry {
   source?: string;    // Internal file path (for internal inheritance)
   resource?: string;  // External resource name from settings (for external inheritance)
-  path?: string;      // Resource-specific path (e.g., Vault secret path, HTTP endpoint path)
+  mount?: string;     // Raw mount prefix (for raw mount inheritance)
+  path?: string;      // Resource-specific path (e.g., Vault secret path, HTTP endpoint path, or file path within mount)
   paths?: string[];   // Fields to pull from the source (dot-notation, wildcards)
   inject?: string;    // Where to place in the config (dot-notation, empty = root)
 }

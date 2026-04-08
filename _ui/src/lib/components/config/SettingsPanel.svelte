@@ -19,6 +19,9 @@
   const externalResources = $derived(
     settings?.external ? Object.keys(settings.external) : []
   );
+  const rawMountPrefixes = $derived(
+    settings?.raw_mounts ? settings.raw_mounts.map(m => m.prefix).filter(Boolean) : []
+  );
 
   // Version list state
   let versionsExpanded = $state(false);
@@ -94,8 +97,9 @@
   let showInheritance = $state(true);
   let showAddInherit = $state(false);
   let newInheritSource = $state('');
-  let newInheritType = $state<'internal' | 'external'>('internal');
+  let newInheritType = $state<'internal' | 'external' | 'mount'>('internal');
   let newInheritResource = $state('');
+  let newInheritMount = $state('');
   let newInheritPath = $state('');
   let newInheritPaths = $state('');
   let newInheritInject = $state('');
@@ -134,6 +138,15 @@
         return;
       }
       entry.source = newInheritSource.trim();
+    } else if (newInheritType === 'mount') {
+      if (!newInheritMount) {
+        addToast('Mount prefix is required', 'alert');
+        return;
+      }
+      entry.mount = newInheritMount;
+      if (newInheritPath.trim()) {
+        entry.path = newInheritPath.trim();
+      }
     } else {
       if (!newInheritResource) {
         addToast('External resource is required', 'alert');
@@ -159,6 +172,7 @@
     // Reset form
     newInheritSource = '';
     newInheritResource = '';
+    newInheritMount = '';
     newInheritPath = '';
     newInheritPaths = '';
     newInheritInject = '';
@@ -421,16 +435,23 @@
                 <button
                   class="flex-1 py-1 text-[10px] font-medium rounded transition-colors cursor-pointer
                     {newInheritType === 'internal' ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-slate-50 text-slate-500 border border-slate-200 hover:bg-slate-100'}"
-                  onclick={() => { newInheritType = 'internal'; newInheritSource = ''; newInheritResource = ''; newInheritPath = ''; externalPathSuggestions = []; }}
+                  onclick={() => { newInheritType = 'internal'; newInheritSource = ''; newInheritResource = ''; newInheritMount = ''; newInheritPath = ''; externalPathSuggestions = []; }}
                 >
                   Internal
                 </button>
                 <button
                   class="flex-1 py-1 text-[10px] font-medium rounded transition-colors cursor-pointer
                     {newInheritType === 'external' ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-slate-50 text-slate-500 border border-slate-200 hover:bg-slate-100'}"
-                  onclick={() => { newInheritType = 'external'; newInheritSource = ''; newInheritResource = ''; newInheritPath = ''; externalPathSuggestions = []; }}
+                  onclick={() => { newInheritType = 'external'; newInheritSource = ''; newInheritResource = ''; newInheritMount = ''; newInheritPath = ''; externalPathSuggestions = []; }}
                 >
                   External
+                </button>
+                <button
+                  class="flex-1 py-1 text-[10px] font-medium rounded transition-colors cursor-pointer
+                    {newInheritType === 'mount' ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-slate-50 text-slate-500 border border-slate-200 hover:bg-slate-100'}"
+                  onclick={() => { newInheritType = 'mount'; newInheritSource = ''; newInheritResource = ''; newInheritMount = ''; newInheritPath = ''; externalPathSuggestions = []; }}
+                >
+                  Mount
                 </button>
               </div>
 
@@ -442,6 +463,31 @@
                   placeholder="Config path (e.g., base/database)"
                   class="w-full px-2 py-1.5 text-xs font-mono border border-slate-200 rounded mb-2 focus:outline-none focus:border-blue-500"
                 />
+              {:else if newInheritType === 'mount'}
+                <!-- Raw mount selector -->
+                <select
+                  class="w-full px-2 py-1.5 text-xs border border-slate-200 rounded mb-2 focus:outline-none focus:border-blue-500"
+                  bind:value={newInheritMount}
+                  onchange={() => { newInheritPath = ''; }}
+                >
+                  <option value="">Select mount</option>
+                  {#each rawMountPrefixes as prefix}
+                    <option value={prefix}>{prefix}</option>
+                  {/each}
+                </select>
+
+                <!-- Path within the mount -->
+                {#if newInheritMount}
+                  <label class="block mb-2">
+                    <span class="block text-[10px] text-slate-400 mb-0.5">File path (e.g., configs/base.json)</span>
+                    <input
+                      type="text"
+                      bind:value={newInheritPath}
+                      placeholder="Path within mount"
+                      class="w-full px-2 py-1.5 text-xs font-mono border border-slate-200 rounded focus:outline-none focus:border-blue-500"
+                    />
+                  </label>
+                {/if}
               {:else}
                 <!-- External resource selector -->
                 <select
@@ -527,7 +573,7 @@
                 </button>
                 <button
                   class="flex-1 py-1 text-[11px] text-slate-500 bg-slate-100 rounded cursor-pointer hover:bg-slate-200 transition-colors"
-                  onclick={() => { showAddInherit = false; newInheritSource = ''; newInheritResource = ''; newInheritPath = ''; newInheritPaths = ''; newInheritInject = ''; externalPathSuggestions = []; }}
+                  onclick={() => { showAddInherit = false; newInheritSource = ''; newInheritResource = ''; newInheritMount = ''; newInheritPath = ''; newInheritPaths = ''; newInheritInject = ''; externalPathSuggestions = []; }}
                 >
                   Cancel
                 </button>
@@ -544,7 +590,17 @@
                 <div class="bg-white border border-slate-200 rounded overflow-hidden">
                   <div class="flex items-start justify-between px-2.5 py-2 gap-2">
                     <div class="flex-1 min-w-0">
-                      {#if entry.resource}
+                      {#if entry.mount}
+                        <div class="flex items-center gap-1 text-xs">
+                          <span class="px-1 py-0.5 bg-amber-50 text-amber-600 rounded text-[10px] font-medium shrink-0">mount</span>
+                          <span class="font-mono text-blue-600 truncate" title="{entry.mount}/{entry.path || ''}">{entry.mount}</span>
+                        </div>
+                        {#if entry.path}
+                          <div class="text-[10px] text-slate-400 mt-0.5">
+                            path: <span class="font-mono">{entry.path}</span>
+                          </div>
+                        {/if}
+                      {:else if entry.resource}
                         <div class="flex items-center gap-1 text-xs">
                           <span class="px-1 py-0.5 bg-purple-50 text-purple-600 rounded text-[10px] font-medium shrink-0">ext</span>
                           <span class="font-mono text-blue-600 truncate" title="{entry.resource}:{entry.path || ''}">{entry.resource}</span>
