@@ -150,14 +150,23 @@ export interface SFTPConfigEntry {
   base_path?: string;
 }
 
+// WebDAV configuration for raw mounts
+export interface WebDAVConfigEntry {
+  url: string;
+  username?: string;
+  password?: string;
+  base_path?: string;
+}
+
 // Raw mount entry stored in settings
 export interface RawMountEntry {
   prefix: string;
-  type?: string;           // "local" (default), "s3", "ftp", "sftp"
-  path?: string;           // for type=local
-  s3?: S3ConfigEntry;      // for type=s3
-  ftp?: FTPConfigEntry;    // for type=ftp
-  sftp?: SFTPConfigEntry;  // for type=sftp
+  type?: string;              // "local" (default), "s3", "ftp", "sftp", "webdav"
+  path?: string;              // for type=local
+  s3?: S3ConfigEntry;         // for type=s3
+  ftp?: FTPConfigEntry;       // for type=ftp
+  sftp?: SFTPConfigEntry;     // for type=sftp
+  webdav?: WebDAVConfigEntry; // for type=webdav
 }
 
 // FTP user entry stored in settings
@@ -205,6 +214,14 @@ export interface TFTPServeSettings {
   enabled: boolean;
   port?: number;
   host?: string;
+}
+
+// WebDAV server settings stored in DB
+export interface WebDAVServeSettings {
+  enabled: boolean;
+  port?: number;
+  host?: string;
+  prefix?: string;
 }
 
 // HTTP webhook target configuration
@@ -312,6 +329,7 @@ export interface Settings {
   ftp_serve?: FTPServeSettings;
   sftp_serve?: SFTPServeSettings;
   tftp_serve?: TFTPServeSettings;
+  webdav_serve?: WebDAVServeSettings;
   hooks?: Hook[];
   public_port?: PublicPortSettings;
   compat?: CompatSettings;

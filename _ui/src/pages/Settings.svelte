@@ -3,7 +3,7 @@
   import { addToast } from "@/lib/store/toast.svelte";
   import { onMount } from "svelte";
   import { Plus, Trash2, Copy, Eye, EyeOff, Shield, Globe, Key, RotateCw, Lock, Download, Upload, HardDrive, ShieldAlert, FolderOpen, Share2, Server, Webhook } from "lucide-svelte";
-  import type { TokenScope, CreateTokenRequest, ExternalResource, RawMountEntry, FTPShareEntry, FTPUserEntry, FTPServeSettings, SFTPServeSettings, TFTPServeSettings, Hook, HookTarget, KafkaSecurity, KafkaSASLEntry, PublicPortSettings, CompatSettings } from "@/lib/types/config";
+  import type { TokenScope, CreateTokenRequest, ExternalResource, RawMountEntry, FTPShareEntry, FTPUserEntry, FTPServeSettings, SFTPServeSettings, TFTPServeSettings, WebDAVServeSettings, Hook, HookTarget, KafkaSecurity, KafkaSASLEntry, PublicPortSettings, CompatSettings } from "@/lib/types/config";
   import { appStore } from "@/lib/store/store.svelte";
   import axios from 'axios';
 
@@ -14,7 +14,7 @@
   let rawMounts = $state<RawMountEntry[]>([]);
   let showAddMount = $state(false);
   let newMountPrefix = $state('');
-  let newMountType = $state<'local' | 's3' | 'ftp' | 'sftp'>('local');
+  let newMountType = $state<'local' | 's3' | 'ftp' | 'sftp' | 'webdav'>('local');
   let newMountPath = $state('');
   // S3 fields
   let newS3Bucket = $state('');
@@ -37,6 +37,11 @@
   let newSftpPassword = $state('');
   let newSftpPrivateKey = $state('');
   let newSftpBasePath = $state('');
+  // WebDAV fields
+  let newWebdavUrl = $state('');
+  let newWebdavUsername = $state('');
+  let newWebdavPassword = $state('');
+  let newWebdavBasePath = $state('');
   // Edit state
   let editingIndex = $state<number | null>(null);
   let isSavingMounts = $state(false);
@@ -86,6 +91,10 @@
   let tftpServeEnabled = $state(false);
   let tftpServePort = $state(69);
   let tftpServeHost = $state('');
+  let webdavServeEnabled = $state(false);
+  let webdavServePort = $state(9119);
+  let webdavServeHost = $state('');
+  let webdavServePrefix = $state('/');
   let isSavingServers = $state(false);
   let isGeneratingTLS = $state(false);
   let isGeneratingSSHKey = $state(false);
@@ -173,6 +182,10 @@
     tftpServeEnabled = s?.tftp_serve?.enabled ?? false;
     tftpServePort = s?.tftp_serve?.port || 69;
     tftpServeHost = s?.tftp_serve?.host ?? '';
+    webdavServeEnabled = s?.webdav_serve?.enabled ?? false;
+    webdavServePort = s?.webdav_serve?.port || 9119;
+    webdavServeHost = s?.webdav_serve?.host ?? '';
+    webdavServePrefix = s?.webdav_serve?.prefix || '/';
   }
 
   function loadPublicServerSettings() {
@@ -287,6 +300,7 @@
         ftp_serve?: FTPServeSettings;
         sftp_serve?: SFTPServeSettings;
         tftp_serve?: TFTPServeSettings;
+        webdav_serve?: WebDAVServeSettings;
       } = {};
 
       const ftpServe: FTPServeSettings = {
@@ -323,6 +337,16 @@
       };
       if (JSON.stringify(tftpServe) !== JSON.stringify(s?.tftp_serve ?? {})) {
         patch.tftp_serve = tftpServe;
+      }
+
+      const webdavServe: WebDAVServeSettings = {
+        enabled: webdavServeEnabled,
+        port: webdavServePort,
+        host: webdavServeHost || undefined,
+        prefix: webdavServePrefix || undefined,
+      };
+      if (JSON.stringify(webdavServe) !== JSON.stringify(s?.webdav_serve ?? {})) {
+        patch.webdav_serve = webdavServe;
       }
 
       if (Object.keys(patch).length === 0) {
@@ -883,6 +907,10 @@
     newSftpPassword = '';
     newSftpPrivateKey = '';
     newSftpBasePath = '';
+    newWebdavUrl = '';
+    newWebdavUsername = '';
+    newWebdavPassword = '';
+    newWebdavBasePath = '';
     editingIndex = null;
   }
 
@@ -908,6 +936,10 @@
     newSftpPassword = mount.sftp?.password || '';
     newSftpPrivateKey = mount.sftp?.private_key || '';
     newSftpBasePath = mount.sftp?.base_path || '';
+    newWebdavUrl = mount.webdav?.url || '';
+    newWebdavUsername = mount.webdav?.username || '';
+    newWebdavPassword = mount.webdav?.password || '';
+    newWebdavBasePath = mount.webdav?.base_path || '';
   }
 
   function handleEditMount(index: number) {
@@ -976,6 +1008,17 @@
         password: newSftpPassword.trim() || undefined,
         private_key: newSftpPrivateKey.trim() || undefined,
         base_path: newSftpBasePath.trim() || undefined,
+      };
+    } else if (newMountType === 'webdav') {
+      if (!newWebdavUrl.trim()) {
+        addToast('WebDAV URL is required', 'alert');
+        return;
+      }
+      entry.webdav = {
+        url: newWebdavUrl.trim(),
+        username: newWebdavUsername.trim() || undefined,
+        password: newWebdavPassword.trim() || undefined,
+        base_path: newWebdavBasePath.trim() || undefined,
       };
     }
 
@@ -2066,6 +2109,9 @@
               <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
                 <input type="radio" bind:group={newMountType} value="sftp" class="text-blue-500" /> SFTP (SSH)
               </label>
+              <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                <input type="radio" bind:group={newMountType} value="webdav" class="text-blue-500" /> WebDAV
+              </label>
             </div>
           </div>
 
@@ -2188,6 +2234,31 @@
                 class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 resize-y" ></textarea>
               <p class="mt-1 text-[11px] text-slate-400">Used instead of password authentication. Paste the full PEM-encoded key.</p>
             </div>
+          {:else if newMountType === 'webdav'}
+            <div class="mb-4">
+              <label for="webdav-url" class="block text-xs font-medium text-slate-500 mb-1.5">URL</label>
+              <input id="webdav-url" type="text" bind:value={newWebdavUrl} placeholder="https://example.com/dav/"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              <p class="mt-1 text-[11px] text-slate-400">Full WebDAV endpoint URL</p>
+            </div>
+            <div class="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label for="webdav-username" class="block text-xs font-medium text-slate-500 mb-1.5">Username</label>
+                <input id="webdav-username" type="text" bind:value={newWebdavUsername} placeholder="admin"
+                  class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+              <div>
+                <label for="webdav-password" class="block text-xs font-medium text-slate-500 mb-1.5">Password</label>
+                <input id="webdav-password" type="password" bind:value={newWebdavPassword} placeholder="Password"
+                  class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+            </div>
+            <div class="mb-4">
+              <label for="webdav-basepath" class="block text-xs font-medium text-slate-500 mb-1.5">Base Path (optional)</label>
+              <input id="webdav-basepath" type="text" bind:value={newWebdavBasePath} placeholder="/data"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              <p class="mt-1 text-[11px] text-slate-400">Sub-path within the WebDAV root to use as mount root</p>
+            </div>
           {/if}
 
           <div class="flex justify-end gap-2">
@@ -2213,7 +2284,7 @@
         <div class="text-center py-12 bg-white border border-slate-200 rounded-lg">
           <FolderOpen size={32} class="mx-auto text-slate-300 mb-3" />
           <p class="text-sm text-slate-500">No raw mounts configured</p>
-          <p class="text-xs text-slate-400 mt-1">Add a mount to serve files from a local directory, S3 bucket, or FTP server</p>
+          <p class="text-xs text-slate-400 mt-1">Add a mount to serve files from a local directory, S3 bucket, FTP server, or WebDAV server</p>
         </div>
       {:else}
         <div class="space-y-2">
@@ -2227,8 +2298,8 @@
                     /raw/{mount.prefix}
                   </span>
                   <span class="px-1.5 py-0.5 text-[10px] font-medium rounded
-                    {mType === 's3' ? 'bg-orange-100 text-orange-700' : mType === 'ftp' ? 'bg-purple-100 text-purple-700' : mType === 'sftp' ? 'bg-teal-100 text-teal-700' : 'bg-blue-100 text-blue-700'}">
-                    {mType === 's3' ? 'S3' : mType === 'ftp' ? 'FTP' : mType === 'sftp' ? 'SFTP' : 'Local'}
+                    {mType === 's3' ? 'bg-orange-100 text-orange-700' : mType === 'ftp' ? 'bg-purple-100 text-purple-700' : mType === 'sftp' ? 'bg-teal-100 text-teal-700' : mType === 'webdav' ? 'bg-indigo-100 text-indigo-700' : 'bg-blue-100 text-blue-700'}">
+                    {mType === 's3' ? 'S3' : mType === 'ftp' ? 'FTP' : mType === 'sftp' ? 'SFTP' : mType === 'webdav' ? 'WebDAV' : 'Local'}
                   </span>
                 </div>
                 <div class="mt-1">
@@ -2245,6 +2316,10 @@
                   {:else if mType === 'sftp'}
                     <span class="text-xs font-mono text-slate-400">
                       {mount.sftp?.username ? mount.sftp.username + '@' : ''}{mount.sftp?.host}{mount.sftp?.base_path || ''}
+                    </span>
+                  {:else if mType === 'webdav'}
+                    <span class="text-xs font-mono text-slate-400">
+                      {mount.webdav?.url}{mount.webdav?.base_path || ''}
                     </span>
                   {/if}
                 </div>
@@ -2628,7 +2703,7 @@
     <div>
       <div class="mb-6">
         <h2 class="text-lg font-semibold text-slate-800">File Servers</h2>
-        <p class="text-sm text-slate-500 mt-0.5">Configure built-in FTP, SFTP, and TFTP servers.</p>
+        <p class="text-sm text-slate-500 mt-0.5">Configure built-in FTP, SFTP, TFTP, and WebDAV servers.</p>
       </div>
 
       <!-- FTP Server -->
@@ -2869,6 +2944,43 @@
                 class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
             </div>
           </div>
+        {/if}
+      </div>
+
+      <!-- WebDAV Server -->
+      <div class="mb-6 p-5 bg-white border border-slate-200 rounded-lg shadow-sm">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-semibold text-slate-700">WebDAV Server</h3>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" bind:checked={webdavServeEnabled}
+              class="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+            <span class="text-xs font-medium text-slate-600">Enabled</span>
+          </label>
+        </div>
+
+        {#if webdavServeEnabled}
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label for="webdav-serve-port" class="block text-xs font-medium text-slate-500 mb-1.5">Port</label>
+              <input id="webdav-serve-port" type="number" bind:value={webdavServePort} placeholder="9119"
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+            <div>
+              <label for="webdav-serve-host" class="block text-xs font-medium text-slate-500 mb-1.5">Host</label>
+              <input id="webdav-serve-host" type="text" bind:value={webdavServeHost} placeholder="0.0.0.0 (all interfaces)"
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+            <div>
+              <label for="webdav-serve-prefix" class="block text-xs font-medium text-slate-500 mb-1.5">URL Prefix</label>
+              <input id="webdav-serve-prefix" type="text" bind:value={webdavServePrefix} placeholder="/"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              <p class="mt-1 text-[11px] text-slate-400">URL path prefix for WebDAV requests (default: /)</p>
+            </div>
+          </div>
+          <p class="mt-3 text-[11px] text-slate-400">
+            WebDAV clients authenticate using FTP/SFTP user credentials (HTTP Basic Auth). Shares and access control are shared with FTP/SFTP servers.
+            Connect with any WebDAV client (macOS Finder, Windows Explorer, Cyberduck, etc.).
+          </p>
         {/if}
       </div>
 

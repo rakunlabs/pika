@@ -22,6 +22,7 @@ import (
 	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/serve/sftpserve"
 	"github.com/rakunlabs/pika/internal/serve/tftpserve"
+	"github.com/rakunlabs/pika/internal/serve/webdavserve"
 	"github.com/rakunlabs/pika/internal/server/session"
 	"github.com/rakunlabs/pika/internal/service"
 )
@@ -269,7 +270,7 @@ func (a *api) postSettings(c *ada.Context) error {
 	}
 
 	// If serve settings were updated, reload the corresponding servers
-	if patchSettings.FTPServe != nil || patchSettings.SFTPServe != nil || patchSettings.TFTPServe != nil {
+	if patchSettings.FTPServe != nil || patchSettings.SFTPServe != nil || patchSettings.TFTPServe != nil || patchSettings.WebDAVServe != nil {
 		settings, err := a.svc.Settings(c.Request.Context())
 		if err != nil {
 			slog.Error("failed to read settings for file server reload", "error", err)
@@ -282,6 +283,9 @@ func (a *api) postSettings(c *ada.Context) error {
 			}
 			if patchSettings.TFTPServe != nil {
 				a.reloadTFTPServe(settings)
+			}
+			if patchSettings.WebDAVServe != nil {
+				a.reloadWebDAVServe(settings)
 			}
 		}
 	}
@@ -337,6 +341,7 @@ func (a *api) reloadFTPShares(ctx context.Context) {
 	ftpSrv := a.rawHandler.ftpServer
 	sftpSrv := a.rawHandler.sftpServer
 	tftpSrv := a.rawHandler.tftpServer
+	webdavSrv := a.rawHandler.webdavServer
 	a.rawHandler.mu.RUnlock()
 
 	if ftpSrv != nil {
@@ -348,6 +353,9 @@ func (a *api) reloadFTPShares(ctx context.Context) {
 	if tftpSrv != nil {
 		tftpSrv.UpdateShares(shares)
 	}
+	if webdavSrv != nil {
+		webdavSrv.UpdateShares(shares)
+	}
 	slog.Info("file shares reloaded", "count", len(shares))
 }
 
@@ -358,6 +366,7 @@ func (a *api) reloadFTPUsers(ctx context.Context) {
 	a.rawHandler.mu.RLock()
 	ftpSrv := a.rawHandler.ftpServer
 	sftpSrv := a.rawHandler.sftpServer
+	webdavSrv := a.rawHandler.webdavServer
 	a.rawHandler.mu.RUnlock()
 
 	if ftpSrv != nil {
@@ -365,6 +374,9 @@ func (a *api) reloadFTPUsers(ctx context.Context) {
 	}
 	if sftpSrv != nil {
 		sftpSrv.UpdateUsers(users)
+	}
+	if webdavSrv != nil {
+		webdavSrv.UpdateUsers(users)
 	}
 	slog.Info("file server users reloaded", "count", len(users))
 }
@@ -496,6 +508,45 @@ func (a *api) reloadTFTPServe(settings *service.Settings) {
 	}
 }
 
+// reloadWebDAVServe stops the existing WebDAV server (if running) and starts a new one if enabled.
+func (a *api) reloadWebDAVServe(settings *service.Settings) {
+	shares := BuildFTPShares(context.Background(), a.svc, a.rawHandler)
+	users := BuildFTPUsers(context.Background(), a.svc)
+
+	a.rawHandler.mu.Lock()
+	oldServer := a.rawHandler.webdavServer
+	oldCancel := a.rawHandler.webdavCancel
+	a.rawHandler.webdavServer = nil
+	a.rawHandler.webdavCancel = nil
+	a.rawHandler.mu.Unlock()
+
+	if oldCancel != nil {
+		oldCancel()
+	}
+	if oldServer != nil {
+		oldServer.Stop()
+	}
+
+	if settings.WebDAVServe != nil && settings.WebDAVServe.Enabled {
+		webdavSrv, err := webdavserve.NewServer(settings.WebDAVServe, shares, users)
+		if err != nil {
+			slog.Error("failed to start WebDAV server", "error", err)
+			return
+		}
+		ctx, cancel := context.WithCancel(a.rawHandler.appCtx)
+		webdavSrv.Start(ctx)
+
+		a.rawHandler.mu.Lock()
+		a.rawHandler.webdavServer = webdavSrv
+		a.rawHandler.webdavCancel = cancel
+		a.rawHandler.mu.Unlock()
+
+		slog.Info("WebDAV server reloaded")
+	} else {
+		slog.Info("WebDAV server disabled")
+	}
+}
+
 // reloadPublicServer stops the existing public HTTP server (if running) and starts a new one if enabled.
 func (a *api) reloadPublicServer(settings *service.Settings) {
 	// Stop existing public server
@@ -610,6 +661,14 @@ func newRawFSFromSettings(mountType string, m service.RawMountEntry) (rawfs.RawF
 			return nil, fmt.Errorf("sftp backend not available")
 		}
 		return rawfs.NewSFTPFSFunc(m.SFTP.Host, m.SFTP.Username, m.SFTP.Password, m.SFTP.PrivateKey, m.SFTP.BasePath)
+	case "webdav":
+		if m.WebDAV == nil {
+			return nil, fmt.Errorf("webdav config is required")
+		}
+		if rawfs.NewWebDAVFSFunc == nil {
+			return nil, fmt.Errorf("webdav backend not available")
+		}
+		return rawfs.NewWebDAVFSFunc(m.WebDAV.URL, m.WebDAV.Username, m.WebDAV.Password, m.WebDAV.BasePath)
 	default:
 		return nil, fmt.Errorf("unknown mount type %q", mountType)
 	}
@@ -779,6 +838,14 @@ func SetTFTPServer(rh *RawHandler, tftpSrv *tftpserve.Server, cancel context.Can
 	rh.mu.Lock()
 	rh.tftpServer = tftpSrv
 	rh.tftpCancel = cancel
+	rh.mu.Unlock()
+}
+
+// SetWebDAVServer stores the WebDAV server reference and its cancel func in the rawHandler.
+func SetWebDAVServer(rh *RawHandler, webdavSrv *webdavserve.Server, cancel context.CancelFunc) {
+	rh.mu.Lock()
+	rh.webdavServer = webdavSrv
+	rh.webdavCancel = cancel
 	rh.mu.Unlock()
 }
 

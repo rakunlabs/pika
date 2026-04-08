@@ -11,9 +11,10 @@ import (
 	"github.com/rakunlabs/tell"
 
 	"github.com/rakunlabs/pika/internal/config"
-	_ "github.com/rakunlabs/pika/internal/rawfs/ftpfs"  // register FTP backend
-	_ "github.com/rakunlabs/pika/internal/rawfs/s3fs"   // register S3 backend
-	_ "github.com/rakunlabs/pika/internal/rawfs/sftpfs" // register SFTP backend
+	_ "github.com/rakunlabs/pika/internal/rawfs/ftpfs"     // register FTP backend
+	_ "github.com/rakunlabs/pika/internal/rawfs/s3fs"      // register S3 backend
+	_ "github.com/rakunlabs/pika/internal/rawfs/sftpfs"    // register SFTP backend
+	_ "github.com/rakunlabs/pika/internal/rawfs/webdavfs"  // register WebDAV backend
 	"github.com/rakunlabs/pika/internal/secret"
 	"github.com/rakunlabs/pika/internal/secret/crypto"
 	"github.com/rakunlabs/pika/internal/server"

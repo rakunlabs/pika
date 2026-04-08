@@ -13,12 +13,13 @@ import (
 
 // RawMountEntry is a single raw mount configured via the UI.
 type RawMountEntry struct {
-	Prefix string           `json:"prefix"`
-	Type   string           `json:"type,omitempty"` // "local" (default), "s3", "ftp", "sftp"
-	Path   string           `json:"path,omitempty"` // for type=local
-	S3     *S3ConfigEntry   `json:"s3,omitempty"`
-	FTP    *FTPConfigEntry  `json:"ftp,omitempty"`
-	SFTP   *SFTPConfigEntry `json:"sftp,omitempty"`
+	Prefix string              `json:"prefix"`
+	Type   string              `json:"type,omitempty"` // "local" (default), "s3", "ftp", "sftp", "webdav"
+	Path   string              `json:"path,omitempty"` // for type=local
+	S3     *S3ConfigEntry      `json:"s3,omitempty"`
+	FTP    *FTPConfigEntry     `json:"ftp,omitempty"`
+	SFTP   *SFTPConfigEntry    `json:"sftp,omitempty"`
+	WebDAV *WebDAVConfigEntry  `json:"webdav,omitempty"`
 }
 
 // S3ConfigEntry holds S3 configuration stored in settings.
@@ -51,6 +52,14 @@ type SFTPConfigEntry struct {
 	BasePath   string `json:"base_path,omitempty"`
 }
 
+// WebDAVConfigEntry holds WebDAV configuration stored in settings.
+type WebDAVConfigEntry struct {
+	URL      string `json:"url"`
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	BasePath string `json:"base_path,omitempty"`
+}
+
 // PublicPortSettings configures the public (unauthenticated) HTTP server.
 type PublicPortSettings struct {
 	Enabled bool   `json:"enabled"`
@@ -76,6 +85,7 @@ type Settings struct {
 	FTPServe        *FTPServeSettings            `json:"ftp_serve,omitempty"`
 	SFTPServe       *SFTPServeSettings           `json:"sftp_serve,omitempty"`
 	TFTPServe       *TFTPServeSettings           `json:"tftp_serve,omitempty"`
+	WebDAVServe     *WebDAVServeSettings         `json:"webdav_serve,omitempty"`
 	Hooks           []hook.Hook                  `json:"hooks,omitempty"`
 	PublicPort      *PublicPortSettings          `json:"public_port,omitempty"`
 	Compat          *CompatSettings              `json:"compat,omitempty"`
@@ -118,6 +128,14 @@ type TFTPServeSettings struct {
 	Host    string `json:"host,omitempty"`
 }
 
+// WebDAVServeSettings configures the built-in WebDAV server (stored in DB).
+type WebDAVServeSettings struct {
+	Enabled bool   `json:"enabled"`
+	Port    int    `json:"port,omitempty"`
+	Host    string `json:"host,omitempty"`
+	Prefix  string `json:"prefix,omitempty"` // URL path prefix, default "/"
+}
+
 // FTPUserEntry defines an FTP user account stored in settings.
 type FTPUserEntry struct {
 	Username string `json:"username"`
@@ -152,10 +170,11 @@ type PatchSettings struct {
 	RawMounts  *[]RawMountEntry             `json:"raw_mounts,omitempty"` // pointer to distinguish nil (not provided) from empty
 	FTPShares  *[]FTPShareEntry             `json:"ftp_shares,omitempty"` // pointer to distinguish nil from empty
 	FTPUsers   *[]FTPUserEntry              `json:"ftp_users,omitempty"`
-	FTPServe   *FTPServeSettings            `json:"ftp_serve,omitempty"`
-	SFTPServe  *SFTPServeSettings           `json:"sftp_serve,omitempty"`
-	TFTPServe  *TFTPServeSettings           `json:"tftp_serve,omitempty"`
-	Hooks      *[]hook.Hook                 `json:"hooks,omitempty"` // pointer to distinguish nil from empty
+	FTPServe    *FTPServeSettings            `json:"ftp_serve,omitempty"`
+	SFTPServe   *SFTPServeSettings           `json:"sftp_serve,omitempty"`
+	TFTPServe   *TFTPServeSettings           `json:"tftp_serve,omitempty"`
+	WebDAVServe *WebDAVServeSettings         `json:"webdav_serve,omitempty"`
+	Hooks       *[]hook.Hook                 `json:"hooks,omitempty"` // pointer to distinguish nil from empty
 	PublicPort *PublicPortSettings          `json:"public_port,omitempty"`
 	Compat     *CompatSettings              `json:"compat,omitempty"`
 }
@@ -238,6 +257,9 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 	}
 	if patch.TFTPServe != nil {
 		settings.TFTPServe = patch.TFTPServe
+	}
+	if patch.WebDAVServe != nil {
+		settings.WebDAVServe = patch.WebDAVServe
 	}
 
 	// Handle hooks update (if provided)

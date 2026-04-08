@@ -14,3 +14,7 @@ var NewFTPFSFunc func(host, username, password, basePath string, tls bool) (RawF
 // NewSFTPFSFunc is the factory function for creating SFTP backends.
 // Set by the sftpfs package.
 var NewSFTPFSFunc func(host, username, password, privateKey, basePath string) (RawFS, error)
+
+// NewWebDAVFSFunc is the factory function for creating WebDAV backends.
+// Set by the webdavfs package.
+var NewWebDAVFSFunc func(url, username, password, basePath string) (RawFS, error)

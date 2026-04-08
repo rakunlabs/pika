@@ -22,6 +22,7 @@ import (
 	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/serve/sftpserve"
 	"github.com/rakunlabs/pika/internal/serve/tftpserve"
+	"github.com/rakunlabs/pika/internal/serve/webdavserve"
 	"github.com/rakunlabs/pika/internal/server/api"
 	"github.com/rakunlabs/pika/internal/server/compat"
 	"github.com/rakunlabs/pika/internal/server/session"
@@ -140,6 +141,19 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		tftpCtx, tftpCancel := context.WithCancel(ctx)
 		tftpSrv.Start(tftpCtx, settings.TFTPServe)
 		api.SetTFTPServer(rh, tftpSrv, tftpCancel)
+	}
+
+	// Start WebDAV server if enabled
+	if settings.WebDAVServe != nil && settings.WebDAVServe.Enabled {
+		shares := api.BuildFTPShares(ctx, svc, rh)
+		users := api.BuildFTPUsers(ctx, svc)
+		webdavSrv, err := webdavserve.NewServer(settings.WebDAVServe, shares, users)
+		if err != nil {
+			return fmt.Errorf("init WebDAV server: %w", err)
+		}
+		webdavCtx, webdavCancel := context.WithCancel(ctx)
+		webdavSrv.Start(webdavCtx)
+		api.SetWebDAVServer(rh, webdavSrv, webdavCancel)
 	}
 
 	if err := folderHandler(mAuth); err != nil {

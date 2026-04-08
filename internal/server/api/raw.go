@@ -21,6 +21,7 @@ import (
 	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/serve/sftpserve"
 	"github.com/rakunlabs/pika/internal/serve/tftpserve"
+	"github.com/rakunlabs/pika/internal/serve/webdavserve"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -42,12 +43,14 @@ type publicServerInfo struct {
 type RawHandler struct {
 	mu         sync.RWMutex
 	mounts     []mountEntry
-	ftpServer  *ftpserve.Server
-	sftpServer *sftpserve.Server
-	tftpServer *tftpserve.Server
-	ftpCancel  context.CancelFunc
-	sftpCancel context.CancelFunc
-	tftpCancel context.CancelFunc
+	ftpServer    *ftpserve.Server
+	sftpServer   *sftpserve.Server
+	tftpServer   *tftpserve.Server
+	webdavServer *webdavserve.Server
+	ftpCancel    context.CancelFunc
+	sftpCancel   context.CancelFunc
+	tftpCancel   context.CancelFunc
+	webdavCancel context.CancelFunc
 	publicSrv  *publicServerInfo
 	appCtx     context.Context
 	dispatcher *hook.Dispatcher

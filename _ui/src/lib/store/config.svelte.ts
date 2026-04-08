@@ -697,6 +697,7 @@ function createConfigStore() {
     ftp_serve?: import('@/lib/types/config').FTPServeSettings,
     sftp_serve?: import('@/lib/types/config').SFTPServeSettings,
     tftp_serve?: import('@/lib/types/config').TFTPServeSettings,
+    webdav_serve?: import('@/lib/types/config').WebDAVServeSettings,
   }): Promise<void> {
     try {
       await axios.post('/api/v1/settings', {
