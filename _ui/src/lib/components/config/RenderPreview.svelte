@@ -62,6 +62,11 @@
         meta: activeTab.meta
       });
       
+      // Check for parse/conversion errors from backend
+      if (response.data.error) {
+        error = response.data.error;
+      }
+
       // If the backend returns raw bytes, decode them (Unicode-safe)
       if (response.data.data) {
         try {

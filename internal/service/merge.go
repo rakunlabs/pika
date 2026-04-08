@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -75,7 +76,7 @@ func filterByPaths(data []byte, paths []string) ([]byte, error) {
 
 	var dataMap map[string]any
 	if err := json.Unmarshal(data, &dataMap); err != nil {
-		return data, nil // not a JSON object, return as-is
+		return nil, fmt.Errorf("parsing JSON for path filtering: %w", err)
 	}
 
 	result := make(map[string]any)
@@ -98,7 +99,7 @@ func injectAtPath(data []byte, path string) ([]byte, error) {
 
 	var val any
 	if err := json.Unmarshal(data, &val); err != nil {
-		return data, nil
+		return nil, fmt.Errorf("parsing JSON for injection: %w", err)
 	}
 
 	parts := strings.Split(path, ".")

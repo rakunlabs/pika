@@ -1,16 +1,74 @@
 <script lang="ts">
   import CodeMirror from 'svelte-codemirror-editor';
-  import { json } from '@codemirror/lang-json';
+  import { json, jsonParseLinter } from '@codemirror/lang-json';
   import { yaml } from '@codemirror/lang-yaml';
   import { StreamLanguage, LanguageSupport } from '@codemirror/language';
   import { toml } from '@codemirror/legacy-modes/mode/toml';
+  import { linter, lintGutter, type Diagnostic } from '@codemirror/lint';
+  import type { Extension } from '@codemirror/state';
   import { oneDark } from '@codemirror/theme-one-dark';
   import { configStore } from '@/lib/store/config.svelte';
   import { addToast } from '@/lib/store/toast.svelte';
   import type { FileFormat, ViewMode } from '@/lib/types/config';
   import { Save, Sparkles, ArrowRightLeft, Upload, Binary, Type } from 'lucide-svelte';
+  import { AlertTriangle } from 'lucide-svelte';
   import axios from 'axios';
+  import jsYaml from 'js-yaml';
+  import { parse as parseToml, TomlError } from 'smol-toml';
   import HexViewer from './HexViewer.svelte';
+
+  const LINT_DELAY = 500; // ms debounce
+
+  // YAML linter using js-yaml for full validation
+  const yamlLinter = linter((view) => {
+    const doc = view.state.doc;
+    const content = doc.toString();
+    if (!content.trim()) return [];
+
+    try {
+      jsYaml.load(content);
+      return [];
+    } catch (e: any) {
+      const diagnostics: Diagnostic[] = [];
+      if (e?.mark) {
+        // js-yaml provides 0-based line/column via e.mark
+        const line = Math.min(e.mark.line, doc.lines - 1);
+        const lineObj = doc.line(line + 1);
+        const from = lineObj.from + Math.min(e.mark.column || 0, lineObj.length);
+        const to = Math.min(from + 1, doc.length);
+        diagnostics.push({ from, to, severity: 'error', message: e.reason || 'YAML syntax error' });
+      } else {
+        diagnostics.push({ from: 0, to: Math.min(1, doc.length), severity: 'error', message: e.message || 'YAML syntax error' });
+      }
+      return diagnostics;
+    }
+  }, { delay: LINT_DELAY });
+
+  // TOML linter using smol-toml for full validation
+  const tomlLinter = linter((view) => {
+    const doc = view.state.doc;
+    const content = doc.toString();
+    if (!content.trim()) return [];
+
+    try {
+      parseToml(content);
+      return [];
+    } catch (e: any) {
+      const diagnostics: Diagnostic[] = [];
+      if (e instanceof TomlError && e.line !== undefined) {
+        // smol-toml provides 1-based line/column
+        const line = Math.min(e.line, doc.lines);
+        const lineObj = doc.line(line);
+        const col = Math.min((e.column || 1) - 1, lineObj.length);
+        const from = lineObj.from + col;
+        const to = Math.min(from + 1, doc.length);
+        diagnostics.push({ from, to, severity: 'error', message: e.message.split('\n')[0] });
+      } else {
+        diagnostics.push({ from: 0, to: Math.min(1, doc.length), severity: 'error', message: e.message || 'TOML syntax error' });
+      }
+      return diagnostics;
+    }
+  }, { delay: LINT_DELAY });
 
   function getLanguageExtension(format: FileFormat): LanguageSupport | undefined {
     switch (format) {
@@ -22,6 +80,19 @@
         return new LanguageSupport(StreamLanguage.define(toml));
       default:
         return undefined;
+    }
+  }
+
+  function getLintExtensions(format: FileFormat): Extension[] {
+    switch (format) {
+      case 'json':
+        return [lintGutter(), linter(jsonParseLinter(), { delay: LINT_DELAY })];
+      case 'yaml':
+        return [lintGutter(), yamlLinter];
+      case 'toml':
+        return [lintGutter(), tomlLinter];
+      default:
+        return [];
     }
   }
 
@@ -75,6 +146,7 @@
 
   const activeTab = $derived(configStore.activeTab);
   const languageExtension = $derived(activeTab ? getLanguageExtension(activeTab.format) : undefined);
+  const lintExtensions = $derived(activeTab ? getLintExtensions(activeTab.format) : []);
   const convertTargets = $derived(
     activeTab ? allFormats.filter(f => f !== activeTab.format) : []
   );
@@ -84,22 +156,65 @@
   let isConverting = $state(false);
   let saveConstraint = $state('');
   let fileInput: HTMLInputElement | undefined = $state();
+  let pendingSaveConfirm = $state(false);
+  let pendingSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // Validate content against its format. Returns error message or null if valid.
+  function validateContent(content: string, format: FileFormat): string | null {
+    if (!content.trim()) return null;
+    try {
+      switch (format) {
+        case 'json':
+          JSON.parse(content);
+          return null;
+        case 'yaml':
+          jsYaml.load(content);
+          return null;
+        case 'toml':
+          parseToml(content);
+          return null;
+        default:
+          return null;
+      }
+    } catch (e: any) {
+      return e.reason || e.message || `Invalid ${format.toUpperCase()}`;
+    }
+  }
 
   function handleChange(value: string) {
     if (activeTab) {
       configStore.updateTabContent(activeTab.id, value);
+      // Reset confirmation state when content changes
+      if (pendingSaveConfirm) {
+        pendingSaveConfirm = false;
+        clearTimeout(pendingSaveTimer);
+      }
     }
   }
 
   async function handleSave() {
-    if (activeTab && activeTab.isDirty) {
-      try {
-        const constraint = saveConstraint.trim() || undefined;
-        await configStore.saveTab(activeTab.id, constraint);
-        saveConstraint = '';
-      } catch (error) {
-        console.error('Failed to save:', error);
-      }
+    if (!activeTab || !activeTab.isDirty) return;
+
+    // Check for lint errors before saving
+    const validationError = validateContent(activeTab.content, activeTab.format);
+    if (validationError && !pendingSaveConfirm) {
+      pendingSaveConfirm = true;
+      addToast(`${activeTab.format.toUpperCase()} has errors — press Save again to confirm`, 'warn');
+      // Auto-reset after 5 seconds
+      clearTimeout(pendingSaveTimer);
+      pendingSaveTimer = setTimeout(() => { pendingSaveConfirm = false; }, 5000);
+      return;
+    }
+
+    pendingSaveConfirm = false;
+    clearTimeout(pendingSaveTimer);
+
+    try {
+      const constraint = saveConstraint.trim() || undefined;
+      await configStore.saveTab(activeTab.id, constraint);
+      saveConstraint = '';
+    } catch (error) {
+      console.error('Failed to save:', error);
     }
   }
 
@@ -272,12 +387,18 @@
             class="w-40 px-2 py-1 text-[11px] font-mono bg-[#1e1e1e] border border-[#3c3c3c] rounded text-gray-400 placeholder:text-gray-600 focus:outline-none focus:border-amber-500"
           />
           <button
-            class="flex items-center gap-1 px-2.5 py-1 bg-green-600 text-white border-none rounded text-[11px] font-medium cursor-pointer transition-colors hover:bg-green-500"
+            class="flex items-center gap-1 px-2.5 py-1 border-none rounded text-[11px] font-medium cursor-pointer transition-colors
+              {pendingSaveConfirm ? 'bg-amber-600 hover:bg-amber-500' : 'bg-green-600 hover:bg-green-500'} text-white"
             onclick={handleSave}
-            title="Save (Ctrl+S)"
+            title={pendingSaveConfirm ? 'Content has errors — click to save anyway' : 'Save (Ctrl+S)'}
           >
-            <Save size={12} />
-            <span>Save</span>
+            {#if pendingSaveConfirm}
+              <AlertTriangle size={12} />
+              <span>Save anyway?</span>
+            {:else}
+              <Save size={12} />
+              <span>Save</span>
+            {/if}
           </button>
         {:else}
           <span class="px-2 py-1 text-[11px] text-green-500">Saved</span>
@@ -293,6 +414,7 @@
           value={activeTab.content}
           onchange={handleChange}
           lang={languageExtension}
+          extensions={lintExtensions}
           theme={oneDark}
           styles={{
             '&': {

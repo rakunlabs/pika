@@ -40,16 +40,20 @@ func (s *Service) getDataForFile(ctx context.Context, filePath string, versionSt
 	format := file.Meta.Format
 	needsMerge := len(file.Meta.Inherits) > 0
 
+	var convError string
+
 	// Convert to JSON for merging if needed
 	if needsMerge && format != "json" && format != "" && format != "raw" {
 		jsonData, err := ConvertFormat(resolved, format, "json")
-		if err == nil {
+		if err != nil {
+			convError = fmt.Sprintf("invalid %s: %v", format, err)
+		} else {
 			resolved = jsonData
 		}
 	}
 
-	// Resolve all inheritance entries
-	if len(file.Meta.Inherits) > 0 {
+	// Resolve all inheritance entries (skip if conversion failed)
+	if len(file.Meta.Inherits) > 0 && convError == "" {
 		var err error
 		resolved, err = s.resolveInherits(ctx, resolved, file.Meta.Inherits)
 		if err != nil {
@@ -58,7 +62,7 @@ func (s *Service) getDataForFile(ctx context.Context, filePath string, versionSt
 	}
 
 	// Convert back to original format after merging
-	if needsMerge && format != "json" && format != "" && format != "raw" {
+	if needsMerge && format != "json" && format != "" && format != "raw" && convError == "" {
 		converted, err := ConvertFormat(resolved, "json", format)
 		if err == nil {
 			resolved = converted
@@ -68,6 +72,7 @@ func (s *Service) getDataForFile(ctx context.Context, filePath string, versionSt
 	return &DataResult{
 		Data:   resolved,
 		Format: format,
+		Error:  convError,
 	}, nil
 }
 
@@ -86,7 +91,8 @@ func (s *Service) RenderFile(ctx context.Context, filePath string, content strin
 		jsonData, err := ConvertFormat(currentData, format, "json")
 		if err != nil {
 			return &RenderResult{
-				Data: base64.StdEncoding.EncodeToString(currentData),
+				Data:  base64.StdEncoding.EncodeToString(currentData),
+				Error: fmt.Sprintf("invalid %s: %v", format, err),
 			}, nil
 		}
 		currentData = jsonData

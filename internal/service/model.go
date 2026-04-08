@@ -127,9 +127,11 @@ type SearchResult struct {
 type DataResult struct {
 	Data   []byte `json:"data"`
 	Format string `json:"format"`
+	Error  string `json:"error,omitempty"` // parse/conversion error message
 }
 
 // RenderResult holds the rendered configuration for preview.
 type RenderResult struct {
-	Data string `json:"data"` // base64 encoded
+	Data  string `json:"data"`            // base64 encoded
+	Error string `json:"error,omitempty"` // parse/conversion error message for the UI
 }

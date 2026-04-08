@@ -54,6 +54,10 @@ func (a *api) resolveAndWriteData(c *ada.Context, key string) error {
 		return err
 	}
 
+	if result.Error != "" {
+		return errors.Join(fmt.Errorf("configuration has errors: %s", result.Error), service.ErrBadRequest)
+	}
+
 	// Determine output format — if requested format differs from stored format, convert
 	requestedFormat := query.Get("format")
 	outputData := result.Data
