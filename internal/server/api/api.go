@@ -45,12 +45,18 @@ type Info struct {
 	Date    string `json:"date,omitempty"`
 }
 
+// PublicServerStarter is a callback that creates, starts and returns a cancel function
+// for the public HTTP server. It is set by the server package to encapsulate the
+// middleware/routing setup that lives in server.go.
+type PublicServerStarter func(settings *service.Settings, rh *RawHandler) (cancel context.CancelFunc, err error)
+
 type api struct {
-	svc          *service.Service
-	info         Info
-	encStore     *secret.Storage // nil if encryption is disabled
-	sessionStore *session.Store  // nil if built-in auth is disabled
-	rawHandler   *rawHandler     // nil if no raw mounts configured
+	svc               *service.Service
+	info              Info
+	encStore          *secret.Storage     // nil if encryption is disabled
+	sessionStore      *session.Store      // nil if built-in auth is disabled
+	rawHandler        *RawHandler         // nil if no raw mounts configured
+	startPublicServer PublicServerStarter // set by server.go
 }
 
 // SessionStore is the interface for session management.
@@ -69,7 +75,7 @@ type response struct {
 
 // HandlePublic registers unauthenticated endpoints for the public port.
 // Only /data/*, /raw/* and /healthz are exposed — no admin API, no UI.
-func HandlePublic(m *ada.Mux, svc *service.Service, rh *rawHandler) error {
+func HandlePublic(m *ada.Mux, svc *service.Service, rh *RawHandler) error {
 	a := &api{svc: svc, rawHandler: rh}
 
 	m.ErrorHandler(a.errorHandler)
@@ -79,12 +85,12 @@ func HandlePublic(m *ada.Mux, svc *service.Service, rh *rawHandler) error {
 	return nil
 }
 
-func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, sessionStore *session.Store, rh *rawHandler) error {
+func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, sessionStore *session.Store, rh *RawHandler, publicStarter PublicServerStarter) error {
 	// Set hook service identification from config
 	hook.ServiceName = config.ServiceName
 	hook.Version = config.Version
 
-	api := &api{svc: svc, info: info, encStore: encStore, sessionStore: sessionStore, rawHandler: rh}
+	api := &api{svc: svc, info: info, encStore: encStore, sessionStore: sessionStore, rawHandler: rh, startPublicServer: publicStarter}
 
 	// Inject X-User header into context for all API requests
 	m.Use(userMiddleware)
@@ -277,6 +283,16 @@ func (a *api) postSettings(c *ada.Context) error {
 			if patchSettings.TFTPServe != nil {
 				a.reloadTFTPServe(settings)
 			}
+		}
+	}
+
+	// If public port or compat were updated, reload the public server
+	if patchSettings.PublicPort != nil || patchSettings.Compat != nil {
+		settings, err := a.svc.Settings(c.Request.Context())
+		if err != nil {
+			slog.Error("failed to read settings for public server reload", "error", err)
+		} else {
+			a.reloadPublicServer(settings)
 		}
 	}
 
@@ -480,6 +496,48 @@ func (a *api) reloadTFTPServe(settings *service.Settings) {
 	}
 }
 
+// reloadPublicServer stops the existing public HTTP server (if running) and starts a new one if enabled.
+func (a *api) reloadPublicServer(settings *service.Settings) {
+	// Stop existing public server
+	a.rawHandler.mu.Lock()
+	oldSrv := a.rawHandler.publicSrv
+	a.rawHandler.publicSrv = nil
+	a.rawHandler.mu.Unlock()
+
+	if oldSrv != nil && oldSrv.cancel != nil {
+		oldSrv.cancel()
+	}
+
+	if settings.PublicPort == nil || !settings.PublicPort.Enabled || settings.PublicPort.Port == "" {
+		slog.Info("public server disabled")
+		return
+	}
+
+	if a.startPublicServer == nil {
+		slog.Error("public server starter not configured")
+		return
+	}
+
+	cancel, err := a.startPublicServer(settings, a.rawHandler)
+	if err != nil {
+		slog.Error("failed to start public server", "error", err)
+		return
+	}
+
+	a.rawHandler.mu.Lock()
+	a.rawHandler.publicSrv = &publicServerInfo{cancel: cancel}
+	a.rawHandler.mu.Unlock()
+
+	slog.Info("public server reloaded", "port", settings.PublicPort.Port)
+}
+
+// SetPublicServer stores the public server cancel func in the rawHandler.
+func SetPublicServer(rh *RawHandler, cancel context.CancelFunc) {
+	rh.mu.Lock()
+	rh.publicSrv = &publicServerInfo{cancel: cancel}
+	rh.mu.Unlock()
+}
+
 // BuildMountEntries creates mountEntry instances from settings entries.
 // Returns successfully created entries and any errors for failed ones.
 func BuildMountEntries(settingsEntries []service.RawMountEntry) ([]mountEntry, []error) {
@@ -557,119 +615,20 @@ func newRawFSFromSettings(mountType string, m service.RawMountEntry) (rawfs.RawF
 	}
 }
 
-// NewRawFSFromConfig creates a RawFS from a config-file RawMount.
-func NewRawFSFromConfig(m config.RawMount) (rawfs.RawFS, error) {
-	mountType := m.Type
-	if mountType == "" {
-		mountType = "local"
-	}
-	switch mountType {
-	case "local":
-		if m.Path == "" {
-			return nil, fmt.Errorf("path is required for local mount")
-		}
-		return localfs.New(m.Path)
-	case "s3":
-		if m.S3 == nil {
-			return nil, fmt.Errorf("s3 config is required")
-		}
-		if rawfs.NewS3FSFunc == nil {
-			return nil, fmt.Errorf("s3 backend not available")
-		}
-		return rawfs.NewS3FSFunc(m.S3.Bucket, m.S3.Region, m.S3.Endpoint, m.S3.AccessKey, m.S3.SecretKey, m.S3.Prefix, m.S3.PathStyle, m.S3.Secure)
-	case "ftp":
-		if m.FTP == nil {
-			return nil, fmt.Errorf("ftp config is required")
-		}
-		if rawfs.NewFTPFSFunc == nil {
-			return nil, fmt.Errorf("ftp backend not available")
-		}
-		return rawfs.NewFTPFSFunc(m.FTP.Host, m.FTP.Username, m.FTP.Password, m.FTP.BasePath, m.FTP.TLS)
-	case "sftp":
-		if m.SFTP == nil {
-			return nil, fmt.Errorf("sftp config is required")
-		}
-		if rawfs.NewSFTPFSFunc == nil {
-			return nil, fmt.Errorf("sftp backend not available")
-		}
-		return rawfs.NewSFTPFSFunc(m.SFTP.Host, m.SFTP.Username, m.SFTP.Password, m.SFTP.PrivateKey, m.SFTP.BasePath)
-	default:
-		return nil, fmt.Errorf("unknown mount type %q", mountType)
-	}
-}
-
-// BuildMountEntriesFromConfig creates mount entries from config-file RawMounts.
-func BuildMountEntriesFromConfig(cfgMounts []config.RawMount) ([]mountEntry, []error) {
-	var entries []mountEntry
-	var errs []error
-	seen := make(map[string]bool)
-
-	for _, m := range cfgMounts {
-		if m.Prefix == "" {
-			errs = append(errs, fmt.Errorf("raw mount prefix must not be empty"))
-			continue
-		}
-		if seen[m.Prefix] {
-			errs = append(errs, fmt.Errorf("duplicate raw mount prefix %q", m.Prefix))
-			continue
-		}
-		seen[m.Prefix] = true
-
-		fs, err := NewRawFSFromConfig(m)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("mount %q: %w", m.Prefix, err))
-			continue
-		}
-
-		mountType := m.Type
-		if mountType == "" {
-			mountType = "local"
-		}
-
-		entries = append(entries, mountEntry{
-			Prefix:   m.Prefix,
-			FS:       fs,
-			Type:     mountType,
-			Writable: rawfs.IsWritable(fs),
-		})
-
-		slog.Info("raw mount configured", "prefix", "/raw/"+m.Prefix, "type", mountType)
-	}
-
-	return entries, errs
-}
-
-// BuildInitialRawHandler creates a rawHandler from config-file mounts merged with DB settings.
+// BuildInitialRawHandler creates a rawHandler from DB settings.
 // It also creates the hook dispatcher and loads hooks from the database.
-func BuildInitialRawHandler(ctx context.Context, cfgMounts []config.RawMount, svc *service.Service) *rawHandler {
-	// Build config-file mount entries
-	entries, cfgErrs := BuildMountEntriesFromConfig(cfgMounts)
-	for _, err := range cfgErrs {
-		slog.Warn("skipping invalid config-file raw mount", "error", err)
-	}
-
-	// Merge DB-stored mounts (config-file mounts take precedence)
+func BuildInitialRawHandler(ctx context.Context, svc *service.Service) *RawHandler {
+	// Build mount entries from DB settings
+	var entries []mountEntry
 	settings, err := svc.Settings(ctx)
 	if err != nil {
 		slog.Warn("could not load settings for raw mounts", "error", err)
 	} else if len(settings.RawMounts) > 0 {
-		seen := make(map[string]bool)
-		for _, e := range entries {
-			seen[e.Prefix] = true
-		}
-
 		dbEntries, dbErrs := BuildMountEntries(settings.RawMounts)
 		for _, err := range dbErrs {
-			slog.Warn("skipping invalid DB raw mount", "error", err)
+			slog.Warn("skipping invalid raw mount from settings", "error", err)
 		}
-
-		for _, e := range dbEntries {
-			if seen[e.Prefix] {
-				slog.Info("skipping DB raw mount (overridden by config file)", "prefix", e.Prefix)
-				continue
-			}
-			entries = append(entries, e)
-		}
+		entries = dbEntries
 	}
 
 	// Create and start the hook dispatcher
@@ -712,7 +671,7 @@ func BuildInitialRawHandler(ctx context.Context, cfgMounts []config.RawMount, sv
 
 // BuildFTPShares creates FTP share entries from the current settings, resolving
 // each path's mount prefix to the corresponding RawFS backend via the rawHandler.
-func BuildFTPShares(ctx context.Context, svc *service.Service, rh *rawHandler) []ftpserve.Share {
+func BuildFTPShares(ctx context.Context, svc *service.Service, rh *RawHandler) []ftpserve.Share {
 	settings, err := svc.Settings(ctx)
 	if err != nil {
 		slog.Warn("could not load settings for FTP shares", "error", err)
@@ -795,12 +754,12 @@ func BuildFTPUsers(ctx context.Context, svc *service.Service) []ftpserve.User {
 }
 
 // GetDispatcher returns the hook dispatcher from the rawHandler.
-func GetDispatcher(rh *rawHandler) *hook.Dispatcher {
+func GetDispatcher(rh *RawHandler) *hook.Dispatcher {
 	return rh.Dispatcher()
 }
 
 // SetFTPServer stores the FTP server reference and its cancel func in the rawHandler.
-func SetFTPServer(rh *rawHandler, ftpSrv *ftpserve.Server, cancel context.CancelFunc) {
+func SetFTPServer(rh *RawHandler, ftpSrv *ftpserve.Server, cancel context.CancelFunc) {
 	rh.mu.Lock()
 	rh.ftpServer = ftpSrv
 	rh.ftpCancel = cancel
@@ -808,7 +767,7 @@ func SetFTPServer(rh *rawHandler, ftpSrv *ftpserve.Server, cancel context.Cancel
 }
 
 // SetSFTPServer stores the SFTP server reference and its cancel func in the rawHandler.
-func SetSFTPServer(rh *rawHandler, sftpSrv *sftpserve.Server, cancel context.CancelFunc) {
+func SetSFTPServer(rh *RawHandler, sftpSrv *sftpserve.Server, cancel context.CancelFunc) {
 	rh.mu.Lock()
 	rh.sftpServer = sftpSrv
 	rh.sftpCancel = cancel
@@ -816,7 +775,7 @@ func SetSFTPServer(rh *rawHandler, sftpSrv *sftpserve.Server, cancel context.Can
 }
 
 // SetTFTPServer stores the TFTP server reference and its cancel func in the rawHandler.
-func SetTFTPServer(rh *rawHandler, tftpSrv *tftpserve.Server, cancel context.CancelFunc) {
+func SetTFTPServer(rh *RawHandler, tftpSrv *tftpserve.Server, cancel context.CancelFunc) {
 	rh.mu.Lock()
 	rh.tftpServer = tftpSrv
 	rh.tftpCancel = cancel

@@ -51,6 +51,22 @@ type SFTPConfigEntry struct {
 	BasePath   string `json:"base_path,omitempty"`
 }
 
+// PublicPortSettings configures the public (unauthenticated) HTTP server.
+type PublicPortSettings struct {
+	Enabled bool   `json:"enabled"`
+	Port    string `json:"port,omitempty"` // e.g. "9090"
+}
+
+// CompatSettings configures compatibility endpoints on the public server.
+type CompatSettings struct {
+	ConsulKV *ConsulKVSettings `json:"consul_kv,omitempty"`
+}
+
+// ConsulKVSettings configures the Consul KV API compatibility layer.
+type ConsulKVSettings struct {
+	BasePath string `json:"base_path,omitempty"` // default: "/consul"
+}
+
 type Settings struct {
 	External        map[string]external.External `json:"external,omitempty"`
 	AdminSecretHash string                       `json:"admin_secret_hash,omitempty"`
@@ -61,6 +77,8 @@ type Settings struct {
 	SFTPServe       *SFTPServeSettings           `json:"sftp_serve,omitempty"`
 	TFTPServe       *TFTPServeSettings           `json:"tftp_serve,omitempty"`
 	Hooks           []hook.Hook                  `json:"hooks,omitempty"`
+	PublicPort      *PublicPortSettings          `json:"public_port,omitempty"`
+	Compat          *CompatSettings              `json:"compat,omitempty"`
 }
 
 // FTPServeSettings configures the built-in FTP server (stored in DB).
@@ -129,15 +147,17 @@ type FTPShareEntry struct {
 }
 
 type PatchSettings struct {
-	Action    ActionKey                    `json:"action"`
-	External  map[string]external.External `json:"external,omitempty"`
-	RawMounts *[]RawMountEntry             `json:"raw_mounts,omitempty"` // pointer to distinguish nil (not provided) from empty
-	FTPShares *[]FTPShareEntry             `json:"ftp_shares,omitempty"` // pointer to distinguish nil from empty
-	FTPUsers  *[]FTPUserEntry              `json:"ftp_users,omitempty"`
-	FTPServe  *FTPServeSettings            `json:"ftp_serve,omitempty"`
-	SFTPServe *SFTPServeSettings           `json:"sftp_serve,omitempty"`
-	TFTPServe *TFTPServeSettings           `json:"tftp_serve,omitempty"`
-	Hooks     *[]hook.Hook                 `json:"hooks,omitempty"` // pointer to distinguish nil from empty
+	Action     ActionKey                    `json:"action"`
+	External   map[string]external.External `json:"external,omitempty"`
+	RawMounts  *[]RawMountEntry             `json:"raw_mounts,omitempty"` // pointer to distinguish nil (not provided) from empty
+	FTPShares  *[]FTPShareEntry             `json:"ftp_shares,omitempty"` // pointer to distinguish nil from empty
+	FTPUsers   *[]FTPUserEntry              `json:"ftp_users,omitempty"`
+	FTPServe   *FTPServeSettings            `json:"ftp_serve,omitempty"`
+	SFTPServe  *SFTPServeSettings           `json:"sftp_serve,omitempty"`
+	TFTPServe  *TFTPServeSettings           `json:"tftp_serve,omitempty"`
+	Hooks      *[]hook.Hook                 `json:"hooks,omitempty"` // pointer to distinguish nil from empty
+	PublicPort *PublicPortSettings          `json:"public_port,omitempty"`
+	Compat     *CompatSettings              `json:"compat,omitempty"`
 }
 
 type ActionKey string
@@ -223,6 +243,16 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 	// Handle hooks update (if provided)
 	if patch.Hooks != nil {
 		settings.Hooks = *patch.Hooks
+	}
+
+	// Handle public port update (if provided)
+	if patch.PublicPort != nil {
+		settings.PublicPort = patch.PublicPort
+	}
+
+	// Handle compat update (if provided)
+	if patch.Compat != nil {
+		settings.Compat = patch.Compat
 	}
 
 	return s.UpdateSettings(ctx, settings)

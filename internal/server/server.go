@@ -33,8 +33,8 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		return fmt.Errorf("forward_auth and auth are mutually exclusive; configure only one")
 	}
 
-	// Build initial raw mount handler from config + DB settings (includes hook dispatcher)
-	rh := api.BuildInitialRawHandler(ctx, cfg.Server.Raw, svc)
+	// Build initial raw mount handler from DB settings (includes hook dispatcher)
+	rh := api.BuildInitialRawHandler(ctx, svc)
 
 	// Wire the hook dispatcher into the service for config-level events
 	if d := api.GetDispatcher(rh); d != nil {
@@ -77,7 +77,14 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		slog.Info("no auth configured — admin API is unprotected")
 	}
 
-	if err := api.Handle(m, mData, mAuth, svc, info, encStore, sessionStore, rh); err != nil {
+	// publicServerStarter is a callback that creates and starts the public HTTP server.
+	// It is passed into the api layer so it can dynamically start/stop the public server
+	// when settings change via the UI.
+	publicServerStarter := func(settings *service.Settings, rh2 *api.RawHandler) (context.CancelFunc, error) {
+		return startPublicServer(ctx, cfg, svc, settings, rh2)
+	}
+
+	if err := api.Handle(m, mData, mAuth, svc, info, encStore, sessionStore, rh, publicServerStarter); err != nil {
 		return err
 	}
 
@@ -139,38 +146,49 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		return err
 	}
 
-	if cfg.Server.Compat != nil && cfg.Server.PublicPort == "" {
-		slog.Warn("compat endpoints configured but public_port is not set; compat endpoints will not be available")
-	}
-
-	if cfg.Server.PublicPort != "" {
-		publicServer := ada.New()
-		publicServer.Use(
-			mrecover.Middleware(),
-			mserver.Middleware(config.Service),
-			mcors.Middleware(),
-			mrequestid.Middleware(),
-			mlog.Middleware(),
-			mtelemetry.Middleware(),
-		)
-
-		mPublic := publicServer.Group(cfg.Server.BasePath)
-		if err := api.HandlePublic(mPublic, svc, rh); err != nil {
-			return err
+	// Start public server if enabled in DB settings
+	if settings.PublicPort != nil && settings.PublicPort.Enabled && settings.PublicPort.Port != "" {
+		cancel, err := startPublicServer(ctx, cfg, svc, settings, rh)
+		if err != nil {
+			return fmt.Errorf("init public server: %w", err)
 		}
-
-		compat.Register(publicServer.Mux, svc, cfg.Server.Compat)
-
-		publicAddr := net.JoinHostPort(cfg.Server.Host, cfg.Server.PublicPort)
-		slog.Info("starting public data server", "address", publicAddr)
-
-		go func() {
-			if err := publicServer.StartWithContext(ctx, publicAddr); err != nil {
-				slog.Error("public data server failed", "error", err)
-				into.CtxCancel()
-			}
-		}()
+		api.SetPublicServer(rh, cancel)
 	}
 
 	return server.StartWithContext(ctx, net.JoinHostPort(cfg.Server.Host, cfg.Server.Port))
+}
+
+// startPublicServer creates and starts the public (unauthenticated) HTTP server.
+// Returns a cancel function to stop it.
+func startPublicServer(ctx context.Context, cfg *config.Config, svc *service.Service, settings *service.Settings, rh *api.RawHandler) (context.CancelFunc, error) {
+	pubServer := ada.New()
+	pubServer.Use(
+		mrecover.Middleware(),
+		mserver.Middleware(config.Service),
+		mcors.Middleware(),
+		mrequestid.Middleware(),
+		mlog.Middleware(),
+		mtelemetry.Middleware(),
+	)
+
+	mPublic := pubServer.Group(cfg.Server.BasePath)
+	if err := api.HandlePublic(mPublic, svc, rh); err != nil {
+		return nil, err
+	}
+
+	compat.Register(pubServer.Mux, svc, settings.Compat)
+
+	publicAddr := net.JoinHostPort(cfg.Server.Host, settings.PublicPort.Port)
+	slog.Info("starting public data server", "address", publicAddr)
+
+	pubCtx, pubCancel := context.WithCancel(ctx)
+
+	go func() {
+		if err := pubServer.StartWithContext(pubCtx, publicAddr); err != nil {
+			slog.Error("public data server failed", "error", err)
+			into.CtxCancel()
+		}
+	}()
+
+	return pubCancel, nil
 }

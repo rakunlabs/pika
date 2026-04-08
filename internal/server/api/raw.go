@@ -32,9 +32,14 @@ type mountEntry struct {
 	Writable bool
 }
 
-// rawHandler holds the mounted filesystem backends.
+// publicServerInfo holds references to the running public HTTP server.
+type publicServerInfo struct {
+	cancel context.CancelFunc
+}
+
+// RawHandler holds the mounted filesystem backends.
 // Mounts can be updated at runtime (hot-reload from settings).
-type rawHandler struct {
+type RawHandler struct {
 	mu         sync.RWMutex
 	mounts     []mountEntry
 	ftpServer  *ftpserve.Server
@@ -43,14 +48,15 @@ type rawHandler struct {
 	ftpCancel  context.CancelFunc
 	sftpCancel context.CancelFunc
 	tftpCancel context.CancelFunc
+	publicSrv  *publicServerInfo
 	appCtx     context.Context
 	dispatcher *hook.Dispatcher
 }
 
-// NewRawHandler creates a new rawHandler with initial mount entries.
+// NewRawHandler creates a new RawHandler with initial mount entries.
 // If dispatcher is non-nil, all mount FS backends are wrapped with hook event emission.
-func NewRawHandler(entries []mountEntry, appCtx context.Context, dispatcher *hook.Dispatcher) *rawHandler {
-	rh := &rawHandler{appCtx: appCtx, dispatcher: dispatcher}
+func NewRawHandler(entries []mountEntry, appCtx context.Context, dispatcher *hook.Dispatcher) *RawHandler {
+	rh := &RawHandler{appCtx: appCtx, dispatcher: dispatcher}
 	rh.mounts = rh.wrapMounts(entries)
 	return rh
 }
@@ -63,7 +69,7 @@ type MountInfo struct {
 }
 
 // MountsInfo returns info about all current mounts.
-func (h *rawHandler) MountsInfo() []MountInfo {
+func (h *RawHandler) MountsInfo() []MountInfo {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	out := make([]MountInfo, len(h.mounts))
@@ -78,7 +84,7 @@ func (h *rawHandler) MountsInfo() []MountInfo {
 }
 
 // wrapMounts wraps each mount's FS with the hook dispatcher (if set).
-func (h *rawHandler) wrapMounts(entries []mountEntry) []mountEntry {
+func (h *RawHandler) wrapMounts(entries []mountEntry) []mountEntry {
 	if h.dispatcher == nil {
 		return entries
 	}
@@ -95,7 +101,7 @@ func (h *rawHandler) wrapMounts(entries []mountEntry) []mountEntry {
 }
 
 // UpdateMounts replaces the current mounts.
-func (h *rawHandler) UpdateMounts(entries []mountEntry) {
+func (h *RawHandler) UpdateMounts(entries []mountEntry) {
 	wrapped := h.wrapMounts(entries)
 
 	h.mu.Lock()
@@ -108,7 +114,7 @@ func (h *rawHandler) UpdateMounts(entries []mountEntry) {
 }
 
 // resolveMount finds the matching mount for the given request path.
-func (h *rawHandler) resolveMount(path string) (*mountEntry, string, error) {
+func (h *RawHandler) resolveMount(path string) (*mountEntry, string, error) {
 	prefix := path
 	rest := ""
 	if idx := strings.IndexByte(path, '/'); idx >= 0 {
@@ -129,7 +135,7 @@ func (h *rawHandler) resolveMount(path string) (*mountEntry, string, error) {
 }
 
 // serveRaw handles a raw file read request.
-func (h *rawHandler) serveRaw(c *ada.Context) error {
+func (h *RawHandler) serveRaw(c *ada.Context) error {
 	path := c.Request.PathValue("*")
 
 	mount, rest, err := h.resolveMount(path)
@@ -150,7 +156,7 @@ func (h *rawHandler) serveRaw(c *ada.Context) error {
 }
 
 // serveDirectory returns a JSON listing of directory contents.
-func (h *rawHandler) serveDirectory(c *ada.Context, fs rawfs.RawFS, path string) error {
+func (h *RawHandler) serveDirectory(c *ada.Context, fs rawfs.RawFS, path string) error {
 	entries, err := fs.ReadDir(path)
 	if err != nil {
 		return mapFSError(err)
@@ -162,7 +168,7 @@ func (h *rawHandler) serveDirectory(c *ada.Context, fs rawfs.RawFS, path string)
 }
 
 // serveFile serves a single file with Range request support.
-func (h *rawHandler) serveFile(c *ada.Context, fs rawfs.RawFS, path string) error {
+func (h *RawHandler) serveFile(c *ada.Context, fs rawfs.RawFS, path string) error {
 	reader, info, err := fs.Open(path)
 	if err != nil {
 		return mapFSError(err)
@@ -194,7 +200,7 @@ func (h *rawHandler) serveFile(c *ada.Context, fs rawfs.RawFS, path string) erro
 }
 
 // writeFile handles a PUT request to create/overwrite a file.
-func (h *rawHandler) writeFile(c *ada.Context) error {
+func (h *RawHandler) writeFile(c *ada.Context) error {
 	path := c.Request.PathValue("*")
 
 	mount, rest, err := h.resolveMount(path)
@@ -216,7 +222,7 @@ func (h *rawHandler) writeFile(c *ada.Context) error {
 }
 
 // deleteFile handles a DELETE request to remove a file.
-func (h *rawHandler) deleteFile(c *ada.Context) error {
+func (h *RawHandler) deleteFile(c *ada.Context) error {
 	path := c.Request.PathValue("*")
 
 	mount, rest, err := h.resolveMount(path)
@@ -238,7 +244,7 @@ func (h *rawHandler) deleteFile(c *ada.Context) error {
 }
 
 // mkDir handles a POST request to create a directory.
-func (h *rawHandler) mkDir(c *ada.Context) error {
+func (h *RawHandler) mkDir(c *ada.Context) error {
 	path := c.Request.PathValue("*")
 
 	mount, rest, err := h.resolveMount(path)
@@ -266,7 +272,7 @@ type fileOpRequest struct {
 }
 
 // renameFile handles a POST request to rename/move a file within a mount.
-func (h *rawHandler) renameFile(c *ada.Context) error {
+func (h *RawHandler) renameFile(c *ada.Context) error {
 	var req fileOpRequest
 	if err := c.Bind(&req); err != nil {
 		return fmt.Errorf("invalid request: %w", service.ErrBadRequest)
@@ -314,7 +320,7 @@ func (h *rawHandler) renameFile(c *ada.Context) error {
 }
 
 // copyFile handles a POST request to copy a file.
-func (h *rawHandler) copyFile(c *ada.Context) error {
+func (h *RawHandler) copyFile(c *ada.Context) error {
 	var req fileOpRequest
 	if err := c.Bind(&req); err != nil {
 		return fmt.Errorf("invalid request: %w", service.ErrBadRequest)
@@ -355,7 +361,7 @@ func (h *rawHandler) copyFile(c *ada.Context) error {
 }
 
 // moveFile handles a POST request to move a file (copy + delete).
-func (h *rawHandler) moveFile(c *ada.Context) error {
+func (h *RawHandler) moveFile(c *ada.Context) error {
 	return h.renameFile(c) // move is the same as rename
 }
 
@@ -431,7 +437,7 @@ func (a *api) deleteRaw(c *ada.Context) error {
 }
 
 // Dispatcher returns the hook dispatcher (may be nil if no mounts are configured).
-func (h *rawHandler) Dispatcher() *hook.Dispatcher {
+func (h *RawHandler) Dispatcher() *hook.Dispatcher {
 	if h == nil {
 		return nil
 	}

@@ -287,6 +287,22 @@ export interface Hook {
   targets: HookTarget[];
 }
 
+// Public server settings stored in DB
+export interface PublicPortSettings {
+  enabled: boolean;
+  port?: string;     // e.g. "9090"
+}
+
+// Compat endpoint settings stored in DB
+export interface CompatSettings {
+  consul_kv?: ConsulKVSettings;
+}
+
+// Consul KV compatibility layer settings
+export interface ConsulKVSettings {
+  base_path?: string; // default: "/consul"
+}
+
 // Settings from API
 export interface Settings {
   external?: Record<string, ExternalResource>;
@@ -297,6 +313,8 @@ export interface Settings {
   sftp_serve?: SFTPServeSettings;
   tftp_serve?: TFTPServeSettings;
   hooks?: Hook[];
+  public_port?: PublicPortSettings;
+  compat?: CompatSettings;
 }
 
 // API response types

@@ -7,10 +7,6 @@ data:
     log_level: info
     server:
       port: "8080"
-      public_port: "9090"
-      compat:
-        consul_kv:
-          base_path: /consul
       auth:
         session_ttl: 24h
         cookie:

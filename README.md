@@ -67,13 +67,9 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/data/myapp/config?f
 
 ### Public Port
 
-By default, `/data/*` requires a Bearer token. If you want to serve configs without authentication (e.g., inside a private network), configure a public port:
+By default, `/data/*` requires a Bearer token. If you want to serve configs without authentication (e.g., inside a private network), enable the public server via the **Settings > Public Server** page in the UI.
 
-```yaml
-server:
-  port: "8080"         # Admin UI + authenticated /data/*
-  public_port: "9090"  # Unauthenticated /data/* and /healthz only
-```
+The public port starts a second HTTP server that only exposes `/data/*`, `/raw/*`, and `/healthz` — no admin API, no UI. You can also enable Consul KV compatibility endpoints on it.
 
 ```sh
 # No token needed on the public port
@@ -82,8 +78,6 @@ curl http://localhost:9090/data/myapp/config
 # With variant and format
 curl "http://localhost:9090/data/myapp/config?variant=prod&format=json"
 ```
-
-The public port only exposes `/data/*` and `/healthz` — no admin API, no UI.
 
 ## Versions
 
@@ -231,78 +225,14 @@ Pika can serve files directly from local filesystem directories over HTTP. This 
 
 ### Configuration
 
-Raw mounts support three backend types: **local** (filesystem), **S3** (compatible), and **FTP/FTPS**. Mounts can be configured via config file, environment variables, or the Settings UI.
+Raw mounts support three backend types: **local** (filesystem), **S3** (compatible), and **FTP/FTPS**. Mounts are configured via the **Settings > Raw Mounts** page in the UI.
 
-#### Local Directory
+Supported backend types:
 
-```yaml
-server:
-  raw:
-    - prefix: configs
-      type: local        # default, can be omitted
-      path: /opt/configs
-```
-
-#### S3-Compatible Storage
-
-```yaml
-server:
-  raw:
-    - prefix: assets
-      type: s3
-      s3:
-        bucket: my-assets
-        region: us-east-1
-        endpoint: ""              # leave empty for AWS S3
-        access_key: AKIA...
-        secret_key: wJal...
-        prefix: ""                # optional key prefix within bucket
-        path_style: false         # set true for MinIO
-        secure: true              # use HTTPS
-```
-
-Works with AWS S3, MinIO, Cloudflare R2, DigitalOcean Spaces, and any S3-compatible storage.
-
-#### FTP/FTPS
-
-```yaml
-server:
-  raw:
-    - prefix: legacy
-      type: ftp
-      ftp:
-        host: ftp.example.com:21
-        username: admin
-        password: secret
-        tls: false                # set true for FTPS
-        base_path: /data          # remote directory root
-```
-
-#### FUSE Mounts
-
-FUSE mounts (e.g., `s3fs`, `rclone mount`, `sshfs`, `gcsfuse`) appear as normal directories on the host. Use `type: local` with the FUSE mount path:
-
-```yaml
-server:
-  raw:
-    - prefix: remote-bucket
-      type: local
-      path: /mnt/s3-fuse          # FUSE mount point
-```
-
-#### Environment Variables
-
-```sh
-PIKA_SERVER_RAW_0_PREFIX=configs
-PIKA_SERVER_RAW_0_TYPE=local
-PIKA_SERVER_RAW_0_PATH=/opt/configs
-PIKA_SERVER_RAW_1_PREFIX=assets
-PIKA_SERVER_RAW_1_TYPE=s3
-PIKA_SERVER_RAW_1_S3_BUCKET=my-assets
-PIKA_SERVER_RAW_1_S3_REGION=us-east-1
-PIKA_SERVER_RAW_1_S3_ACCESS_KEY=AKIA...
-PIKA_SERVER_RAW_1_S3_SECRET_KEY=wJal...
-```
+- **Local**: Mount a filesystem directory (also works with FUSE mounts like `s3fs`, `rclone mount`, `sshfs`, `gcsfuse`)
+- **S3**: AWS S3, MinIO, Cloudflare R2, DigitalOcean Spaces, or any S3-compatible storage
+- **FTP/FTPS**: Connect to a remote FTP/FTPS server
+- **SFTP**: Connect to a remote SFTP (SSH) server
 
 ### API
 
@@ -456,7 +386,6 @@ patches:
         value: |
           server:
             port: "8080"
-            public_port: "9090"
             auth:
               session_ttl: 24h
               cookie:

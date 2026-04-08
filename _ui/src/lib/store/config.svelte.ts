@@ -716,6 +716,28 @@ function createConfigStore() {
     }
   }
 
+  async function savePublicServerSettings(patch: {
+    public_port?: import('@/lib/types/config').PublicPortSettings,
+    compat?: import('@/lib/types/config').CompatSettings,
+  }): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', {
+        action: 'set',
+        ...patch
+      });
+      if (settings) {
+        settings = { ...settings, ...patch };
+      } else {
+        settings = { ...patch };
+      }
+      addToast('Public server settings saved.', 'success');
+    } catch (error: any) {
+      const msg = error.response?.data?.message || 'Failed to save public server settings';
+      addToast(msg, 'alert');
+      throw error;
+    }
+  }
+
   async function saveHooks(hooks: import('@/lib/types/config').Hook[]): Promise<void> {
     try {
       await axios.post('/api/v1/settings', {
@@ -1104,6 +1126,7 @@ function createConfigStore() {
     saveFTPShares,
     saveFTPUsers,
     saveServeSettings,
+    savePublicServerSettings,
     saveHooks,
     listExternalPaths,
 
