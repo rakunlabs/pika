@@ -118,6 +118,7 @@ func (s *Sqlite) Close() error {
 func (s *Sqlite) Users() service.UserStorage               { return &userStorage{q: s.q} }
 func (s *Sqlite) Tokens() service.TokenStorage             { return &tokenStorage{q: s.q} }
 func (s *Sqlite) Sessions() service.SessionStorage         { return &sessionStorage{q: s.q} }
+func (s *Sqlite) Permissions() service.PermissionStorage   { return &permissionStorage{q: s.q} }
 func (s *Sqlite) Folders() service.FolderStorage           { return &folderStorage{q: s.q} }
 func (s *Sqlite) Files() service.FileStorage               { return &fileStorage{q: s.q} }
 func (s *Sqlite) FileVersions() service.FileVersionStorage { return &fileVersionStorage{q: s.q} }

@@ -18,6 +18,7 @@ type User struct {
 	Username     string    `json:"username"`
 	PasswordHash string    `json:"password_hash"`
 	Disabled     bool      `json:"disabled"`
+	IsSuperadmin bool      `json:"is_superadmin"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -27,6 +28,7 @@ type UserInfo struct {
 	ID             string    `json:"id"`
 	Username       string    `json:"username"`
 	Disabled       bool      `json:"disabled"`
+	IsSuperadmin   bool      `json:"is_superadmin"`
 	ActiveSessions int64     `json:"active_sessions"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
@@ -47,11 +49,12 @@ type UpdateUserRequest struct {
 
 func (u *User) toInfo() UserInfo {
 	return UserInfo{
-		ID:        u.ID,
-		Username:  u.Username,
-		Disabled:  u.Disabled,
-		CreatedAt: u.CreatedAt,
-		UpdatedAt: u.UpdatedAt,
+		ID:           u.ID,
+		Username:     u.Username,
+		Disabled:     u.Disabled,
+		IsSuperadmin: u.IsSuperadmin,
+		CreatedAt:    u.CreatedAt,
+		UpdatedAt:    u.UpdatedAt,
 	}
 }
 
@@ -66,6 +69,15 @@ func generateUserID() (string, error) {
 
 // CreateUser creates a new user with a hashed password.
 func (s *Service) CreateUser(ctx context.Context, req *CreateUserRequest) (*UserInfo, error) {
+	return s.createUser(ctx, req, false)
+}
+
+// CreateSetupUser creates the first admin user with superadmin privileges.
+func (s *Service) CreateSetupUser(ctx context.Context, req *CreateUserRequest) (*UserInfo, error) {
+	return s.createUser(ctx, req, true)
+}
+
+func (s *Service) createUser(ctx context.Context, req *CreateUserRequest, superadmin bool) (*UserInfo, error) {
 	if req.Username == "" {
 		return nil, fmt.Errorf("username is required: %w", ErrBadRequest)
 	}
@@ -89,6 +101,7 @@ func (s *Service) CreateUser(ctx context.Context, req *CreateUserRequest) (*User
 		Username:     req.Username,
 		PasswordHash: string(hash),
 		Disabled:     false,
+		IsSuperadmin: superadmin,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -219,4 +232,38 @@ func (s *Service) DeleteUser(ctx context.Context, id string) error {
 // UserCount returns the number of users in the system.
 func (s *Service) UserCount(ctx context.Context) (int64, error) {
 	return s.store.Users().Count(ctx)
+}
+
+// EnsureSuperadmin checks if at least one superadmin exists.
+// If none do (e.g. after a migration from an older version), the earliest
+// created user is promoted. This prevents lockout on upgrade.
+func (s *Service) EnsureSuperadmin(ctx context.Context) error {
+	users, _, err := s.store.Users().List(ctx, nil)
+	if err != nil {
+		return err
+	}
+
+	if len(users) == 0 {
+		return nil // no users yet, setup will handle it
+	}
+
+	// Check if any superadmin exists
+	for _, u := range users {
+		if u.IsSuperadmin {
+			return nil // at least one exists
+		}
+	}
+
+	// Promote the earliest user
+	earliest := users[0]
+	for _, u := range users[1:] {
+		if u.CreatedAt.Before(earliest.CreatedAt) {
+			earliest = u
+		}
+	}
+
+	earliest.IsSuperadmin = true
+	earliest.UpdatedAt = time.Now()
+
+	return s.store.Users().Update(ctx, &earliest)
 }

@@ -194,8 +194,8 @@ func (a *api) setup(c *ada.Context) error {
 		return errors.Join(fmt.Errorf("username and password are required"), service.ErrBadRequest)
 	}
 
-	// Create the first user
-	userInfo, err := a.svc.CreateUser(c.Request.Context(), &service.CreateUserRequest{
+	// Create the first user as superadmin
+	userInfo, err := a.svc.CreateSetupUser(c.Request.Context(), &service.CreateUserRequest{
 		Username: req.Username,
 		Password: req.Password,
 	})

@@ -40,6 +40,10 @@ func (s *Storage) Sessions() service.SessionStorage {
 	return s.backend.Sessions()
 }
 
+func (s *Storage) Permissions() service.PermissionStorage {
+	return s.backend.Permissions()
+}
+
 func (s *Storage) Folders() service.FolderStorage {
 	return s.backend.Folders()
 }

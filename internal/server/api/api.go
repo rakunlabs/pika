@@ -105,71 +105,81 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 		mAuth.GET("/api/v1/auth/setup", mAuth.Wrap(api.getSetupStatus))
 		mAuth.POST("/api/v1/auth/setup", mAuth.Wrap(api.setup))
 
-		// User management endpoints — protected by session middleware
-		m.GET("/api/v1/users", m.Wrap(api.listUsers))
-		m.POST("/api/v1/users", m.Wrap(api.createUser))
-		m.GET("/api/v1/users/*", m.Wrap(api.getUser))
-		m.PATCH("/api/v1/users/*", m.Wrap(api.updateUser))
-		m.DELETE("/api/v1/users/*", m.Wrap(api.deleteUser))
-		m.POST("/api/v1/users-kick/*", m.Wrap(api.kickUser))
+		// User management endpoints — protected by session middleware + permission
+		m.GET("/api/v1/users", m.Wrap(api.withPerm("users.manage", api.listUsers)))
+		m.POST("/api/v1/users", m.Wrap(api.withPerm("users.manage", api.createUser)))
+		m.GET("/api/v1/users/*", m.Wrap(api.withPerm("users.manage", api.getUser)))
+		m.PATCH("/api/v1/users/*", m.Wrap(api.withPerm("users.manage", api.updateUser)))
+		m.DELETE("/api/v1/users/*", m.Wrap(api.withPerm("users.manage", api.deleteUser)))
+		m.POST("/api/v1/users-kick/*", m.Wrap(api.withPerm("users.manage", api.kickUser)))
+
+		// Permission management endpoints
+		m.GET("/api/v1/permissions", m.Wrap(api.withPerm("permissions.manage", api.listPermissions)))
+		m.POST("/api/v1/permissions", m.Wrap(api.withPerm("permissions.manage", api.createPermission)))
+		m.PATCH("/api/v1/permissions/*", m.Wrap(api.withPerm("permissions.manage", api.updatePermission)))
+		m.DELETE("/api/v1/permissions/*", m.Wrap(api.withPerm("permissions.manage", api.deletePermission)))
+
+		// User permission assignment endpoints
+		m.GET("/api/v1/user-permissions/*", m.Wrap(api.withPerm("permissions.manage", api.getUserPermissions)))
+		m.PUT("/api/v1/user-permissions/*", m.Wrap(api.withPerm("permissions.manage", api.setUserPermissions)))
 	}
 
-	m.GET("/api/v1/folder", m.Wrap(api.getFolder))
-	m.GET("/api/v1/folder/*", m.Wrap(api.getFolder))
-	m.POST("/api/v1/folder/*", m.Wrap(api.postFolder))
-	m.DELETE("/api/v1/folder/*", m.Wrap(api.deleteFolder))
+	m.GET("/api/v1/folder", m.Wrap(api.withPerm("files.read", api.getFolder)))
+	m.GET("/api/v1/folder/*", m.Wrap(api.withPerm("files.read", api.getFolder)))
+	m.POST("/api/v1/folder/*", m.Wrap(api.withPerm("files.write", api.postFolder)))
+	m.DELETE("/api/v1/folder/*", m.Wrap(api.withPerm("files.write", api.deleteFolder)))
 
-	m.GET("/api/v1/file/*", m.Wrap(api.getFile))
-	m.POST("/api/v1/file/*", m.Wrap(api.postFile))
-	m.DELETE("/api/v1/file/*", m.Wrap(api.deleteFile))
+	m.GET("/api/v1/file/*", m.Wrap(api.withPerm("files.read", api.getFile)))
+	m.POST("/api/v1/file/*", m.Wrap(api.withPerm("files.write", api.postFile)))
+	m.DELETE("/api/v1/file/*", m.Wrap(api.withPerm("files.write", api.deleteFile)))
 
 	// File versions endpoint
-	m.GET("/api/v1/versions/*", m.Wrap(api.getFileVersions))
-	m.PATCH("/api/v1/versions/*", m.Wrap(api.patchFileVersion))
+	m.GET("/api/v1/versions/*", m.Wrap(api.withPerm("files.read", api.getFileVersions)))
+	m.PATCH("/api/v1/versions/*", m.Wrap(api.withPerm("files.write", api.patchFileVersion)))
 
 	// Variant endpoints
-	m.GET("/api/v1/variants/*", m.Wrap(api.listVariants))
+	m.GET("/api/v1/variants/*", m.Wrap(api.withPerm("files.read", api.listVariants)))
 
 	// Render endpoint — resolves inheritance and variations for preview
-	m.POST("/api/v1/render/*", m.Wrap(api.renderFile))
+	m.POST("/api/v1/render/*", m.Wrap(api.withPerm("files.read", api.renderFile)))
 
 	// Token management endpoints
-	m.GET("/api/v1/tokens", m.Wrap(api.listTokens))
-	m.POST("/api/v1/tokens", m.Wrap(api.createToken))
-	m.DELETE("/api/v1/tokens/*", m.Wrap(api.deleteToken))
-	m.PATCH("/api/v1/tokens/*", m.Wrap(api.patchToken))
+	m.GET("/api/v1/tokens", m.Wrap(api.withPerm("tokens.manage", api.listTokens)))
+	m.POST("/api/v1/tokens", m.Wrap(api.withPerm("tokens.manage", api.createToken)))
+	m.DELETE("/api/v1/tokens/*", m.Wrap(api.withPerm("tokens.manage", api.deleteToken)))
+	m.PATCH("/api/v1/tokens/*", m.Wrap(api.withPerm("tokens.manage", api.patchToken)))
 
 	// Format conversion endpoint
-	m.POST("/api/v1/convert", m.Wrap(api.convertFormat))
+	m.POST("/api/v1/convert", m.Wrap(api.withPerm("files.read", api.convertFormat)))
 
-	// Search endpoint (SSE streaming)
+	// Search endpoint (SSE streaming) — not wrapped with withPerm (standard handler, not ada handler)
 	m.GET("/api/v1/search", api.searchHandler)
 
 	// Key rotation endpoint (requires admin_secret)
-	m.POST("/api/v1/rotate", m.Wrap(api.rotateKey))
-	m.POST("/api/v1/tls-generate", m.Wrap(api.generateTLS))
-	m.POST("/api/v1/ssh-keygen", m.Wrap(api.generateSSHKey))
+	m.POST("/api/v1/rotate", m.Wrap(api.withPerm("settings.manage", api.rotateKey)))
+	m.POST("/api/v1/tls-generate", m.Wrap(api.withPerm("settings.manage", api.generateTLS)))
+	m.POST("/api/v1/ssh-keygen", m.Wrap(api.withPerm("settings.manage", api.generateSSHKey)))
 
 	// Admin secret management endpoints
-	m.GET("/api/v1/admin-secret/status", m.Wrap(api.adminSecretStatus))
-	m.PUT("/api/v1/admin-secret", m.Wrap(api.setAdminSecret))
+	m.GET("/api/v1/admin-secret/status", m.Wrap(api.withPerm("settings.manage", api.adminSecretStatus)))
+	m.PUT("/api/v1/admin-secret", m.Wrap(api.withPerm("settings.manage", api.setAdminSecret)))
 
 	// Settings
-	m.GET("/api/v1/settings", m.Wrap(api.getSettings))
-	m.POST("/api/v1/settings", m.Wrap(api.postSettings))
+	m.GET("/api/v1/settings", m.Wrap(api.withPerm("settings.manage", api.getSettings)))
+	m.POST("/api/v1/settings", m.Wrap(api.withPerm("settings.manage", api.postSettings)))
 
 	// Backup & Restore (requires admin secret)
-	m.GET("/api/v1/backup", m.Wrap(api.exportBackup))
-	m.POST("/api/v1/backup", m.Wrap(api.importBackup))
+	m.GET("/api/v1/backup", m.Wrap(api.withPerm("settings.manage", api.exportBackup)))
+	m.POST("/api/v1/backup", m.Wrap(api.withPerm("settings.manage", api.importBackup)))
 
 	// Raw filesystem browsing and management (for UI, uses session auth)
-	m.GET("/api/v1/raw/*", m.Wrap(api.rawHandler.serveRaw))
-	m.PUT("/api/v1/raw/*", m.Wrap(api.rawHandler.writeFile))
-	m.DELETE("/api/v1/raw/*", m.Wrap(api.rawHandler.deleteFile))
-	m.POST("/api/v1/raw-mkdir/*", m.Wrap(api.rawHandler.mkDir))
-	m.POST("/api/v1/raw-rename", m.Wrap(api.rawHandler.renameFile))
-	m.POST("/api/v1/raw-copy", m.Wrap(api.rawHandler.copyFile))
-	m.POST("/api/v1/raw-move", m.Wrap(api.rawHandler.moveFile))
+	m.GET("/api/v1/raw/*", m.Wrap(api.withPerm("raw.read", api.rawHandler.serveRaw)))
+	m.PUT("/api/v1/raw/*", m.Wrap(api.withPerm("raw.write", api.rawHandler.writeFile)))
+	m.DELETE("/api/v1/raw/*", m.Wrap(api.withPerm("raw.write", api.rawHandler.deleteFile)))
+	m.POST("/api/v1/raw-mkdir/*", m.Wrap(api.withPerm("raw.write", api.rawHandler.mkDir)))
+	m.POST("/api/v1/raw-rename", m.Wrap(api.withPerm("raw.write", api.rawHandler.renameFile)))
+	m.POST("/api/v1/raw-copy", m.Wrap(api.withPerm("raw.write", api.rawHandler.copyFile)))
+	m.POST("/api/v1/raw-move", m.Wrap(api.withPerm("raw.write", api.rawHandler.moveFile)))
 
 	// External resource browsing
 	m.GET("/api/v1/external/*/paths", m.Wrap(api.listExternalPaths))
@@ -204,18 +214,51 @@ func (a *api) healthzHandler(c *ada.Context) error {
 }
 
 func (a *api) infoHandler(c *ada.Context) error {
-	user := service.UserFromContext(c.Request.Context())
+	username := service.UserFromContext(c.Request.Context())
 
 	resp := struct {
 		Info
-		User        string      `json:"user,omitempty"`
-		AuthEnabled bool        `json:"auth_enabled"`
-		RawMounts   []MountInfo `json:"raw_mounts,omitempty"`
+		User         string      `json:"user,omitempty"`
+		AuthEnabled  bool        `json:"auth_enabled"`
+		IsSuperadmin bool        `json:"is_superadmin"`
+		Permissions  []string    `json:"permissions"`
+		RawMounts    []MountInfo `json:"raw_mounts,omitempty"`
 	}{
 		Info:        a.info,
-		User:        user,
+		User:        username,
 		AuthEnabled: a.sessionStore != nil,
+		Permissions: []string{},
 		RawMounts:   a.rawHandler.MountsInfo(),
+	}
+
+	// Populate permissions if auth is enabled and user is authenticated
+	if a.sessionStore != nil && username != "" && username != "system" {
+		keys, isSuperadmin, err := a.svc.GetUserPermissionKeysByUsername(c.Request.Context(), username)
+		if err == nil {
+			resp.IsSuperadmin = isSuperadmin
+			if isSuperadmin {
+				// Superadmins get all unique capability keys from all permissions
+				allPerms, err := a.svc.ListPermissions(c.Request.Context())
+				if err == nil {
+					seen := make(map[string]struct{})
+					var allKeys []string
+					for _, p := range allPerms {
+						for _, k := range p.Keys {
+							if _, ok := seen[k]; !ok {
+								seen[k] = struct{}{}
+								allKeys = append(allKeys, k)
+							}
+						}
+					}
+					if allKeys == nil {
+						allKeys = []string{}
+					}
+					resp.Permissions = allKeys
+				}
+			} else {
+				resp.Permissions = keys
+			}
+		}
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(resp)

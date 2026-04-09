@@ -74,6 +74,11 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 
 		sessionStore = session.NewStore(svc.SessionStorage(), cfg.Server.Auth.SessionTTL, cookieOpts)
 		m.Use(sessionStore.Middleware)
+
+		// Ensure at least one superadmin exists (handles upgrade from older versions)
+		if err := svc.EnsureSuperadmin(ctx); err != nil {
+			slog.Warn("failed to ensure superadmin", "error", err)
+		}
 	} else {
 		slog.Info("no auth configured — admin API is unprotected")
 	}

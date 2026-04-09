@@ -137,8 +137,8 @@ func (s *Store) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Inject user into context
-		ctx := service.WithUser(r.Context(), session.Username)
+		// Inject user info into context (both username and user ID)
+		ctx := service.WithUserInfo(r.Context(), session.Username, session.UserID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

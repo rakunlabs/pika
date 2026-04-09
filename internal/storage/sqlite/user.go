@@ -18,9 +18,10 @@ type userStorage struct {
 
 func (s *userStorage) Create(ctx context.Context, user *service.User) error {
 	_, err := s.q.ExecContext(ctx,
-		`INSERT INTO users (id, username, password_hash, disabled, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO users (id, username, password_hash, disabled, is_superadmin, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		user.ID, user.Username, user.PasswordHash, boolToInt(user.Disabled),
+		boolToInt(user.IsSuperadmin),
 		user.CreatedAt.Format(timeFormat), user.UpdatedAt.Format(timeFormat),
 	)
 	if err != nil {
@@ -34,7 +35,7 @@ func (s *userStorage) Create(ctx context.Context, user *service.User) error {
 
 func (s *userStorage) Get(ctx context.Context, id string) (*service.User, error) {
 	row := s.q.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, disabled, created_at, updated_at
+		`SELECT id, username, password_hash, disabled, is_superadmin, created_at, updated_at
 		 FROM users WHERE id = ?`, id,
 	)
 	return scanUser(row)
@@ -42,7 +43,7 @@ func (s *userStorage) Get(ctx context.Context, id string) (*service.User, error)
 
 func (s *userStorage) GetByUsername(ctx context.Context, username string) (*service.User, error) {
 	row := s.q.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, disabled, created_at, updated_at
+		`SELECT id, username, password_hash, disabled, is_superadmin, created_at, updated_at
 		 FROM users WHERE username = ?`, username,
 	)
 	return scanUser(row)
@@ -76,7 +77,7 @@ func (s *userStorage) List(ctx context.Context, q *query.Query) ([]service.User,
 	}
 
 	// Data query
-	ds := dialect.From("users").Select("id", "username", "password_hash", "disabled", "created_at", "updated_at")
+	ds := dialect.From("users").Select("id", "username", "password_hash", "disabled", "is_superadmin", "created_at", "updated_at")
 	if q != nil {
 		ds = adaptergoqu.Select(q, ds)
 	}
@@ -113,8 +114,9 @@ func (s *userStorage) List(ctx context.Context, q *query.Query) ([]service.User,
 
 func (s *userStorage) Update(ctx context.Context, user *service.User) error {
 	_, err := s.q.ExecContext(ctx,
-		`UPDATE users SET username=?, password_hash=?, disabled=?, updated_at=? WHERE id=?`,
+		`UPDATE users SET username=?, password_hash=?, disabled=?, is_superadmin=?, updated_at=? WHERE id=?`,
 		user.Username, user.PasswordHash, boolToInt(user.Disabled),
+		boolToInt(user.IsSuperadmin),
 		user.UpdatedAt.Format(timeFormat), user.ID,
 	)
 	if err != nil {
@@ -140,9 +142,9 @@ func (s *userStorage) Count(ctx context.Context) (int64, error) {
 // scanUser scans a single user row.
 func scanUser(row *sql.Row) (*service.User, error) {
 	var u service.User
-	var disabled int
+	var disabled, isSuperadmin int
 	var createdAt, updatedAt string
-	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &disabled, &createdAt, &updatedAt)
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &disabled, &isSuperadmin, &createdAt, &updatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, service.ErrNotFound
@@ -150,6 +152,7 @@ func scanUser(row *sql.Row) (*service.User, error) {
 		return nil, err
 	}
 	u.Disabled = disabled != 0
+	u.IsSuperadmin = isSuperadmin != 0
 	u.CreatedAt = parseTime(createdAt)
 	u.UpdatedAt = parseTime(updatedAt)
 	return &u, nil
@@ -157,13 +160,14 @@ func scanUser(row *sql.Row) (*service.User, error) {
 
 func scanUserRows(rows *sql.Rows) (*service.User, error) {
 	var u service.User
-	var disabled int
+	var disabled, isSuperadmin int
 	var createdAt, updatedAt string
-	err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &disabled, &createdAt, &updatedAt)
+	err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &disabled, &isSuperadmin, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
 	u.Disabled = disabled != 0
+	u.IsSuperadmin = isSuperadmin != 0
 	u.CreatedAt = parseTime(createdAt)
 	u.UpdatedAt = parseTime(updatedAt)
 	return &u, nil

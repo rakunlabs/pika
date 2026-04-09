@@ -23,6 +23,7 @@ type Storage interface {
 	Users() UserStorage
 	Tokens() TokenStorage
 	Sessions() SessionStorage
+	Permissions() PermissionStorage
 	Folders() FolderStorage
 	Files() FileStorage
 	FileVersions() FileVersionStorage
@@ -61,6 +62,38 @@ type SessionStorage interface {
 	DeleteByUserID(ctx context.Context, userID string) error
 	DeleteExpired(ctx context.Context) error
 	CountByUserID(ctx context.Context, userID string) (int64, error)
+}
+
+// Permission represents a defined permission in the system.
+// A permission bundles one or more capability keys (e.g. "files.read", "files.write")
+// under a single assignable name.
+type Permission struct {
+	ID          string    `json:"id"`
+	Key         string    `json:"key"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Keys        []string  `json:"keys"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// PermissionStorage manages permissions and user-permission assignments.
+type PermissionStorage interface {
+	Create(ctx context.Context, perm *Permission) error
+	Get(ctx context.Context, id string) (*Permission, error)
+	List(ctx context.Context) ([]Permission, error)
+	Update(ctx context.Context, perm *Permission) error
+	Delete(ctx context.Context, id string) error
+	SetPermissionKeys(ctx context.Context, permissionID string, keys []string) error
+	SetUserPermissions(ctx context.Context, userID string, permissionIDs []string) error
+	GetUserPermissions(ctx context.Context, userID string) ([]Permission, error)
+	// GetUserCapabilityKeys returns the deduplicated set of capability keys
+	// granted to a user through all their assigned permissions.
+	GetUserCapabilityKeys(ctx context.Context, userID string) ([]string, error)
+	// HasCapabilityKey checks if any permission in the system grants the given capability key.
+	HasCapabilityKey(ctx context.Context, key string) (bool, error)
+	// UserHasCapability checks if a user has been granted the given capability key
+	// through any of their assigned permissions.
+	UserHasCapability(ctx context.Context, userID string, key string) (bool, error)
 }
 
 // TokenStorage manages access tokens.

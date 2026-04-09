@@ -9,6 +9,8 @@ export interface AppInfo {
   date?: string;
   user?: string;
   auth_enabled?: boolean;
+  is_superadmin?: boolean;
+  permissions?: string[];
   setup_required?: boolean;
   raw_mounts?: RawMount[];
 }
@@ -17,6 +19,7 @@ export interface UserInfo {
   id: string;
   username: string;
   disabled: boolean;
+  is_superadmin: boolean;
   active_sessions: number;
   created_at: string;
   updated_at: string;
@@ -29,12 +32,28 @@ export interface UserQuery {
   search?: string;
 }
 
+export interface PermissionInfo {
+  id: string;
+  key: string;
+  name: string;
+  description: string;
+  keys: string[];
+  created_at: string;
+}
+
 function createAppStore() {
   let info = $state<AppInfo | null>(null);
   let authenticated = $state<boolean | null>(null); // null = unknown, true/false = resolved
   let users = $state<UserInfo[]>([]);
   let usersTotal = $state(0);
   let lastUserQuery = $state<UserQuery>({});
+  let permissions = $state<PermissionInfo[]>([]);
+
+  function hasPermission(key: string): boolean {
+    if (!info?.auth_enabled) return true;
+    if (info?.is_superadmin) return true;
+    return info?.permissions?.includes(key) ?? false;
+  }
 
   async function loadInfo(): Promise<void> {
     try {
@@ -130,6 +149,42 @@ function createAppStore() {
     await loadUsers();
   }
 
+  // Permission CRUD
+  async function loadPermissions(): Promise<void> {
+    try {
+      const response = await axios.get('/api/v1/permissions');
+      permissions = response.data || [];
+    } catch {
+      permissions = [];
+    }
+  }
+
+  async function createPermission(key: string, name: string, description: string, keys: string[]): Promise<PermissionInfo> {
+    const response = await axios.post('/api/v1/permissions', { key, name, description, keys });
+    await loadPermissions();
+    return response.data;
+  }
+
+  async function updatePermission(id: string, data: { key?: string; name?: string; description?: string; keys?: string[] }): Promise<void> {
+    await axios.patch(`/api/v1/permissions/${id}`, data);
+    await loadPermissions();
+  }
+
+  async function deletePermission(id: string): Promise<void> {
+    await axios.delete(`/api/v1/permissions/${id}`);
+    await loadPermissions();
+  }
+
+  // User permission assignment
+  async function getUserPermissions(userId: string): Promise<PermissionInfo[]> {
+    const response = await axios.get(`/api/v1/user-permissions/${userId}`);
+    return response.data || [];
+  }
+
+  async function setUserPermissions(userId: string, permissionIds: string[]): Promise<void> {
+    await axios.put(`/api/v1/user-permissions/${userId}`, { permission_ids: permissionIds });
+  }
+
   // Set up axios interceptor for 401 responses
   axios.interceptors.response.use(
     (response) => response,
@@ -150,6 +205,8 @@ function createAppStore() {
     get authenticated() { return authenticated; },
     get users() { return users; },
     get usersTotal() { return usersTotal; },
+    get permissions() { return permissions; },
+    hasPermission,
     loadInfo,
     setup,
     login,
@@ -159,6 +216,12 @@ function createAppStore() {
     updateUser,
     deleteUser,
     kickUser,
+    loadPermissions,
+    createPermission,
+    updatePermission,
+    deletePermission,
+    getUserPermissions,
+    setUserPermissions,
   };
 }
 

@@ -11,15 +11,19 @@
   const navItems = $derived.by(() => {
     const items: { path: string; label: string; icon: typeof Settings }[] = [];
 
-    items.push({ path: '/configurations', label: 'Configurations', icon: FileSliders });
+    if (appStore.hasPermission('files.read')) {
+      items.push({ path: '/configurations', label: 'Configurations', icon: FileSliders });
+    }
 
-    if (hasRawMounts) {
+    if (hasRawMounts && appStore.hasPermission('raw.read')) {
       items.push({ path: '/files', label: 'Files', icon: HardDrive });
     }
 
-    items.push({ path: '/settings', label: 'Settings', icon: Settings });
+    if (appStore.hasPermission('settings.manage')) {
+      items.push({ path: '/settings', label: 'Settings', icon: Settings });
+    }
 
-    if (authEnabled) {
+    if (authEnabled && appStore.hasPermission('users.manage')) {
       items.push({ path: '/users', label: 'Users', icon: Users });
     }
 
@@ -71,6 +75,9 @@
         <span class="flex items-center gap-1 px-1.5 py-0.5 bg-slate-800 rounded text-slate-300">
           <User size={11} />
           {info.user}
+          {#if info.is_superadmin}
+            <span class="text-amber-400 text-[9px] font-bold ml-0.5">SA</span>
+          {/if}
         </span>
       {/if}
       {#if authEnabled}
