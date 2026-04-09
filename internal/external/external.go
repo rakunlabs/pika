@@ -6,6 +6,17 @@ type External struct {
 	Http       *ok.Config  `json:"http,omitempty"`
 	Vault      *Vault      `json:"vault,omitempty"`
 	Kubernetes *Kubernetes `json:"kubernetes,omitempty"`
+	Consul     *Consul     `json:"consul,omitempty"`
+	Etcd       *Etcd       `json:"etcd,omitempty"`
+	AWS        *AWS        `json:"aws,omitempty"`
+	GCP        *GCP        `json:"gcp,omitempty"`
+	Azure      *Azure      `json:"azure,omitempty"`
+}
+
+// GCP configures a GCP Secret Manager external resource.
+type GCP struct {
+	// ServiceAccountJSON is the full JSON content of a service account key file.
+	ServiceAccountJSON string `json:"service_account_json"`
 }
 
 // Kubernetes configures a Kubernetes API external resource.

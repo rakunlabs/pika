@@ -112,6 +112,40 @@ export interface KubernetesConfig {
   kubeconfig?: string;  // path to kubeconfig file (empty = in-cluster)
 }
 
+// Consul external resource configuration
+export interface ConsulConfig {
+  address: string;
+  token?: string;
+}
+
+// etcd external resource configuration
+export interface EtcdConfig {
+  address: string;
+  username?: string;
+  password?: string;
+}
+
+// AWS external resource configuration (Secrets Manager or SSM)
+export interface AWSConfig {
+  region: string;
+  access_key: string;
+  secret_key: string;
+  service: string;  // "secretsmanager" or "ssm"
+}
+
+// GCP Secret Manager external resource configuration
+export interface GCPConfig {
+  service_account_json: string;
+}
+
+// Azure Key Vault external resource configuration
+export interface AzureConfig {
+  vault_url: string;
+  tenant_id: string;
+  client_id: string;
+  client_secret: string;
+}
+
 // External resource for inheritance
 export interface ExternalResource {
   http?: {
@@ -119,6 +153,11 @@ export interface ExternalResource {
   };
   vault?: VaultConfig;
   kubernetes?: KubernetesConfig;
+  consul?: ConsulConfig;
+  etcd?: EtcdConfig;
+  aws?: AWSConfig;
+  gcp?: GCPConfig;
+  azure?: AzureConfig;
 }
 
 // S3 configuration for raw mounts
@@ -159,15 +198,23 @@ export interface WebDAVConfigEntry {
   base_path?: string;
 }
 
+// Vercel Blob configuration for raw mounts
+export interface VercelBlobConfigEntry {
+  token: string;
+  store_id?: string;
+  prefix?: string;
+}
+
 // Raw mount entry stored in settings
 export interface RawMountEntry {
   prefix: string;
-  type?: string;              // "local" (default), "s3", "ftp", "sftp", "webdav"
+  type?: string;              // "local" (default), "s3", "ftp", "sftp", "webdav", "vercel-blob"
   path?: string;              // for type=local
   s3?: S3ConfigEntry;         // for type=s3
   ftp?: FTPConfigEntry;       // for type=ftp
   sftp?: SFTPConfigEntry;     // for type=sftp
   webdav?: WebDAVConfigEntry; // for type=webdav
+  vercelBlob?: VercelBlobConfigEntry; // for type=vercel-blob
 }
 
 // FTP user entry stored in settings
@@ -283,10 +330,39 @@ export interface KafkaTarget {
 }
 
 // A single push destination for hook events
+// Redis TLS configuration
+export interface RedisTLS {
+  enabled?: boolean;
+  cert_file?: string;
+  key_file?: string;
+  ca_file?: string;
+}
+
+// Redis Pub/Sub target for hooks (standalone or cluster)
+export interface RedisTarget {
+  address?: string;       // single address for standalone mode
+  addresses?: string[];   // multiple addresses for cluster mode
+  password?: string;
+  db?: number;            // only used in standalone mode
+  channel: string;
+  tls?: RedisTLS;
+}
+
+// NATS target for hooks
+export interface NATSTarget {
+  url: string;
+  subject: string;
+  token?: string;
+  username?: string;
+  password?: string;
+}
+
 export interface HookTarget {
-  type: string;            // "http" or "kafka"
+  type: string;            // "http", "kafka", "redis", or "nats"
   http?: HTTPTarget;
   kafka?: KafkaTarget;
+  redis?: RedisTarget;
+  nats?: NATSTarget;
   body_template?: string;  // Go text/template for custom payload
 }
 

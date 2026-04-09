@@ -19,11 +19,14 @@ Open `http://localhost:8080` to access the web UI.
 - Multi-format configs (JSON, YAML, TOML)
 - Version history with semver constraints
 - Variants for environment-specific overrides
-- Config inheritance (internal files, Vault, HTTP)
+- Config inheritance (internal files, Vault, HTTP, Kubernetes, Consul, etcd, AWS, GCP, Azure)
 - Token-based access control with glob scopes
 - Full-text search across all configs
 - Built-in encryption (ChaCha20) with key rotation
 - Real-time preview of resolved configs
+- Event hooks (HTTP webhooks, Kafka, Redis Pub/Sub, NATS)
+- Raw file serving (local, S3, FTP, SFTP, WebDAV, Vercel Blob)
+- Inline editor with syntax validation (JSON, YAML, TOML)
 
 ## Consuming Configs
 
@@ -156,76 +159,13 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/data/myapp/config?
 curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/data/myapp/config?variant=prod&version=0.3.0"
 ```
 
-## Inheritance
-
-Configs can inherit from other sources. Inherited values act as defaults — the current config's values always take precedence.
-
-### Internal Inheritance
-
-Inherit from another pika config:
-
-```yaml
-# In the file's metadata (inherits):
-- source: shared/defaults
-```
-
-### External Inheritance
-
-Inherit from Vault, HTTP, or Kubernetes sources (configure in Settings):
-
-```yaml
-- resource: my-vault
-  path: myapp/secrets
-
-- resource: my-api
-  path: /config/defaults
-
-- resource: my-k8s
-  path: production/secret/db-credentials
-
-- resource: my-k8s
-  path: default/configmap/app-config
-```
-
-### Kubernetes Secrets & ConfigMaps
-
-Pika can inherit from Kubernetes Secrets and ConfigMaps. Configure a Kubernetes external resource in Settings with an optional kubeconfig path (leave empty for in-cluster auth).
-
-Path format: `namespace/type/name`
-
-| Path                              | Reads                                            |
-| --------------------------------- | ------------------------------------------------ |
-| `default/secret/db-creds`         | Secret "db-creds" in namespace "default"         |
-| `production/configmap/app-config` | ConfigMap "app-config" in namespace "production" |
-
-Secret values are automatically base64-decoded. ConfigMap values are returned as-is.
-
-Example — inject database credentials from a Kubernetes Secret:
-
-```yaml
-- resource: k8s-prod
-  path: production/secret/db-credentials
-  paths: ["username", "password"]
-  inject: database.auth
-```
-
-### Selective Inheritance
-
-Pull only specific fields and inject them at a target path:
-
-```yaml
-- source: shared/database
-  paths: ["host", "port"]      # Only these fields
-  inject: database.connection   # Place under this key
-```
-
 ## Raw Filesystem Serving
 
 Pika can serve files directly from local filesystem directories over HTTP. This is useful for serving static assets, certificates, or any files that don't need versioning or the config management features.
 
 ### Configuration
 
-Raw mounts support three backend types: **local** (filesystem), **S3** (compatible), and **FTP/FTPS**. Mounts are configured via the **Settings > Raw Mounts** page in the UI.
+Raw mounts support multiple backend types. Mounts are configured via the **Settings > Raw Mounts** page in the UI.
 
 Supported backend types:
 
@@ -233,6 +173,8 @@ Supported backend types:
 - **S3**: AWS S3, MinIO, Cloudflare R2, DigitalOcean Spaces, or any S3-compatible storage
 - **FTP/FTPS**: Connect to a remote FTP/FTPS server
 - **SFTP**: Connect to a remote SFTP (SSH) server
+- **WebDAV**: Connect to a WebDAV server
+- **Vercel Blob**: Serve files from Vercel Blob storage
 
 ### API
 
@@ -292,32 +234,66 @@ When raw mounts are configured, a **Files** link appears in the navigation bar. 
 
 ### Settings UI
 
-Raw mounts can also be managed from **Settings > Raw Mounts** in the web UI. The form supports all three backend types with conditional fields:
+Raw mounts can also be managed from **Settings > Raw Mounts** in the web UI. The form supports all backend types with conditional fields. Changes take effect immediately — no server restart required.
 
-- **Local**: directory path input
-- **S3**: bucket, region, endpoint, credentials, key prefix, path-style toggle
-- **FTP**: host, credentials, base path, TLS toggle
+## Hooks
 
-Changes take effect immediately — no server restart required.
+Pika can push event notifications when files or configs change. Hooks are configured via **Settings > Hooks** in the UI.
+
+### Event Types
+
+| Event            | Trigger                         |
+| ---------------- | ------------------------------- |
+| `file.created`   | File uploaded to a raw mount    |
+| `file.updated`   | File overwritten on a raw mount |
+| `file.deleted`   | File deleted from a raw mount   |
+| `file.renamed`   | File renamed                    |
+| `file.copied`    | File copied                     |
+| `dir.created`    | Directory created               |
+| `config.created` | Config created                  |
+| `config.updated` | Config updated                  |
+| `config.deleted` | Config deleted                  |
+| `*`              | All events                      |
+
+### Targets
+
+Each hook can send events to one or more targets:
+
+- **HTTP Webhook** — POST/PUT to any URL with custom headers
+- **Kafka** — Produce messages to Kafka topics (supports TLS, SASL/PLAIN, SASL/SCRAM)
+- **Redis Pub/Sub** — Publish to Redis channels (standalone or cluster, with TLS + mTLS)
+- **NATS** — Publish to NATS subjects (token or user/password auth)
+
+### Filters
+
+Hooks can be filtered by:
+- **Mounts** — restrict to specific raw mount prefixes
+- **Path pattern** — glob pattern for matching file paths (e.g., `*.pdf`)
+
+### Custom Payloads
+
+Targets support a Go `text/template` body template for customizing the event payload. Available fields: `.Type`, `.Mount`, `.Path`, `.Size`, `.Protocol`, `.User`, `.Timestamp`.
+
+### TLS Certificate References
+
+TLS certificate file paths in hook targets (Kafka, Redis) support references to files stored in Pika itself:
+- `raw://mount/path` — read from a raw mount
+- `config://key` — read from the config store
+- Plain file paths are also supported
 
 ## Configuration
 
 Pika is configured via environment variables (prefixed with `PIKA_`) or a config file.
 
-| Variable                     | Default            | Description                                  |
-| ---------------------------- | ------------------ | -------------------------------------------- |
-| `PIKA_SERVER_HOST`           | _(all interfaces)_ | Bind address                                 |
-| `PIKA_SERVER_PORT`           | `8080`             | Listen port (admin UI + authenticated data)  |
-| `PIKA_SERVER_PUBLIC_PORT`    |                    | Public data port (unauthenticated `/data/*`) |
-| `PIKA_SERVER_BASE_PATH`      | `/`                | Base URL path                                |
-| `PIKA_STORAGE_PATH`          | `pika.db`          | SQLite database path                         |
+| Variable                     | Default            | Description                                      |
+| ---------------------------- | ------------------ | ------------------------------------------------ |
+| `PIKA_SERVER_HOST`           | _(all interfaces)_ | Bind address                                     |
+| `PIKA_SERVER_PORT`           | `8080`             | Listen port (admin UI + authenticated data)      |
+| `PIKA_SERVER_PUBLIC_PORT`    |                    | Public data port (unauthenticated `/data/*`)     |
+| `PIKA_SERVER_BASE_PATH`      | `/`                | Base URL path                                    |
+| `PIKA_STORAGE_PATH`          | `pika.db`          | SQLite database path                             |
 | `PIKA_SECRET_ENCRYPTION_KEY` |                    | Encryption key — setting this enables encryption |
-| `PIKA_SERVER_RAW_N_PREFIX`   |                    | URL prefix for raw mount N (e.g., `configs`) |
-| `PIKA_SERVER_RAW_N_TYPE`     | `local`            | Backend type: `local`, `s3`, `ftp`           |
-| `PIKA_SERVER_RAW_N_PATH`     |                    | Local directory for raw mount N              |
-| `PIKA_SERVER_RAW_N_S3_*`     |                    | S3 config: `BUCKET`, `REGION`, `ENDPOINT`, etc. |
-| `PIKA_SERVER_RAW_N_FTP_*`    |                    | FTP config: `HOST`, `USERNAME`, `PASSWORD`, etc. |
-| `PIKA_LOG_LEVEL`             | `info`             | Log level                                    |
+| `PIKA_LOG_LEVEL`             | `info`             | Log level                                        |
 
 ### Built-in Authentication
 

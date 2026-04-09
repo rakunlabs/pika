@@ -1,7 +1,7 @@
 <script lang="ts">
   import { link, router } from 'svelte-spa-router';
   import { appStore } from '@/lib/store/store.svelte';
-  import { Blocks, Settings, User, Users, LogOut, HardDrive } from 'lucide-svelte';
+  import { Blocks, Settings, User, Users, LogOut, HardDrive, FileSliders } from 'lucide-svelte';
 
   const info = $derived(appStore.info);
   const authEnabled = $derived(info?.auth_enabled ?? false);
@@ -10,6 +10,8 @@
 
   const navItems = $derived.by(() => {
     const items: { path: string; label: string; icon: typeof Settings }[] = [];
+
+    items.push({ path: '/configurations', label: 'Configurations', icon: FileSliders });
 
     if (hasRawMounts) {
       items.push({ path: '/files', label: 'Files', icon: HardDrive });
@@ -31,7 +33,7 @@
 
 <nav class="flex items-center h-10 bg-slate-900 text-white border-b border-slate-700 px-4 shrink-0">
   <!-- Logo / Brand -->
-  <a href="/configurations" use:link class="flex items-center gap-2 mr-6 hover:opacity-80 transition-opacity no-underline text-white">
+  <div class="flex items-center gap-2 mr-6 text-white">
     <Blocks size={18} color="#EF233C" />
     <div class="flex flex-col leading-none">
       <span class="text-sm font-bold tracking-wide">pika</span>
@@ -39,7 +41,7 @@
         <span class="text-[9px] font-mono text-slate-500">{info.version}</span>
       {/if}
     </div>
-  </a>
+  </div>
 
   <!-- Nav Links -->
   <div class="flex items-center gap-1">

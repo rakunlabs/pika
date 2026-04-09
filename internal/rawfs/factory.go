@@ -18,3 +18,7 @@ var NewSFTPFSFunc func(host, username, password, privateKey, basePath string) (R
 // NewWebDAVFSFunc is the factory function for creating WebDAV backends.
 // Set by the webdavfs package.
 var NewWebDAVFSFunc func(url, username, password, basePath string) (RawFS, error)
+
+// NewVercelBlobFSFunc is the factory function for creating Vercel Blob backends.
+// Set by the vercelblobfs package.
+var NewVercelBlobFSFunc func(token, storeID, prefix string) (RawFS, error)

@@ -40,14 +40,18 @@ type HookFilter struct {
 }
 
 // Target defines a single push destination for hook events.
-// Exactly one of HTTP or Kafka should be set.
+// Exactly one of HTTP, Kafka, Redis, or NATS should be set.
 type Target struct {
-	// Type identifies the target kind: "http" or "kafka".
+	// Type identifies the target kind: "http", "kafka", "redis", or "nats".
 	Type string `json:"type"`
 	// HTTP holds configuration for HTTP webhook targets.
 	HTTP *HTTPTarget `json:"http,omitempty"`
 	// Kafka holds configuration for Kafka targets.
 	Kafka *KafkaTarget `json:"kafka,omitempty"`
+	// Redis holds configuration for Redis Pub/Sub targets.
+	Redis *RedisTarget `json:"redis,omitempty"`
+	// NATS holds configuration for NATS targets.
+	NATS *NATSTarget `json:"nats,omitempty"`
 	// BodyTemplate is an optional Go text/template string for customizing the
 	// event payload. When empty, the default JSON payload is used.
 	BodyTemplate string `json:"body_template,omitempty"`
@@ -148,6 +152,53 @@ type KafkaSASLSCRAM struct {
 	Pass string `json:"pass,omitempty"`
 	// IsToken indicates the user/pass are from a delegation token.
 	IsToken bool `json:"is_token,omitempty"`
+}
+
+// RedisTarget configures a Redis Pub/Sub target.
+// Supports both standalone and cluster modes.
+// For cluster mode, provide multiple addresses in Addresses.
+type RedisTarget struct {
+	// Address is a single Redis server address (e.g., "localhost:6379").
+	// Used for standalone mode. Ignored if Addresses is set.
+	Address string `json:"address,omitempty"`
+	// Addresses is a list of Redis cluster node addresses.
+	// When set, cluster mode is used.
+	Addresses []string `json:"addresses,omitempty"`
+	// Password is the Redis password (optional).
+	Password string `json:"password,omitempty"`
+	// DB is the Redis database number (default: 0). Only used in standalone mode.
+	DB int `json:"db,omitempty"`
+	// Channel is the Pub/Sub channel to publish events to.
+	Channel string `json:"channel"`
+	// TLS enables TLS for the connection.
+	TLS RedisTLS `json:"tls,omitempty"`
+}
+
+// RedisTLS configures TLS for the Redis connection.
+// File fields support plain paths, "raw://mount/path", and "config://key" references.
+type RedisTLS struct {
+	// Enabled activates TLS for the connection.
+	Enabled bool `json:"enabled,omitempty"`
+	// CertFile is the path to the client TLS certificate file.
+	CertFile string `json:"cert_file,omitempty"`
+	// KeyFile is the path to the client TLS private key file.
+	KeyFile string `json:"key_file,omitempty"`
+	// CAFile is the path to the CA certificate file.
+	CAFile string `json:"ca_file,omitempty"`
+}
+
+// NATSTarget configures a NATS messaging target.
+type NATSTarget struct {
+	// URL is the NATS server URL (e.g., "nats://localhost:4222").
+	URL string `json:"url"`
+	// Subject is the NATS subject to publish events to.
+	Subject string `json:"subject"`
+	// Token is an authentication token (optional).
+	Token string `json:"token,omitempty"`
+	// Username for user/password authentication (optional).
+	Username string `json:"username,omitempty"`
+	// Password for user/password authentication (optional).
+	Password string `json:"password,omitempty"`
 }
 
 // Matches reports whether the hook should fire for the given event type, mount, and path.

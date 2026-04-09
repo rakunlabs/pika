@@ -20,6 +20,14 @@ type Service struct {
 	kubeMu      sync.RWMutex
 	kubeClients map[string]*external.KubeClient
 
+	// gcpClients caches GCP Secret Manager clients keyed by project ID.
+	gcpMu      sync.RWMutex
+	gcpClients map[string]*external.GCPSecretManagerClient
+
+	// azureClients caches Azure Key Vault clients keyed by vault URL.
+	azureMu      sync.RWMutex
+	azureClients map[string]*external.AzureKeyVaultClient
+
 	// hookDispatcher emits events when config operations occur.
 	// May be nil if hooks are not configured.
 	hookDispatcher *hook.Dispatcher
@@ -30,6 +38,8 @@ func New(store Storage) *Service {
 		store:        store,
 		vaultClients: make(map[string]*external.VaultClient),
 		kubeClients:  make(map[string]*external.KubeClient),
+		gcpClients:   make(map[string]*external.GCPSecretManagerClient),
+		azureClients: make(map[string]*external.AzureKeyVaultClient),
 	}
 }
 
@@ -106,5 +116,55 @@ func (s *Service) getVaultClient(ctx context.Context, vault *external.Vault) *ex
 	}
 
 	s.vaultClients[vault.Address] = client
+	return client
+}
+
+// getGCPClient returns a cached or new GCP Secret Manager client.
+func (s *Service) getGCPClient(gcp *external.GCP) (*external.GCPSecretManagerClient, error) {
+	key := gcp.ServiceAccountJSON // use the full JSON as cache key (contains project_id)
+
+	s.gcpMu.RLock()
+	client, exists := s.gcpClients[key]
+	s.gcpMu.RUnlock()
+
+	if exists {
+		return client, nil
+	}
+
+	s.gcpMu.Lock()
+	defer s.gcpMu.Unlock()
+
+	if client, exists = s.gcpClients[key]; exists {
+		return client, nil
+	}
+
+	client, err := external.NewGCPSecretManagerClient(gcp.ServiceAccountJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	s.gcpClients[key] = client
+	return client, nil
+}
+
+// getAzureClient returns a cached or new Azure Key Vault client.
+func (s *Service) getAzureClient(azure *external.Azure) *external.AzureKeyVaultClient {
+	s.azureMu.RLock()
+	client, exists := s.azureClients[azure.VaultURL]
+	s.azureMu.RUnlock()
+
+	if exists {
+		return client
+	}
+
+	s.azureMu.Lock()
+	defer s.azureMu.Unlock()
+
+	if client, exists = s.azureClients[azure.VaultURL]; exists {
+		return client
+	}
+
+	client = external.NewAzureKeyVaultClient(azure.VaultURL, azure.TenantID, azure.ClientID, azure.ClientSecret)
+	s.azureClients[azure.VaultURL] = client
 	return client
 }

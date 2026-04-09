@@ -9,6 +9,7 @@ require (
 	github.com/goccy/go-yaml v1.19.2
 	github.com/jlaffaye/ftp v0.2.0
 	github.com/minio/minio-go/v7 v7.0.99
+	github.com/nats-io/nats.go v1.50.0
 	github.com/pin/tftp/v3 v3.2.0
 	github.com/pkg/sftp v1.13.10
 	github.com/rakunlabs/ada v0.2.13
@@ -28,6 +29,7 @@ require (
 	github.com/rakunlabs/query v0.4.1
 	github.com/rakunlabs/tell v0.1.2
 	github.com/rakunlabs/tummy v0.1.2
+	github.com/redis/go-redis/v9 v9.18.0
 	github.com/spf13/afero v1.15.0
 	github.com/studio-b12/gowebdav v0.12.0
 	github.com/twmb/franz-go v1.20.7
@@ -40,6 +42,7 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
@@ -50,7 +53,7 @@ require (
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-envparse v0.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
-	github.com/klauspost/compress v1.18.4 // indirect
+	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.11 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
@@ -58,6 +61,8 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/minio/crc64nvme v1.1.1 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
+	github.com/nats-io/nkeys v0.4.15 // indirect
+	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
@@ -82,6 +87,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.42.0 // indirect
 	go.opentelemetry.io/otel/trace v1.42.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect

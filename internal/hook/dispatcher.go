@@ -277,6 +277,10 @@ func (d *Dispatcher) buildSink(ctx context.Context, t Target) (Sink, error) {
 		return NewHTTPSink(t.HTTP)
 	case "kafka":
 		return NewKafkaSink(ctx, t.Kafka, d.pool, d.resolver)
+	case "redis":
+		return NewRedisSink(ctx, t.Redis, d.resolver)
+	case "nats":
+		return NewNATSSink(t.NATS)
 	default:
 		return nil, fmt.Errorf("unknown target type %q", t.Type)
 	}

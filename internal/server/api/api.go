@@ -669,6 +669,14 @@ func newRawFSFromSettings(mountType string, m service.RawMountEntry) (rawfs.RawF
 			return nil, fmt.Errorf("webdav backend not available")
 		}
 		return rawfs.NewWebDAVFSFunc(m.WebDAV.URL, m.WebDAV.Username, m.WebDAV.Password, m.WebDAV.BasePath)
+	case "vercel-blob":
+		if m.VercelBlob == nil {
+			return nil, fmt.Errorf("vercelBlob config is required")
+		}
+		if rawfs.NewVercelBlobFSFunc == nil {
+			return nil, fmt.Errorf("vercel-blob backend not available")
+		}
+		return rawfs.NewVercelBlobFSFunc(m.VercelBlob.Token, m.VercelBlob.StoreID, m.VercelBlob.Prefix)
 	default:
 		return nil, fmt.Errorf("unknown mount type %q", mountType)
 	}

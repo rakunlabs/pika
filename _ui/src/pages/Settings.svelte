@@ -14,7 +14,7 @@
   let rawMounts = $state<RawMountEntry[]>([]);
   let showAddMount = $state(false);
   let newMountPrefix = $state('');
-  let newMountType = $state<'local' | 's3' | 'ftp' | 'sftp' | 'webdav'>('local');
+  let newMountType = $state<'local' | 's3' | 'ftp' | 'sftp' | 'webdav' | 'vercel-blob'>('local');
   let newMountPath = $state('');
   // S3 fields
   let newS3Bucket = $state('');
@@ -42,6 +42,10 @@
   let newWebdavUsername = $state('');
   let newWebdavPassword = $state('');
   let newWebdavBasePath = $state('');
+  // Vercel Blob fields
+  let newVercelBlobToken = $state('');
+  let newVercelBlobStoreId = $state('');
+  let newVercelBlobPrefix = $state('');
   // Edit state
   let editingIndex = $state<number | null>(null);
   let isSavingMounts = $state(false);
@@ -122,7 +126,7 @@
   let hookTargets = $state<HookTarget[]>([]);
   // Target form (inline within hook form)
   let showAddTarget = $state(false);
-  let targetType = $state<'http' | 'kafka'>('http');
+  let targetType = $state<'http' | 'kafka' | 'redis' | 'nats'>('http');
   let targetHttpUrl = $state('');
   let targetHttpMethod = $state('POST');
   let targetHttpHeaders = $state<{key: string; value: string}[]>([]);
@@ -149,6 +153,24 @@
   let targetKafkaSASLAlgorithm = $state<'SCRAM-SHA-256' | 'SCRAM-SHA-512'>('SCRAM-SHA-256');
   let targetKafkaSASLIsToken = $state(false);
   let showKafkaSASLPass = $state(false);
+  // Redis fields
+  let targetRedisCluster = $state(false);
+  let targetRedisAddress = $state('');
+  let targetRedisAddresses = $state<string[]>([]);
+  let targetRedisAddressInput = $state('');
+  let targetRedisPassword = $state('');
+  let targetRedisDB = $state(0);
+  let targetRedisChannel = $state('');
+  let targetRedisTLSEnabled = $state(false);
+  let targetRedisTLSCertFile = $state('');
+  let targetRedisTLSKeyFile = $state('');
+  let targetRedisTLSCAFile = $state('');
+  // NATS fields
+  let targetNatsUrl = $state('');
+  let targetNatsSubject = $state('');
+  let targetNatsToken = $state('');
+  let targetNatsUsername = $state('');
+  let targetNatsPassword = $state('');
 
   // Known event types for quick-add
   const HOOK_EVENT_TYPES = [
@@ -405,6 +427,24 @@
     targetKafkaSASLAlgorithm = 'SCRAM-SHA-256';
     targetKafkaSASLIsToken = false;
     showKafkaSASLPass = false;
+    // Redis
+    targetRedisCluster = false;
+    targetRedisAddress = '';
+    targetRedisAddresses = [];
+    targetRedisAddressInput = '';
+    targetRedisPassword = '';
+    targetRedisDB = 0;
+    targetRedisChannel = '';
+    targetRedisTLSEnabled = false;
+    targetRedisTLSCertFile = '';
+    targetRedisTLSKeyFile = '';
+    targetRedisTLSCAFile = '';
+    // NATS
+    targetNatsUrl = '';
+    targetNatsSubject = '';
+    targetNatsToken = '';
+    targetNatsUsername = '';
+    targetNatsPassword = '';
   }
 
   function handleEditHook(index: number) {
@@ -480,7 +520,7 @@
         },
         body_template: targetBodyTemplate || undefined,
       };
-    } else {
+    } else if (targetType === 'kafka') {
       if (targetKafkaBrokers.length === 0) { addToast('At least one Kafka broker is required', 'alert'); return; }
       if (!targetKafkaTopic.trim()) { addToast('Kafka topic is required', 'alert'); return; }
 
@@ -529,6 +569,47 @@
         },
         body_template: targetBodyTemplate || undefined,
       };
+    } else if (targetType === 'redis') {
+      if (!targetRedisChannel.trim()) { addToast('Redis channel is required', 'alert'); return; }
+      if (targetRedisCluster) {
+        if (targetRedisAddresses.length === 0) { addToast('At least one cluster address is required', 'alert'); return; }
+      } else {
+        if (!targetRedisAddress.trim()) { addToast('Redis address is required', 'alert'); return; }
+      }
+      const redisTls: import('@/lib/types/config').RedisTLS | undefined = targetRedisTLSEnabled ? {
+        enabled: true,
+        cert_file: targetRedisTLSCertFile || undefined,
+        key_file: targetRedisTLSKeyFile || undefined,
+        ca_file: targetRedisTLSCAFile || undefined,
+      } : undefined;
+      target = {
+        type: 'redis',
+        redis: {
+          address: targetRedisCluster ? undefined : targetRedisAddress.trim(),
+          addresses: targetRedisCluster ? [...targetRedisAddresses] : undefined,
+          password: targetRedisPassword || undefined,
+          db: targetRedisCluster ? undefined : (targetRedisDB || undefined),
+          channel: targetRedisChannel.trim(),
+          tls: redisTls,
+        },
+        body_template: targetBodyTemplate || undefined,
+      };
+    } else if (targetType === 'nats') {
+      if (!targetNatsUrl.trim()) { addToast('NATS URL is required', 'alert'); return; }
+      if (!targetNatsSubject.trim()) { addToast('NATS subject is required', 'alert'); return; }
+      target = {
+        type: 'nats',
+        nats: {
+          url: targetNatsUrl.trim(),
+          subject: targetNatsSubject.trim(),
+          token: targetNatsToken || undefined,
+          username: targetNatsUsername || undefined,
+          password: targetNatsPassword || undefined,
+        },
+        body_template: targetBodyTemplate || undefined,
+      };
+    } else {
+      return;
     }
 
     if (editingTargetIndex !== null) {
@@ -542,7 +623,7 @@
 
   function handleEditTarget(index: number) {
     const t = hookTargets[index];
-    targetType = t.type as 'http' | 'kafka';
+    targetType = t.type as 'http' | 'kafka' | 'redis' | 'nats';
     if (t.http) {
       targetHttpUrl = t.http.url;
       targetHttpMethod = t.http.method || 'POST';
@@ -583,6 +664,25 @@
       } else {
         targetKafkaSASLType = 'none';
       }
+    }
+    if (t.redis) {
+      targetRedisCluster = (t.redis.addresses?.length ?? 0) > 0;
+      targetRedisAddress = t.redis.address || '';
+      targetRedisAddresses = [...(t.redis.addresses || [])];
+      targetRedisPassword = t.redis.password || '';
+      targetRedisDB = t.redis.db || 0;
+      targetRedisChannel = t.redis.channel;
+      targetRedisTLSEnabled = t.redis.tls?.enabled || false;
+      targetRedisTLSCertFile = t.redis.tls?.cert_file || '';
+      targetRedisTLSKeyFile = t.redis.tls?.key_file || '';
+      targetRedisTLSCAFile = t.redis.tls?.ca_file || '';
+    }
+    if (t.nats) {
+      targetNatsUrl = t.nats.url;
+      targetNatsSubject = t.nats.subject;
+      targetNatsToken = t.nats.token || '';
+      targetNatsUsername = t.nats.username || '';
+      targetNatsPassword = t.nats.password || '';
     }
     targetBodyTemplate = t.body_template || '';
     editingTargetIndex = index;
@@ -707,7 +807,7 @@
   // ── External resource state ──
   let showAddExternal = $state(false);
   let newExtName = $state('');
-  let newExtType = $state<'http' | 'vault' | 'kubernetes'>('http');
+  let newExtType = $state<'http' | 'vault' | 'kubernetes' | 'consul' | 'etcd' | 'aws' | 'gcp' | 'azure'>('http');
   let newExtHttpUrl = $state('');
   let newExtVaultAddr = $state('');
   let newExtVaultMount = $state('secret');
@@ -715,6 +815,25 @@
   let newExtVaultSecretId = $state('');
   let newExtVaultAppRolePath = $state('approle');
   let newExtK8sKubeconfig = $state('');
+  // Consul fields
+  let newExtConsulAddr = $state('');
+  let newExtConsulToken = $state('');
+  // etcd fields
+  let newExtEtcdAddr = $state('');
+  let newExtEtcdUsername = $state('');
+  let newExtEtcdPassword = $state('');
+  // AWS fields
+  let newExtAwsRegion = $state('us-east-1');
+  let newExtAwsAccessKey = $state('');
+  let newExtAwsSecretKey = $state('');
+  let newExtAwsService = $state<'secretsmanager' | 'ssm'>('secretsmanager');
+  // GCP fields
+  let newExtGcpServiceAccountJson = $state('');
+  // Azure fields
+  let newExtAzureVaultUrl = $state('');
+  let newExtAzureTenantId = $state('');
+  let newExtAzureClientId = $state('');
+  let newExtAzureClientSecret = $state('');
 
   const tokens = $derived(configStore.tokens);
   const settings = $derived(configStore.settings);
@@ -852,6 +971,55 @@
       resource.kubernetes = {
         kubeconfig: newExtK8sKubeconfig.trim() || undefined
       };
+    } else if (newExtType === 'consul') {
+      if (!newExtConsulAddr.trim()) {
+        addToast('Consul address is required', 'alert');
+        return;
+      }
+      resource.consul = {
+        address: newExtConsulAddr.trim(),
+        token: newExtConsulToken.trim() || undefined
+      };
+    } else if (newExtType === 'etcd') {
+      if (!newExtEtcdAddr.trim()) {
+        addToast('etcd address is required', 'alert');
+        return;
+      }
+      resource.etcd = {
+        address: newExtEtcdAddr.trim(),
+        username: newExtEtcdUsername.trim() || undefined,
+        password: newExtEtcdPassword.trim() || undefined
+      };
+    } else if (newExtType === 'aws') {
+      if (!newExtAwsRegion.trim() || !newExtAwsAccessKey.trim() || !newExtAwsSecretKey.trim()) {
+        addToast('AWS region, access key, and secret key are required', 'alert');
+        return;
+      }
+      resource.aws = {
+        region: newExtAwsRegion.trim(),
+        access_key: newExtAwsAccessKey.trim(),
+        secret_key: newExtAwsSecretKey.trim(),
+        service: newExtAwsService
+      };
+    } else if (newExtType === 'gcp') {
+      if (!newExtGcpServiceAccountJson.trim()) {
+        addToast('GCP service account JSON is required', 'alert');
+        return;
+      }
+      resource.gcp = {
+        service_account_json: newExtGcpServiceAccountJson.trim()
+      };
+    } else if (newExtType === 'azure') {
+      if (!newExtAzureVaultUrl.trim() || !newExtAzureTenantId.trim() || !newExtAzureClientId.trim() || !newExtAzureClientSecret.trim()) {
+        addToast('Azure vault URL, tenant ID, client ID, and client secret are required', 'alert');
+        return;
+      }
+      resource.azure = {
+        vault_url: newExtAzureVaultUrl.trim(),
+        tenant_id: newExtAzureTenantId.trim(),
+        client_id: newExtAzureClientId.trim(),
+        client_secret: newExtAzureClientSecret.trim()
+      };
     }
 
     try {
@@ -868,6 +1036,20 @@
       newExtVaultSecretId = '';
       newExtVaultAppRolePath = 'approle';
       newExtK8sKubeconfig = '';
+      newExtConsulAddr = '';
+      newExtConsulToken = '';
+      newExtEtcdAddr = '';
+      newExtEtcdUsername = '';
+      newExtEtcdPassword = '';
+      newExtAwsRegion = 'us-east-1';
+      newExtAwsAccessKey = '';
+      newExtAwsSecretKey = '';
+      newExtAwsService = 'secretsmanager';
+      newExtGcpServiceAccountJson = '';
+      newExtAzureVaultUrl = '';
+      newExtAzureTenantId = '';
+      newExtAzureClientId = '';
+      newExtAzureClientSecret = '';
     } catch (error) {
       addToast('Failed to add external resource', 'alert');
     }
@@ -911,6 +1093,9 @@
     newWebdavUsername = '';
     newWebdavPassword = '';
     newWebdavBasePath = '';
+    newVercelBlobToken = '';
+    newVercelBlobStoreId = '';
+    newVercelBlobPrefix = '';
     editingIndex = null;
   }
 
@@ -940,6 +1125,9 @@
     newWebdavUsername = mount.webdav?.username || '';
     newWebdavPassword = mount.webdav?.password || '';
     newWebdavBasePath = mount.webdav?.base_path || '';
+    newVercelBlobToken = mount.vercelBlob?.token || '';
+    newVercelBlobStoreId = mount.vercelBlob?.store_id || '';
+    newVercelBlobPrefix = mount.vercelBlob?.prefix || '';
   }
 
   function handleEditMount(index: number) {
@@ -1019,6 +1207,16 @@
         username: newWebdavUsername.trim() || undefined,
         password: newWebdavPassword.trim() || undefined,
         base_path: newWebdavBasePath.trim() || undefined,
+      };
+    } else if (newMountType === 'vercel-blob') {
+      if (!newVercelBlobToken.trim()) {
+        addToast('Vercel Blob token is required', 'alert');
+        return;
+      }
+      entry.vercelBlob = {
+        token: newVercelBlobToken.trim(),
+        store_id: newVercelBlobStoreId.trim() || undefined,
+        prefix: newVercelBlobPrefix.trim() || undefined,
       };
     }
 
@@ -1900,6 +2098,26 @@
                 <input type="radio" bind:group={newExtType} value="kubernetes" class="text-blue-500" />
                 Kubernetes
               </label>
+              <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                <input type="radio" bind:group={newExtType} value="consul" class="text-blue-500" />
+                Consul
+              </label>
+              <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                <input type="radio" bind:group={newExtType} value="etcd" class="text-blue-500" />
+                etcd
+              </label>
+              <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                <input type="radio" bind:group={newExtType} value="aws" class="text-blue-500" />
+                AWS
+              </label>
+              <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                <input type="radio" bind:group={newExtType} value="gcp" class="text-blue-500" />
+                GCP
+              </label>
+              <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                <input type="radio" bind:group={newExtType} value="azure" class="text-blue-500" />
+                Azure
+              </label>
             </div>
           </div>
 
@@ -1984,6 +2202,95 @@
               />
               <p class="mt-1 text-[11px] text-slate-400">Leave empty to use in-cluster config (service account token). Path format: <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px]">namespace/secret/name</code> or <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px]">namespace/configmap/name</code></p>
             </div>
+          {:else if newExtType === 'consul'}
+            <div class="mb-4">
+              <label for="ext-consul-addr" class="block text-xs font-medium text-slate-500 mb-1.5">Address</label>
+              <input id="ext-consul-addr" type="url" bind:value={newExtConsulAddr} placeholder="http://consul.example.com:8500"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+            <div class="mb-4">
+              <label for="ext-consul-token" class="block text-xs font-medium text-slate-500 mb-1.5">ACL Token (optional)</label>
+              <input id="ext-consul-token" type="password" bind:value={newExtConsulToken} placeholder="Consul ACL token"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+          {:else if newExtType === 'etcd'}
+            <div class="mb-4">
+              <label for="ext-etcd-addr" class="block text-xs font-medium text-slate-500 mb-1.5">Address</label>
+              <input id="ext-etcd-addr" type="url" bind:value={newExtEtcdAddr} placeholder="http://etcd.example.com:2379"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+            <div class="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label for="ext-etcd-username" class="block text-xs font-medium text-slate-500 mb-1.5">Username (optional)</label>
+                <input id="ext-etcd-username" type="text" bind:value={newExtEtcdUsername} placeholder="root"
+                  class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+              <div>
+                <label for="ext-etcd-password" class="block text-xs font-medium text-slate-500 mb-1.5">Password (optional)</label>
+                <input id="ext-etcd-password" type="password" bind:value={newExtEtcdPassword} placeholder="Password"
+                  class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+            </div>
+          {:else if newExtType === 'aws'}
+            <div class="mb-4">
+              <span class="block text-xs font-medium text-slate-500 mb-1.5">AWS Service</span>
+              <div class="flex gap-3">
+                <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                  <input type="radio" bind:group={newExtAwsService} value="secretsmanager" class="text-blue-500" /> Secrets Manager
+                </label>
+                <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                  <input type="radio" bind:group={newExtAwsService} value="ssm" class="text-blue-500" /> SSM Parameter Store
+                </label>
+              </div>
+            </div>
+            <div class="mb-4">
+              <label for="ext-aws-region" class="block text-xs font-medium text-slate-500 mb-1.5">Region</label>
+              <input id="ext-aws-region" type="text" bind:value={newExtAwsRegion} placeholder="us-east-1"
+                class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+            <div class="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label for="ext-aws-access-key" class="block text-xs font-medium text-slate-500 mb-1.5">Access Key ID</label>
+                <input id="ext-aws-access-key" type="text" bind:value={newExtAwsAccessKey} placeholder="AKIA..."
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+              <div>
+                <label for="ext-aws-secret-key" class="block text-xs font-medium text-slate-500 mb-1.5">Secret Access Key</label>
+                <input id="ext-aws-secret-key" type="password" bind:value={newExtAwsSecretKey} placeholder="Secret key"
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+            </div>
+          {:else if newExtType === 'gcp'}
+            <div class="mb-4">
+              <label for="ext-gcp-sa-json" class="block text-xs font-medium text-slate-500 mb-1.5">Service Account JSON Key</label>
+              <textarea id="ext-gcp-sa-json" bind:value={newExtGcpServiceAccountJson} placeholder={'{"type": "service_account", "project_id": "...", ...}'}
+                rows="6"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 resize-y"></textarea>
+              <p class="mt-1 text-[11px] text-slate-400">Paste the full JSON content of a GCP service account key with Secret Manager access</p>
+            </div>
+          {:else if newExtType === 'azure'}
+            <div class="mb-4">
+              <label for="ext-azure-vault-url" class="block text-xs font-medium text-slate-500 mb-1.5">Vault URL</label>
+              <input id="ext-azure-vault-url" type="url" bind:value={newExtAzureVaultUrl} placeholder="https://my-vault.vault.azure.net"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+            <div class="mb-4">
+              <label for="ext-azure-tenant-id" class="block text-xs font-medium text-slate-500 mb-1.5">Tenant ID</label>
+              <input id="ext-azure-tenant-id" type="text" bind:value={newExtAzureTenantId} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+            </div>
+            <div class="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label for="ext-azure-client-id" class="block text-xs font-medium text-slate-500 mb-1.5">Client ID</label>
+                <input id="ext-azure-client-id" type="text" bind:value={newExtAzureClientId} placeholder="Application (client) ID"
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+              <div>
+                <label for="ext-azure-client-secret" class="block text-xs font-medium text-slate-500 mb-1.5">Client Secret</label>
+                <input id="ext-azure-client-secret" type="password" bind:value={newExtAzureClientSecret} placeholder="Client secret"
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+            </div>
           {/if}
 
           <div class="flex justify-end gap-2">
@@ -2017,8 +2324,9 @@
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-medium text-slate-800">{name}</span>
-                  <span class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-blue-100 text-blue-700">
-                    {resource.http ? 'HTTP' : resource.vault ? 'Vault' : 'Kubernetes'}
+                  <span class="px-1.5 py-0.5 text-[10px] font-medium rounded
+                    {resource.vault ? 'bg-amber-100 text-amber-700' : resource.aws ? 'bg-orange-100 text-orange-700' : resource.gcp ? 'bg-green-100 text-green-700' : resource.azure ? 'bg-sky-100 text-sky-700' : resource.consul ? 'bg-pink-100 text-pink-700' : resource.etcd ? 'bg-teal-100 text-teal-700' : 'bg-blue-100 text-blue-700'}">
+                    {resource.http ? 'HTTP' : resource.vault ? 'Vault' : resource.kubernetes ? 'Kubernetes' : resource.consul ? 'Consul' : resource.etcd ? 'etcd' : resource.aws ? (resource.aws.service === 'ssm' ? 'AWS SSM' : 'AWS Secrets Manager') : resource.gcp ? 'GCP Secret Manager' : resource.azure ? 'Azure Key Vault' : 'Unknown'}
                   </span>
                 </div>
                 <div class="mt-1 space-y-0.5">
@@ -2046,6 +2354,16 @@
                     <div class="text-[10px] text-slate-400">
                       Path format: <code class="px-1 py-0.5 bg-slate-100 rounded">namespace/secret/name</code> or <code class="px-1 py-0.5 bg-slate-100 rounded">namespace/configmap/name</code>
                     </div>
+                  {:else if resource.consul}
+                    <span class="text-xs font-mono text-slate-400">{resource.consul.address}</span>
+                  {:else if resource.etcd}
+                    <span class="text-xs font-mono text-slate-400">{resource.etcd.address}</span>
+                  {:else if resource.aws}
+                    <span class="text-xs font-mono text-slate-400">{resource.aws.region}</span>
+                  {:else if resource.gcp}
+                    <span class="text-xs text-slate-400">GCP Secret Manager (service account)</span>
+                  {:else if resource.azure}
+                    <span class="text-xs font-mono text-slate-400">{resource.azure.vault_url}</span>
                   {/if}
                 </div>
               </div>
@@ -2111,6 +2429,9 @@
               </label>
               <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
                 <input type="radio" bind:group={newMountType} value="webdav" class="text-blue-500" /> WebDAV
+              </label>
+              <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+                <input type="radio" bind:group={newMountType} value="vercel-blob" class="text-blue-500" /> Vercel Blob
               </label>
             </div>
           </div>
@@ -2259,6 +2580,25 @@
                 class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
               <p class="mt-1 text-[11px] text-slate-400">Sub-path within the WebDAV root to use as mount root</p>
             </div>
+          {:else if newMountType === 'vercel-blob'}
+            <div class="mb-4">
+              <label for="vercel-blob-token" class="block text-xs font-medium text-slate-500 mb-1.5">Token</label>
+              <input id="vercel-blob-token" type="password" bind:value={newVercelBlobToken} placeholder="vercel_blob_rw_..."
+                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              <p class="mt-1 text-[11px] text-slate-400">BLOB_READ_WRITE_TOKEN from your Vercel project settings</p>
+            </div>
+            <div class="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label for="vercel-blob-store-id" class="block text-xs font-medium text-slate-500 mb-1.5">Store ID (optional)</label>
+                <input id="vercel-blob-store-id" type="text" bind:value={newVercelBlobStoreId} placeholder="store_abc123"
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+              <div>
+                <label for="vercel-blob-prefix" class="block text-xs font-medium text-slate-500 mb-1.5">Key Prefix (optional)</label>
+                <input id="vercel-blob-prefix" type="text" bind:value={newVercelBlobPrefix} placeholder="configs/"
+                  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+              </div>
+            </div>
           {/if}
 
           <div class="flex justify-end gap-2">
@@ -2298,8 +2638,8 @@
                     /raw/{mount.prefix}
                   </span>
                   <span class="px-1.5 py-0.5 text-[10px] font-medium rounded
-                    {mType === 's3' ? 'bg-orange-100 text-orange-700' : mType === 'ftp' ? 'bg-purple-100 text-purple-700' : mType === 'sftp' ? 'bg-teal-100 text-teal-700' : mType === 'webdav' ? 'bg-indigo-100 text-indigo-700' : 'bg-blue-100 text-blue-700'}">
-                    {mType === 's3' ? 'S3' : mType === 'ftp' ? 'FTP' : mType === 'sftp' ? 'SFTP' : mType === 'webdav' ? 'WebDAV' : 'Local'}
+                    {mType === 's3' ? 'bg-orange-100 text-orange-700' : mType === 'ftp' ? 'bg-purple-100 text-purple-700' : mType === 'sftp' ? 'bg-teal-100 text-teal-700' : mType === 'webdav' ? 'bg-indigo-100 text-indigo-700' : mType === 'vercel-blob' ? 'bg-sky-100 text-sky-700' : 'bg-blue-100 text-blue-700'}">
+                    {mType === 's3' ? 'S3' : mType === 'ftp' ? 'FTP' : mType === 'sftp' ? 'SFTP' : mType === 'webdav' ? 'WebDAV' : mType === 'vercel-blob' ? 'Vercel Blob' : 'Local'}
                   </span>
                 </div>
                 <div class="mt-1">
@@ -2320,6 +2660,10 @@
                   {:else if mType === 'webdav'}
                     <span class="text-xs font-mono text-slate-400">
                       {mount.webdav?.url}{mount.webdav?.base_path || ''}
+                    </span>
+                  {:else if mType === 'vercel-blob'}
+                    <span class="text-xs font-mono text-slate-400">
+                      vercel-blob{mount.vercelBlob?.store_id ? '/' + mount.vercelBlob.store_id : ''}{mount.vercelBlob?.prefix ? '/' + mount.vercelBlob.prefix : ''}
                     </span>
                   {/if}
                 </div>
@@ -3209,11 +3553,16 @@
                   <div class="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-md">
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-2">
-                        <span class="px-1.5 py-0.5 text-[10px] font-medium rounded {t.type === 'http' ? 'bg-emerald-100 text-emerald-700' : 'bg-purple-100 text-purple-700'}">{t.type.toUpperCase()}</span>
+                        <span class="px-1.5 py-0.5 text-[10px] font-medium rounded
+                          {t.type === 'http' ? 'bg-emerald-100 text-emerald-700' : t.type === 'kafka' ? 'bg-purple-100 text-purple-700' : t.type === 'redis' ? 'bg-red-100 text-red-700' : 'bg-sky-100 text-sky-700'}">{t.type.toUpperCase()}</span>
                         {#if t.type === 'http' && t.http}
                           <span class="text-xs text-slate-600 font-mono truncate">{t.http.method || 'POST'} {t.http.url}</span>
                         {:else if t.type === 'kafka' && t.kafka}
                           <span class="text-xs text-slate-600 font-mono truncate">{t.kafka.topic} ({t.kafka.brokers.join(', ')})</span>
+                        {:else if t.type === 'redis' && t.redis}
+                          <span class="text-xs text-slate-600 font-mono truncate">{t.redis.channel} ({t.redis.addresses?.length ? t.redis.addresses.join(', ') : t.redis.address})</span>
+                        {:else if t.type === 'nats' && t.nats}
+                          <span class="text-xs text-slate-600 font-mono truncate">{t.nats.subject} ({t.nats.url})</span>
                         {/if}
                       </div>
                       {#if t.body_template}
@@ -3254,6 +3603,16 @@
                         {targetType === 'kafka' ? 'bg-purple-50 border-purple-300 text-purple-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}"
                       onclick={() => targetType = 'kafka'}
                     >Kafka</button>
+                    <button
+                      class="flex-1 px-3 py-2 text-xs font-medium rounded-md border transition-colors
+                        {targetType === 'redis' ? 'bg-red-50 border-red-300 text-red-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}"
+                      onclick={() => targetType = 'redis'}
+                    >Redis</button>
+                    <button
+                      class="flex-1 px-3 py-2 text-xs font-medium rounded-md border transition-colors
+                        {targetType === 'nats' ? 'bg-sky-50 border-sky-300 text-sky-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}"
+                      onclick={() => targetType = 'nats'}
+                    >NATS</button>
                   </div>
                 </div>
 
@@ -3299,7 +3658,7 @@
                       </div>
                     {/each}
                   </div>
-                {:else}
+                {:else if targetType === 'kafka'}
                   <!-- Kafka target fields -->
                   <div class="mb-3">
                     <label for="target-kafka-broker" class="block text-xs font-medium text-slate-500 mb-1">Brokers</label>
@@ -3458,6 +3817,120 @@
                       {/if}
                     </div>
                   </div>
+                {:else if targetType === 'redis'}
+                  <!-- Redis target fields -->
+                  <div class="flex gap-4 mb-3">
+                    <label class="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                      <input type="checkbox" bind:checked={targetRedisCluster} class="rounded border-slate-300" />
+                      Cluster mode
+                    </label>
+                    <label class="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                      <input type="checkbox" bind:checked={targetRedisTLSEnabled} class="rounded border-slate-300" />
+                      Use TLS
+                    </label>
+                  </div>
+
+                  {#if targetRedisTLSEnabled}
+                    <div class="grid grid-cols-3 gap-3 mb-3">
+                      <div>
+                        <label for="target-redis-tls-ca" class="block text-xs font-medium text-slate-500 mb-1">CA File (optional)</label>
+                        <input id="target-redis-tls-ca" type="text" bind:value={targetRedisTLSCAFile} placeholder="/path/to/ca.pem"
+                          class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                      </div>
+                      <div>
+                        <label for="target-redis-tls-cert" class="block text-xs font-medium text-slate-500 mb-1">Cert File (optional)</label>
+                        <input id="target-redis-tls-cert" type="text" bind:value={targetRedisTLSCertFile} placeholder="/path/to/cert.pem"
+                          class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                      </div>
+                      <div>
+                        <label for="target-redis-tls-key" class="block text-xs font-medium text-slate-500 mb-1">Key File (optional)</label>
+                        <input id="target-redis-tls-key" type="text" bind:value={targetRedisTLSKeyFile} placeholder="/path/to/key.pem"
+                          class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                      </div>
+                    </div>
+                    <p class="mb-3 text-[11px] text-slate-400">
+                      Paths support references: <code class="px-0.5 bg-slate-100 rounded text-[10px]">raw://mount/path</code> (from raw mounts) or <code class="px-0.5 bg-slate-100 rounded text-[10px]">config://key</code> (from config store)
+                    </p>
+                  {/if}
+
+                  {#if targetRedisCluster}
+                    <div class="mb-3">
+                      <label class="block text-xs font-medium text-slate-500 mb-1">Cluster Addresses</label>
+                      <div class="flex flex-wrap gap-1.5 mb-2">
+                        {#each targetRedisAddresses as addr, i}
+                          <span class="flex items-center gap-1 px-2 py-0.5 bg-slate-100 text-slate-600 rounded text-xs font-mono">
+                            {addr}
+                            <button class="text-slate-400 hover:text-red-500" onclick={() => targetRedisAddresses = targetRedisAddresses.filter((_, j) => j !== i)}>&times;</button>
+                          </span>
+                        {/each}
+                      </div>
+                      <div class="flex gap-2">
+                        <input type="text" bind:value={targetRedisAddressInput} placeholder="node:6379"
+                          class="flex-1 px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+                          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (targetRedisAddressInput.trim()) { targetRedisAddresses = [...targetRedisAddresses, targetRedisAddressInput.trim()]; targetRedisAddressInput = ''; } } }} />
+                        <button class="px-3 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 transition-colors"
+                          onclick={() => { if (targetRedisAddressInput.trim()) { targetRedisAddresses = [...targetRedisAddresses, targetRedisAddressInput.trim()]; targetRedisAddressInput = ''; } }}>Add</button>
+                      </div>
+                    </div>
+                  {:else}
+                    <div class="grid grid-cols-2 gap-3 mb-3">
+                      <div>
+                        <label for="target-redis-address" class="block text-xs font-medium text-slate-500 mb-1">Address</label>
+                        <input id="target-redis-address" type="text" bind:value={targetRedisAddress} placeholder="localhost:6379"
+                          class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                      </div>
+                      <div>
+                        <label for="target-redis-db" class="block text-xs font-medium text-slate-500 mb-1">DB (optional)</label>
+                        <input id="target-redis-db" type="number" bind:value={targetRedisDB} min="0" max="15"
+                          class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                      </div>
+                    </div>
+                  {/if}
+
+                  <div class="grid grid-cols-2 gap-3 mb-3">
+                    <div>
+                      <label for="target-redis-channel" class="block text-xs font-medium text-slate-500 mb-1">Channel</label>
+                      <input id="target-redis-channel" type="text" bind:value={targetRedisChannel} placeholder="pika-events"
+                        class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                    </div>
+                    <div>
+                      <label for="target-redis-password" class="block text-xs font-medium text-slate-500 mb-1">Password (optional)</label>
+                      <input id="target-redis-password" type="password" bind:value={targetRedisPassword} placeholder="Password"
+                        class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                    </div>
+                  </div>
+
+                {:else if targetType === 'nats'}
+                  <!-- NATS target fields -->
+                  <div class="grid grid-cols-2 gap-3 mb-3">
+                    <div>
+                      <label for="target-nats-url" class="block text-xs font-medium text-slate-500 mb-1">URL</label>
+                      <input id="target-nats-url" type="text" bind:value={targetNatsUrl} placeholder="nats://localhost:4222"
+                        class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                    </div>
+                    <div>
+                      <label for="target-nats-subject" class="block text-xs font-medium text-slate-500 mb-1">Subject</label>
+                      <input id="target-nats-subject" type="text" bind:value={targetNatsSubject} placeholder="pika.events"
+                        class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                    </div>
+                  </div>
+                  <div class="mb-3">
+                    <label for="target-nats-token" class="block text-xs font-medium text-slate-500 mb-1">Token (optional)</label>
+                    <input id="target-nats-token" type="password" bind:value={targetNatsToken} placeholder="Auth token"
+                      class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                  </div>
+                  <div class="grid grid-cols-2 gap-3 mb-3">
+                    <div>
+                      <label for="target-nats-username" class="block text-xs font-medium text-slate-500 mb-1">Username (optional)</label>
+                      <input id="target-nats-username" type="text" bind:value={targetNatsUsername} placeholder="Username"
+                        class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                    </div>
+                    <div>
+                      <label for="target-nats-password" class="block text-xs font-medium text-slate-500 mb-1">Password (optional)</label>
+                      <input id="target-nats-password" type="password" bind:value={targetNatsPassword} placeholder="Password"
+                        class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
+                    </div>
+                  </div>
                 {/if}
 
                 <!-- Body Template (shared) -->
@@ -3535,8 +4008,9 @@
                   {/if}
                   <div class="mt-1 flex flex-wrap gap-1">
                     {#each h.targets as t}
-                      <span class="px-1.5 py-0.5 text-[10px] font-medium rounded {t.type === 'http' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-purple-50 text-purple-600 border border-purple-100'}">
-                        {t.type === 'http' && t.http ? t.http.url : t.type === 'kafka' && t.kafka ? t.kafka.topic : t.type}
+                      <span class="px-1.5 py-0.5 text-[10px] font-medium rounded
+                        {t.type === 'http' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : t.type === 'kafka' ? 'bg-purple-50 text-purple-600 border border-purple-100' : t.type === 'redis' ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-sky-50 text-sky-600 border border-sky-100'}">
+                        {t.type === 'http' && t.http ? t.http.url : t.type === 'kafka' && t.kafka ? t.kafka.topic : t.type === 'redis' && t.redis ? t.redis.channel : t.type === 'nats' && t.nats ? t.nats.subject : t.type}
                       </span>
                     {/each}
                   </div>

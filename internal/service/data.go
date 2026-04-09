@@ -240,7 +240,32 @@ func (s *Service) fetchExternalConfig(ctx context.Context, resourceName string, 
 		return s.fetchKubernetesConfig(ctx, ext.Kubernetes, path)
 	}
 
-	return nil, fmt.Errorf("external resource %q has no configured provider (http, vault, or kubernetes)", resourceName)
+	// Consul KV
+	if ext.Consul != nil {
+		return s.fetchConsulConfig(ctx, ext.Consul, path)
+	}
+
+	// etcd
+	if ext.Etcd != nil {
+		return s.fetchEtcdConfig(ctx, ext.Etcd, path)
+	}
+
+	// AWS Secrets Manager / SSM
+	if ext.AWS != nil {
+		return s.fetchAWSConfig(ctx, ext.AWS, path)
+	}
+
+	// GCP Secret Manager
+	if ext.GCP != nil {
+		return s.fetchGCPConfig(ctx, ext.GCP, path)
+	}
+
+	// Azure Key Vault
+	if ext.Azure != nil {
+		return s.fetchAzureConfig(ctx, ext.Azure, path)
+	}
+
+	return nil, fmt.Errorf("external resource %q has no configured provider", resourceName)
 }
 
 // fetchVaultConfig reads a secret from Vault and returns it as JSON bytes.
@@ -368,6 +393,42 @@ func (s *Service) ListExternalPaths(ctx context.Context, resourceName string, pr
 		return s.listKubernetesResources(ctx, ext.Kubernetes, prefix)
 	}
 
+	// Consul KV listing
+	if ext.Consul != nil {
+		client := external.NewConsulClient(ext.Consul.Address, ext.Consul.Token)
+		return client.ListSecrets(ctx, prefix)
+	}
+
+	// etcd listing
+	if ext.Etcd != nil {
+		client := external.NewEtcdClient(ext.Etcd.Address, ext.Etcd.Username, ext.Etcd.Password)
+		return client.ListSecrets(ctx, prefix)
+	}
+
+	// AWS listing
+	if ext.AWS != nil {
+		client := external.NewAWSClient(ext.AWS.Region, ext.AWS.AccessKey, ext.AWS.SecretKey)
+		if ext.AWS.Service == "ssm" {
+			return client.ListSSMParameters(ctx, prefix)
+		}
+		return client.ListSecretsManagerSecrets(ctx)
+	}
+
+	// GCP listing
+	if ext.GCP != nil {
+		client, err := s.getGCPClient(ext.GCP)
+		if err != nil {
+			return nil, err
+		}
+		return client.ListSecrets(ctx)
+	}
+
+	// Azure listing
+	if ext.Azure != nil {
+		client := s.getAzureClient(ext.Azure)
+		return client.ListSecrets(ctx)
+	}
+
 	// HTTP doesn't support listing
 	return []string{}, nil
 }
@@ -414,6 +475,82 @@ func (s *Service) listKubernetesResources(ctx context.Context, k8s *external.Kub
 	}
 
 	return client.ListResources(ctx, prefix)
+}
+
+// fetchConsulConfig reads a value from Consul KV.
+func (s *Service) fetchConsulConfig(ctx context.Context, consul *external.Consul, path string) ([]byte, error) {
+	if consul.Address == "" {
+		return nil, fmt.Errorf("consul address is empty")
+	}
+
+	client := external.NewConsulClient(consul.Address, consul.Token)
+	data, err := client.ReadSecret(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("reading consul key at %q: %w", path, err)
+	}
+
+	return json.Marshal(data)
+}
+
+// fetchEtcdConfig reads a value from etcd.
+func (s *Service) fetchEtcdConfig(ctx context.Context, etcd *external.Etcd, path string) ([]byte, error) {
+	if etcd.Address == "" {
+		return nil, fmt.Errorf("etcd address is empty")
+	}
+
+	client := external.NewEtcdClient(etcd.Address, etcd.Username, etcd.Password)
+	data, err := client.ReadSecret(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("reading etcd key at %q: %w", path, err)
+	}
+
+	return json.Marshal(data)
+}
+
+// fetchAWSConfig reads a secret from AWS Secrets Manager or SSM Parameter Store.
+func (s *Service) fetchAWSConfig(ctx context.Context, aws *external.AWS, path string) ([]byte, error) {
+	client := external.NewAWSClient(aws.Region, aws.AccessKey, aws.SecretKey)
+
+	var data map[string]any
+	var err error
+
+	if aws.Service == "ssm" {
+		data, err = client.ReadSSMParameter(ctx, path)
+	} else {
+		data, err = client.ReadSecretsManagerSecret(ctx, path)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading AWS %s at %q: %w", aws.Service, path, err)
+	}
+
+	return json.Marshal(data)
+}
+
+// fetchGCPConfig reads a secret from GCP Secret Manager.
+func (s *Service) fetchGCPConfig(ctx context.Context, gcp *external.GCP, path string) ([]byte, error) {
+	client, err := s.getGCPClient(gcp)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := client.ReadSecret(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("reading GCP secret %q: %w", path, err)
+	}
+
+	return json.Marshal(data)
+}
+
+// fetchAzureConfig reads a secret from Azure Key Vault.
+func (s *Service) fetchAzureConfig(ctx context.Context, azure *external.Azure, path string) ([]byte, error) {
+	client := s.getAzureClient(azure)
+
+	data, err := client.ReadSecret(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("reading Azure secret %q: %w", path, err)
+	}
+
+	return json.Marshal(data)
 }
 
 // fetchRawMountConfig reads a file from a raw mount and returns its contents.
@@ -499,6 +636,14 @@ func newRawFSFromMountEntry(m RawMountEntry) (rawfs.RawFS, error) {
 			return nil, fmt.Errorf("webdav backend not available")
 		}
 		return rawfs.NewWebDAVFSFunc(m.WebDAV.URL, m.WebDAV.Username, m.WebDAV.Password, m.WebDAV.BasePath)
+	case "vercel-blob":
+		if m.VercelBlob == nil {
+			return nil, fmt.Errorf("vercelBlob config is required")
+		}
+		if rawfs.NewVercelBlobFSFunc == nil {
+			return nil, fmt.Errorf("vercel-blob backend not available")
+		}
+		return rawfs.NewVercelBlobFSFunc(m.VercelBlob.Token, m.VercelBlob.StoreID, m.VercelBlob.Prefix)
 	default:
 		return nil, fmt.Errorf("unknown mount type %q", mountType)
 	}

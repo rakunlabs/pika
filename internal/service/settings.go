@@ -13,13 +13,14 @@ import (
 
 // RawMountEntry is a single raw mount configured via the UI.
 type RawMountEntry struct {
-	Prefix string              `json:"prefix"`
-	Type   string              `json:"type,omitempty"` // "local" (default), "s3", "ftp", "sftp", "webdav"
-	Path   string              `json:"path,omitempty"` // for type=local
-	S3     *S3ConfigEntry      `json:"s3,omitempty"`
-	FTP    *FTPConfigEntry     `json:"ftp,omitempty"`
-	SFTP   *SFTPConfigEntry    `json:"sftp,omitempty"`
-	WebDAV *WebDAVConfigEntry  `json:"webdav,omitempty"`
+	Prefix     string                 `json:"prefix"`
+	Type       string                 `json:"type,omitempty"` // "local" (default), "s3", "ftp", "sftp", "webdav", "vercel-blob"
+	Path       string                 `json:"path,omitempty"` // for type=local
+	S3         *S3ConfigEntry         `json:"s3,omitempty"`
+	FTP        *FTPConfigEntry        `json:"ftp,omitempty"`
+	SFTP       *SFTPConfigEntry       `json:"sftp,omitempty"`
+	WebDAV     *WebDAVConfigEntry     `json:"webdav,omitempty"`
+	VercelBlob *VercelBlobConfigEntry `json:"vercelBlob,omitempty"`
 }
 
 // S3ConfigEntry holds S3 configuration stored in settings.
@@ -58,6 +59,13 @@ type WebDAVConfigEntry struct {
 	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
 	BasePath string `json:"base_path,omitempty"`
+}
+
+// VercelBlobConfigEntry holds Vercel Blob configuration stored in settings.
+type VercelBlobConfigEntry struct {
+	Token   string `json:"token"`
+	StoreID string `json:"store_id,omitempty"`
+	Prefix  string `json:"prefix,omitempty"`
 }
 
 // PublicPortSettings configures the public (unauthenticated) HTTP server.
