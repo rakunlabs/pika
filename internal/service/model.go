@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/rakunlabs/query"
 )
@@ -21,6 +22,7 @@ var (
 type Storage interface {
 	Users() UserStorage
 	Tokens() TokenStorage
+	Sessions() SessionStorage
 	Folders() FolderStorage
 	Files() FileStorage
 	FileVersions() FileVersionStorage
@@ -40,6 +42,25 @@ type UserStorage interface {
 	Update(ctx context.Context, user *User) error
 	Delete(ctx context.Context, id string) error
 	Count(ctx context.Context) (int64, error)
+}
+
+// Session represents an active user session stored in the database.
+type Session struct {
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
+	Username  string    `json:"username"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// SessionStorage manages user sessions.
+type SessionStorage interface {
+	Create(ctx context.Context, session *Session) error
+	Get(ctx context.Context, id string) (*Session, error)
+	Delete(ctx context.Context, id string) error
+	DeleteByUserID(ctx context.Context, userID string) error
+	DeleteExpired(ctx context.Context) error
+	CountByUserID(ctx context.Context, userID string) (int64, error)
 }
 
 // TokenStorage manages access tokens.

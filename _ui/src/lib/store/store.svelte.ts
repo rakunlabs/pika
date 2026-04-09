@@ -17,14 +17,24 @@ export interface UserInfo {
   id: string;
   username: string;
   disabled: boolean;
+  active_sessions: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface UserQuery {
+  limit?: number;
+  offset?: number;
+  sort?: string;
+  search?: string;
 }
 
 function createAppStore() {
   let info = $state<AppInfo | null>(null);
   let authenticated = $state<boolean | null>(null); // null = unknown, true/false = resolved
   let users = $state<UserInfo[]>([]);
+  let usersTotal = $state(0);
+  let lastUserQuery = $state<UserQuery>({});
 
   async function loadInfo(): Promise<void> {
     try {
@@ -75,12 +85,27 @@ function createAppStore() {
     info = { name: 'pika', version: 'unknown', auth_enabled: true };
   }
 
-  async function loadUsers(): Promise<void> {
+  function buildUserQueryParams(q: UserQuery): URLSearchParams {
+    const params = new URLSearchParams();
+    if (q.limit) params.set('_limit', String(q.limit));
+    if (q.offset) params.set('_offset', String(q.offset));
+    if (q.sort) params.set('_sort', q.sort);
+    if (q.search) params.set('username[like]', `%${q.search}%`);
+    return params;
+  }
+
+  async function loadUsers(q?: UserQuery): Promise<void> {
+    if (q !== undefined) {
+      lastUserQuery = q;
+    }
     try {
-      const response = await axios.get('/api/v1/users');
-      users = response.data || [];
+      const params = buildUserQueryParams(lastUserQuery);
+      const response = await axios.get('/api/v1/users', { params });
+      users = response.data?.users || [];
+      usersTotal = response.data?.total ?? 0;
     } catch {
       users = [];
+      usersTotal = 0;
     }
   }
 
@@ -97,6 +122,11 @@ function createAppStore() {
 
   async function deleteUser(id: string): Promise<void> {
     await axios.delete(`/api/v1/users/${id}`);
+    await loadUsers();
+  }
+
+  async function kickUser(id: string): Promise<void> {
+    await axios.post(`/api/v1/users-kick/${id}`);
     await loadUsers();
   }
 
@@ -119,6 +149,7 @@ function createAppStore() {
     get info() { return info; },
     get authenticated() { return authenticated; },
     get users() { return users; },
+    get usersTotal() { return usersTotal; },
     loadInfo,
     setup,
     login,
@@ -127,6 +158,7 @@ function createAppStore() {
     createUser,
     updateUser,
     deleteUser,
+    kickUser,
   };
 }
 

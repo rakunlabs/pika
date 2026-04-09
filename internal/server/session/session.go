@@ -1,11 +1,13 @@
 package session
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rakunlabs/pika/internal/service"
@@ -22,27 +24,19 @@ type CookieOptions struct {
 	SameSite http.SameSite
 }
 
-// Session represents an active user session.
-type Session struct {
-	ID        string
-	UserID    string
-	Username  string
-	ExpiresAt time.Time
-}
-
-// Store manages in-memory sessions.
+// Store manages sessions backed by a database via service.SessionStorage.
 type Store struct {
-	sessions sync.Map // map[sessionID]*Session
-	ttl      time.Duration
-	cookie   CookieOptions
-	stopCh   chan struct{}
+	storage service.SessionStorage
+	ttl     time.Duration
+	cookie  CookieOptions
+	stopCh  chan struct{}
 }
 
 const defaultSessionTTL = 24 * time.Hour
 
-// NewStore creates a session store with the given session TTL and cookie options.
+// NewStore creates a session store backed by the given storage.
 // It starts a background goroutine to clean up expired sessions.
-func NewStore(ttl time.Duration, cookie CookieOptions) *Store {
+func NewStore(storage service.SessionStorage, ttl time.Duration, cookie CookieOptions) *Store {
 	if ttl <= 0 {
 		ttl = defaultSessionTTL
 	}
@@ -57,9 +51,10 @@ func NewStore(ttl time.Duration, cookie CookieOptions) *Store {
 	}
 
 	s := &Store{
-		ttl:    ttl,
-		cookie: cookie,
-		stopCh: make(chan struct{}),
+		storage: storage,
+		ttl:     ttl,
+		cookie:  cookie,
+		stopCh:  make(chan struct{}),
 	}
 
 	go s.cleanup()
@@ -79,29 +74,32 @@ func (s *Store) Create(userID, username string) (*http.Cookie, error) {
 		return nil, err
 	}
 
-	session := &Session{
+	now := time.Now()
+	session := &service.Session{
 		ID:        id,
 		UserID:    userID,
 		Username:  username,
-		ExpiresAt: time.Now().Add(s.ttl),
+		CreatedAt: now,
+		ExpiresAt: now.Add(s.ttl),
 	}
 
-	s.sessions.Store(id, session)
+	if err := s.storage.Create(context.Background(), session); err != nil {
+		return nil, err
+	}
 
 	return s.newCookie(id, int(s.ttl.Seconds())), nil
 }
 
 // Get retrieves a session by its ID.
 // Returns nil if the session doesn't exist or has expired.
-func (s *Store) Get(sessionID string) *Session {
-	val, ok := s.sessions.Load(sessionID)
-	if !ok {
+func (s *Store) Get(sessionID string) *service.Session {
+	session, err := s.storage.Get(context.Background(), sessionID)
+	if err != nil {
 		return nil
 	}
 
-	session := val.(*Session)
 	if time.Now().After(session.ExpiresAt) {
-		s.sessions.Delete(sessionID)
+		_ = s.storage.Delete(context.Background(), sessionID)
 		return nil
 	}
 
@@ -110,7 +108,12 @@ func (s *Store) Get(sessionID string) *Session {
 
 // Delete removes a session.
 func (s *Store) Delete(sessionID string) {
-	s.sessions.Delete(sessionID)
+	_ = s.storage.Delete(context.Background(), sessionID)
+}
+
+// DeleteUserSessions removes all sessions for a given user.
+func (s *Store) DeleteUserSessions(userID string) {
+	_ = s.storage.DeleteByUserID(context.Background(), userID)
 }
 
 // ClearCookie returns a cookie that clears the session cookie in the browser.
@@ -159,7 +162,7 @@ func (s *Store) newCookie(value string, maxAge int) *http.Cookie {
 	}
 }
 
-// cleanup periodically removes expired sessions.
+// cleanup periodically removes expired sessions from the database.
 func (s *Store) cleanup() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -169,14 +172,9 @@ func (s *Store) cleanup() {
 		case <-s.stopCh:
 			return
 		case <-ticker.C:
-			now := time.Now()
-			s.sessions.Range(func(key, value any) bool {
-				session := value.(*Session)
-				if now.After(session.ExpiresAt) {
-					s.sessions.Delete(key)
-				}
-				return true
-			})
+			if err := s.storage.DeleteExpired(context.Background()); err != nil {
+				slog.Warn("failed to cleanup expired sessions", "error", err)
+			}
 		}
 	}
 }
@@ -201,4 +199,9 @@ func ParseSameSite(s string) http.SameSite {
 	default:
 		return http.SameSiteLaxMode
 	}
+}
+
+// isNotFound checks if an error is a not-found error.
+func isNotFound(err error) bool {
+	return errors.Is(err, service.ErrNotFound)
 }

@@ -72,7 +72,7 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 			SameSite: session.ParseSameSite(cfg.Server.Auth.Cookie.SameSite),
 		}
 
-		sessionStore = session.NewStore(cfg.Server.Auth.SessionTTL, cookieOpts)
+		sessionStore = session.NewStore(svc.SessionStorage(), cfg.Server.Auth.SessionTTL, cookieOpts)
 		m.Use(sessionStore.Middleware)
 	} else {
 		slog.Info("no auth configured — admin API is unprotected")

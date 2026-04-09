@@ -24,11 +24,12 @@ type User struct {
 
 // UserInfo is the public representation of a user (no password hash).
 type UserInfo struct {
-	ID        string    `json:"id"`
-	Username  string    `json:"username"`
-	Disabled  bool      `json:"disabled"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	Username       string    `json:"username"`
+	Disabled       bool      `json:"disabled"`
+	ActiveSessions int64     `json:"active_sessions"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // CreateUserRequest is the request body for creating a new user.
@@ -127,6 +128,7 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 }
 
 // ListUsers returns all users (without password hashes).
+// If includeSessions is true, each UserInfo includes the count of active sessions.
 func (s *Service) ListUsers(ctx context.Context, q *query.Query) ([]UserInfo, int64, error) {
 	users, total, err := s.store.Users().List(ctx, q)
 	if err != nil {
@@ -135,7 +137,12 @@ func (s *Service) ListUsers(ctx context.Context, q *query.Query) ([]UserInfo, in
 
 	infos := make([]UserInfo, 0, len(users))
 	for _, user := range users {
-		infos = append(infos, user.toInfo())
+		info := user.toInfo()
+		count, err := s.store.Sessions().CountByUserID(ctx, user.ID)
+		if err == nil {
+			info.ActiveSessions = count
+		}
+		infos = append(infos, info)
 	}
 
 	return infos, total, nil
@@ -153,6 +160,7 @@ func (s *Service) GetUser(ctx context.Context, id string) (*UserInfo, error) {
 }
 
 // UpdateUser updates a user's properties.
+// If the user is being disabled, all their active sessions are deleted.
 func (s *Service) UpdateUser(ctx context.Context, id string, req *UpdateUserRequest) error {
 	user, err := s.store.Users().Get(ctx, id)
 	if err != nil {
@@ -171,6 +179,7 @@ func (s *Service) UpdateUser(ctx context.Context, id string, req *UpdateUserRequ
 		user.PasswordHash = string(hash)
 	}
 
+	wasDisabled := user.Disabled
 	if req.Disabled != nil {
 		user.Disabled = *req.Disabled
 	}
@@ -184,7 +193,22 @@ func (s *Service) UpdateUser(ctx context.Context, id string, req *UpdateUserRequ
 		return err
 	}
 
+	// If user was just disabled, delete all their sessions
+	if !wasDisabled && user.Disabled {
+		_ = s.store.Sessions().DeleteByUserID(ctx, id)
+	}
+
 	return nil
+}
+
+// KickUser deletes all active sessions for a user, forcing them to re-login.
+func (s *Service) KickUser(ctx context.Context, id string) error {
+	// Verify user exists
+	if _, err := s.store.Users().Get(ctx, id); err != nil {
+		return err
+	}
+
+	return s.store.Sessions().DeleteByUserID(ctx, id)
 }
 
 // DeleteUser deletes a user by ID.

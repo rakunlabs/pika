@@ -60,16 +60,6 @@ type api struct {
 	startPublicServer PublicServerStarter // set by server.go
 }
 
-// SessionStore is the interface for session management.
-// Used to decouple the api package from the session package.
-type SessionStore interface {
-	Create(userID, username string) (*http.Cookie, error)
-	Get(sessionID string) interface{ Username() string }
-	Delete(sessionID string)
-	ClearCookie() *http.Cookie
-	Middleware(next http.Handler) http.Handler
-}
-
 type response struct {
 	Message string `json:"message,omitempty"`
 }
@@ -121,6 +111,7 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 		m.GET("/api/v1/users/*", m.Wrap(api.getUser))
 		m.PATCH("/api/v1/users/*", m.Wrap(api.updateUser))
 		m.DELETE("/api/v1/users/*", m.Wrap(api.deleteUser))
+		m.POST("/api/v1/users-kick/*", m.Wrap(api.kickUser))
 	}
 
 	m.GET("/api/v1/folder", m.Wrap(api.getFolder))

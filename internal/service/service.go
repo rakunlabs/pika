@@ -43,6 +43,12 @@ func New(store Storage) *Service {
 	}
 }
 
+// SessionStorage returns the session storage backend.
+// Used by the session store for DB-backed session persistence.
+func (s *Service) SessionStorage() SessionStorage {
+	return s.store.Sessions()
+}
+
 // SetHookDispatcher sets the hook dispatcher for emitting config events.
 func (s *Service) SetHookDispatcher(d *hook.Dispatcher) {
 	s.hookDispatcher = d

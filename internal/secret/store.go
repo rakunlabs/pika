@@ -36,6 +36,10 @@ func (s *Storage) Tokens() service.TokenStorage {
 	return s.backend.Tokens()
 }
 
+func (s *Storage) Sessions() service.SessionStorage {
+	return s.backend.Sessions()
+}
+
 func (s *Storage) Folders() service.FolderStorage {
 	return s.backend.Folders()
 }

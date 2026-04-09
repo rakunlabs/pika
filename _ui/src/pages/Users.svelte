@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { appStore, type UserInfo } from '@/lib/store/store.svelte';
+  import { appStore, type UserInfo, type UserQuery } from '@/lib/store/store.svelte';
   import { addToast } from '@/lib/store/toast.svelte';
   import { onMount } from 'svelte';
-  import { Plus, Trash2, UserCheck, UserX, KeyRound } from 'lucide-svelte';
+  import { Plus, Trash2, UserCheck, UserX, KeyRound, LogOut, Search, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight } from 'lucide-svelte';
 
   let showCreateForm = $state(false);
   let newUsername = $state('');
@@ -15,12 +15,69 @@
 
   let confirmDeleteId = $state<string | null>(null);
 
+  // Query state
+  let searchText = $state('');
+  let sortField = $state('username');
+  let sortDir = $state<'asc' | 'desc'>('asc');
+  let pageSize = $state(20);
+  let currentPage = $state(1);
+  let searchTimeout = $state<ReturnType<typeof setTimeout> | null>(null);
+
   const users = $derived(appStore.users);
+  const total = $derived(appStore.usersTotal);
   const currentUser = $derived(appStore.info?.user);
+  const totalPages = $derived(Math.max(1, Math.ceil(total / pageSize)));
+  const showingFrom = $derived(total === 0 ? 0 : (currentPage - 1) * pageSize + 1);
+  const showingTo = $derived(Math.min(currentPage * pageSize, total));
+
+  function buildQuery(): UserQuery {
+    return {
+      limit: pageSize,
+      offset: (currentPage - 1) * pageSize,
+      sort: sortDir === 'desc' ? `-${sortField}` : sortField,
+      search: searchText || undefined,
+    };
+  }
+
+  function reload() {
+    appStore.loadUsers(buildQuery());
+  }
 
   onMount(() => {
-    appStore.loadUsers();
+    reload();
   });
+
+  function handleSearch(value: string) {
+    searchText = value;
+    if (searchTimeout) clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+      currentPage = 1;
+      reload();
+    }, 300);
+  }
+
+  function handleSort(field: string) {
+    if (sortField === field) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortField = field;
+      sortDir = 'asc';
+    }
+    currentPage = 1;
+    reload();
+  }
+
+  function goToPage(page: number) {
+    if (page < 1 || page > totalPages) return;
+    currentPage = page;
+    reload();
+  }
+
+  function handlePageSizeChange(size: number) {
+    pageSize = size;
+    currentPage = 1;
+    reload();
+  }
 
   async function handleCreate() {
     if (!newUsername || !newPassword) return;
@@ -58,6 +115,15 @@
     }
   }
 
+  async function handleKick(user: UserInfo) {
+    try {
+      await appStore.kickUser(user.id);
+      addToast(`All sessions for "${user.username}" terminated`, 'success');
+    } catch (err: any) {
+      addToast(err?.response?.data?.message || 'Failed to kick user', 'alert');
+    }
+  }
+
   function startEdit(user: UserInfo) {
     editingUser = user;
     editUsername = user.username;
@@ -92,7 +158,7 @@
 
 <div class="h-full overflow-auto p-6">
   <div class="max-w-3xl mx-auto">
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex items-center justify-between mb-4">
       <h1 class="text-lg font-semibold text-slate-800">User Management</h1>
       <button
         onclick={() => { showCreateForm = !showCreateForm; }}
@@ -145,25 +211,68 @@
       </div>
     {/if}
 
+    <!-- Search Bar -->
+    <div class="relative mb-3">
+      <Search size={14} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+      <input
+        type="text"
+        value={searchText}
+        oninput={(e) => handleSearch(e.currentTarget.value)}
+        class="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-slate-400"
+        placeholder="Search users..."
+      />
+    </div>
+
     <!-- Users Table -->
     <div class="bg-white rounded-lg border border-slate-200 overflow-hidden">
       <table class="w-full text-sm">
         <thead>
           <tr class="bg-slate-50 border-b border-slate-200">
-            <th class="text-left px-4 py-2.5 text-xs font-medium text-slate-500 uppercase tracking-wider">Username</th>
+            <th class="text-left px-4 py-2.5">
+              <button onclick={() => handleSort('username')} class="flex items-center gap-1 text-xs font-medium text-slate-500 uppercase tracking-wider hover:text-slate-800 transition-colors">
+                Username
+                {#if sortField === 'username'}
+                  {#if sortDir === 'asc'}<ChevronUp size={12} />{:else}<ChevronDown size={12} />{/if}
+                {:else}
+                  <ChevronsUpDown size={12} class="text-slate-300" />
+                {/if}
+              </button>
+            </th>
             <th class="text-left px-4 py-2.5 text-xs font-medium text-slate-500 uppercase tracking-wider">Status</th>
-            <th class="text-left px-4 py-2.5 text-xs font-medium text-slate-500 uppercase tracking-wider">Created</th>
+            <th class="text-left px-4 py-2.5 text-xs font-medium text-slate-500 uppercase tracking-wider">Sessions</th>
+            <th class="text-left px-4 py-2.5">
+              <button onclick={() => handleSort('created_at')} class="flex items-center gap-1 text-xs font-medium text-slate-500 uppercase tracking-wider hover:text-slate-800 transition-colors">
+                Created
+                {#if sortField === 'created_at'}
+                  {#if sortDir === 'asc'}<ChevronUp size={12} />{:else}<ChevronDown size={12} />{/if}
+                {:else}
+                  <ChevronsUpDown size={12} class="text-slate-300" />
+                {/if}
+              </button>
+            </th>
             <th class="text-right px-4 py-2.5 text-xs font-medium text-slate-500 uppercase tracking-wider">Actions</th>
           </tr>
         </thead>
         <tbody>
           {#each users as user (user.id)}
-            <tr class="border-b border-slate-100 hover:bg-slate-50">
+            {@const isYou = user.username === currentUser}
+            {@const isOnline = user.active_sessions > 0}
+            <tr class="border-b border-slate-100 {isYou ? 'bg-blue-50/50 border-l-2 border-l-blue-400' : 'hover:bg-slate-50'}">
               <td class="px-4 py-3">
-                <span class="font-medium text-slate-800">{user.username}</span>
-                {#if user.username === currentUser}
-                  <span class="ml-2 text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">you</span>
-                {/if}
+                <div class="flex items-center gap-2">
+                  <span class="relative flex h-2 w-2 shrink-0">
+                    {#if isOnline && !user.disabled}
+                      <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                      <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                    {:else}
+                      <span class="relative inline-flex rounded-full h-2 w-2 bg-slate-300"></span>
+                    {/if}
+                  </span>
+                  <span class="font-medium {isYou ? 'text-blue-800' : 'text-slate-800'}">{user.username}</span>
+                  {#if isYou}
+                    <span class="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-medium">you</span>
+                  {/if}
+                </div>
               </td>
               <td class="px-4 py-3">
                 {#if user.disabled}
@@ -178,6 +287,15 @@
                   </span>
                 {/if}
               </td>
+              <td class="px-4 py-3">
+                {#if isOnline}
+                  <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 bg-green-50 text-green-700 rounded-full tabular-nums">
+                    {user.active_sessions}
+                  </span>
+                {:else}
+                  <span class="text-xs text-slate-400">0</span>
+                {/if}
+              </td>
               <td class="px-4 py-3 text-slate-500 text-xs">
                 {new Date(user.created_at).toLocaleDateString()}
               </td>
@@ -190,11 +308,20 @@
                   >
                     <KeyRound size={14} />
                   </button>
+                  {#if !isYou && isOnline}
+                    <button
+                      onclick={() => handleKick(user)}
+                      class="p-1.5 text-slate-400 hover:text-orange-500 hover:bg-orange-50 rounded transition-colors"
+                      title="Kick user (terminate all sessions)"
+                    >
+                      <LogOut size={14} />
+                    </button>
+                  {/if}
                   <button
                     onclick={() => handleToggleDisabled(user)}
                     class="p-1.5 text-slate-400 hover:text-amber-500 hover:bg-amber-50 rounded transition-colors"
                     title={user.disabled ? 'Enable user' : 'Disable user'}
-                    disabled={user.username === currentUser}
+                    disabled={isYou}
                   >
                     {#if user.disabled}
                       <UserCheck size={14} />
@@ -202,7 +329,7 @@
                       <UserX size={14} />
                     {/if}
                   </button>
-                  {#if user.username !== currentUser}
+                  {#if !isYou}
                     {#if confirmDeleteId === user.id}
                       <button
                         onclick={() => handleDelete(user.id)}
@@ -231,13 +358,56 @@
             </tr>
           {:else}
             <tr>
-              <td colspan="4" class="px-4 py-8 text-center text-slate-400 text-sm">
-                No users found
+              <td colspan="5" class="px-4 py-8 text-center text-slate-400 text-sm">
+                {searchText ? 'No users matching your search' : 'No users found'}
               </td>
             </tr>
           {/each}
         </tbody>
       </table>
+
+      <!-- Pagination -->
+      {#if total > 0}
+        <div class="flex items-center justify-between px-4 py-3 border-t border-slate-200 bg-slate-50">
+          <div class="flex items-center gap-2 text-xs text-slate-500">
+            <span>Showing {showingFrom}-{showingTo} of {total}</span>
+            <span class="text-slate-300">|</span>
+            <label for="page-size" class="sr-only">Rows per page</label>
+            <select
+              id="page-size"
+              value={pageSize}
+              onchange={(e) => handlePageSizeChange(Number(e.currentTarget.value))}
+              class="px-1.5 py-0.5 border border-slate-200 rounded text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
+              <option value={10}>10 / page</option>
+              <option value={20}>20 / page</option>
+              <option value={50}>50 / page</option>
+              <option value={100}>100 / page</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-1">
+            <button
+              onclick={() => goToPage(currentPage - 1)}
+              disabled={currentPage <= 1}
+              class="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="Previous page"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <span class="text-xs text-slate-600 px-2 tabular-nums">
+              {currentPage} / {totalPages}
+            </span>
+            <button
+              onclick={() => goToPage(currentPage + 1)}
+              disabled={currentPage >= totalPages}
+              class="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title="Next page"
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      {/if}
     </div>
 
     <!-- Edit User Modal -->

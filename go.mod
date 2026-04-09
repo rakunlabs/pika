@@ -26,7 +26,7 @@ require (
 	github.com/rakunlabs/logi v0.4.5
 	github.com/rakunlabs/muz v0.2.4
 	github.com/rakunlabs/ok v0.1.0
-	github.com/rakunlabs/query v0.4.1
+	github.com/rakunlabs/query v0.4.4
 	github.com/rakunlabs/tell v0.1.2
 	github.com/rakunlabs/tummy v0.1.2
 	github.com/redis/go-redis/v9 v9.18.0
