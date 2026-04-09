@@ -46,13 +46,14 @@ type Server struct {
 
 	// Auth enables built-in user/password authentication.
 	// Mutually exclusive with ForwardAuth.
-	Auth *Auth `cfg:"auth"`
+	Auth Auth `cfg:"auth"`
 }
 
 // Auth configures built-in user/password authentication.
 // When enabled, the first visit to the UI will show a setup screen
 // to create the initial admin account (no seed_user config needed).
 type Auth struct {
+	Enabled bool `cfg:"enabled" default:"true"`
 	// SessionTTL is the session lifetime (default: 24h).
 	SessionTTL time.Duration `cfg:"session_ttl"`
 	// Cookie configures session cookie properties.

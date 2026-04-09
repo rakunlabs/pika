@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/url"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/rakunlabs/pika/internal/service"
@@ -12,7 +15,7 @@ import (
 )
 
 var (
-	DefaultDSN             = "file:pika.db?cache=shared"
+	DefaultDSN             = "file:data/pika.db?cache=shared"
 	DefaultMaxIdleConns    = 3
 	DefaultMaxOpenConns    = 5
 	DefaultConnMaxIdleTime = 15 * time.Minute
@@ -72,8 +75,38 @@ type Sqlite struct {
 	q  Querier
 }
 
+// ensureDSNDir parses the file path from a SQLite DSN (e.g. "file:data/pika.db?cache=shared")
+// and creates the parent directory if it doesn't exist.
+func ensureDSNDir(dsn string) error {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return err
+	}
+
+	// url.Parse gives us Opaque for "file:data/pika.db?..." style URIs
+	// and Path for "file:///abs/path" style URIs.
+	p := u.Opaque
+	if p == "" {
+		p = u.Path
+	}
+	if p == "" || p == ":memory:" {
+		return nil
+	}
+
+	dir := filepath.Dir(p)
+	if dir == "." || dir == "/" {
+		return nil
+	}
+
+	return os.MkdirAll(dir, 0o755)
+}
+
 func New(ctx context.Context, cfg *Config) (*Sqlite, error) {
 	c := cfg.GetConfig()
+
+	if err := ensureDSNDir(c.DSN); err != nil {
+		return nil, err
+	}
 
 	if cfg.Migration.Enabled {
 		migCfg := cfg.Migration

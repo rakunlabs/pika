@@ -1,5 +1,6 @@
 /pika.*
-/bin/
+/data
+/bin
 /dist
 /_fork
 /.claude

@@ -9,7 +9,7 @@ General configuration server.
 ## Quick Start
 
 ```sh
-docker run -d --name pika -p 8080:8080 ghcr.io/rakunlabs/pika:latest
+docker run -d --name pika -v pika:/data -p 8080:8080 ghcr.io/rakunlabs/pika:latest
 ```
 
 Open `http://localhost:8080` to access the web UI.
@@ -291,7 +291,7 @@ Pika is configured via environment variables (prefixed with `PIKA_`) or a config
 | `PIKA_SERVER_PORT`           | `8080`             | Listen port (admin UI + authenticated data)      |
 | `PIKA_SERVER_PUBLIC_PORT`    |                    | Public data port (unauthenticated `/data/*`)     |
 | `PIKA_SERVER_BASE_PATH`      | `/`                | Base URL path                                    |
-| `PIKA_STORAGE_PATH`          | `pika.db`          | SQLite database path                             |
+| `PIKA_STORAGE_PATH`          | `data/pika.db`     | SQLite database path                             |
 | `PIKA_SECRET_ENCRYPTION_KEY` |                    | Encryption key — setting this enables encryption |
 | `PIKA_LOG_LEVEL`             | `info`             | Log level                                        |
 

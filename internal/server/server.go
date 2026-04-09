@@ -30,7 +30,7 @@ import (
 )
 
 func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info api.Info, encStore *secret.Storage) error {
-	if cfg.Server.ForwardAuth != nil && cfg.Server.Auth != nil {
+	if cfg.Server.ForwardAuth != nil && cfg.Server.Auth.Enabled {
 		return fmt.Errorf("forward_auth and auth are mutually exclusive; configure only one")
 	}
 
@@ -61,7 +61,7 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	if cfg.Server.ForwardAuth != nil {
 		slog.Info("forward auth enabled", "url", cfg.Server.ForwardAuth.Address)
 		m.Use(mforwardauth.Middleware(mforwardauth.WithConfig(*cfg.Server.ForwardAuth)))
-	} else if cfg.Server.Auth != nil {
+	} else if cfg.Server.Auth.Enabled {
 		slog.Info("built-in auth enabled")
 
 		cookieOpts := session.CookieOptions{
