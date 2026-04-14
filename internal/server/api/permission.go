@@ -91,24 +91,29 @@ func (a *api) setUserPermissions(c *ada.Context) error {
 }
 
 // withPerm wraps a handler with a permission check.
-// If auth is not enabled (sessionStore is nil), the check is skipped.
-// Uses the progressive restriction model:
-//   - Superadmin → allow
-//   - Permission key not defined in DB → allow (unrestricted)
-//   - User has permission → allow
-//   - Otherwise → 403
+// If permission enforcement is not active (no built-in auth and no enabled
+// external-permissions block), the check is skipped.
+//
+// Enforcement semantics:
+//   - Superadmin (built-in is_superadmin or external Superadmins allowlist) → allow
+//   - Built-in auth with unknown capability key → allow (progressive restriction)
+//   - External auth with any configured mapping → strict: missing key denies
+//   - "system" sentinel user (no authenticated user in ctx) → allow, since
+//     this is only produced by server-internal code paths
 func (a *api) withPerm(perm string, handler func(*ada.Context) error) func(*ada.Context) error {
 	return func(c *ada.Context) error {
-		if a.sessionStore == nil {
+		ctx := c.Request.Context()
+
+		if !a.permissionsEnforced(ctx) {
 			return handler(c)
 		}
 
-		username := service.UserFromContext(c.Request.Context())
+		username := service.UserFromContext(ctx)
 		if username == "" || username == "system" {
 			return handler(c)
 		}
 
-		if err := a.svc.CheckPermission(c.Request.Context(), username, perm); err != nil {
+		if err := a.svc.CheckPermission(ctx, username, perm); err != nil {
 			return err
 		}
 

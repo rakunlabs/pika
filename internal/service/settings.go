@@ -84,19 +84,69 @@ type ConsulKVSettings struct {
 	BasePath string `json:"base_path,omitempty"` // default: "/consul"
 }
 
+// ForwardAuthSettings configures forward-auth middleware that delegates
+// authentication to an external service. When Enabled, the middleware is
+// hot-swapped into the request pipeline via an ada.Slot; when disabled the
+// slot becomes a no-op without a restart. Forward-auth can coexist with
+// the built-in session auth — the combined middleware tries session first,
+// then falls back to forward-auth.
+type ForwardAuthSettings struct {
+	Enabled                  bool     `json:"enabled"`
+	Address                  string   `json:"address"`
+	AuthResponseHeaders      []string `json:"auth_response_headers,omitempty"`
+	AuthResponseHeadersRegex string   `json:"auth_response_headers_regex,omitempty"`
+	AuthRequestHeaders       []string `json:"auth_request_headers,omitempty"`
+	TrustForwardHeader       bool     `json:"trust_forward_header,omitempty"`
+	InsecureSkipVerify       bool     `json:"insecure_skip_verify,omitempty"`
+	Timeout                  string   `json:"timeout,omitempty"` // Go duration string, e.g. "10s"
+	RedirectURL              string   `json:"redirect_url,omitempty"`
+	RedirectCode             int      `json:"redirect_code,omitempty"`
+	RedirectStatusCodes      []int    `json:"redirect_status_codes,omitempty"`
+	RequestMethod            string   `json:"request_method,omitempty"`
+}
+
+// ExternalPermissionsSettings configures permission enforcement for
+// forward-auth users. When Enabled, pika reads a groups header from
+// each request and maps external group names to pika capability keys
+// via Mapping. Superadmins is an allowlist of usernames that bypass
+// all checks (equivalent to users.is_superadmin for built-in auth).
+//
+// When Enabled is false, forward-auth users keep the legacy
+// "no permissions applied" behavior — their X-User flows through as
+// an audit label but nothing is enforced.
+type ExternalPermissionsSettings struct {
+	// Enabled toggles permission enforcement under forward auth.
+	Enabled bool `json:"enabled"`
+	// GroupsHeader is the request header that carries the external group
+	// list. Default: "X-Groups". The gateway must include this header in
+	// its auth_response_headers allowlist for it to reach pika.
+	GroupsHeader string `json:"groups_header,omitempty"`
+	// GroupsSeparator is the delimiter inside a single header value.
+	// Repeated header lines are also concatenated. Default: ",".
+	GroupsSeparator string `json:"groups_separator,omitempty"`
+	// Mapping translates external group names to pika capability keys.
+	// Example: {"pika-editor": ["files.read", "files.write"]}
+	Mapping map[string][]string `json:"mapping,omitempty"`
+	// Superadmins is the allowlist of forward-auth usernames that bypass
+	// all permission checks.
+	Superadmins []string `json:"superadmins,omitempty"`
+}
+
 type Settings struct {
-	External        map[string]external.External `json:"external,omitempty"`
-	AdminSecretHash string                       `json:"admin_secret_hash,omitempty"`
-	RawMounts       []RawMountEntry              `json:"raw_mounts,omitempty"`
-	FTPShares       []FTPShareEntry              `json:"ftp_shares,omitempty"`
-	FTPUsers        []FTPUserEntry               `json:"ftp_users,omitempty"`
-	FTPServe        *FTPServeSettings            `json:"ftp_serve,omitempty"`
-	SFTPServe       *SFTPServeSettings           `json:"sftp_serve,omitempty"`
-	TFTPServe       *TFTPServeSettings           `json:"tftp_serve,omitempty"`
-	WebDAVServe     *WebDAVServeSettings         `json:"webdav_serve,omitempty"`
-	Hooks           []hook.Hook                  `json:"hooks,omitempty"`
-	PublicPort      *PublicPortSettings          `json:"public_port,omitempty"`
-	Compat          *CompatSettings              `json:"compat,omitempty"`
+	External            map[string]external.External `json:"external,omitempty"`
+	AdminSecretHash     string                       `json:"admin_secret_hash,omitempty"`
+	RawMounts           []RawMountEntry              `json:"raw_mounts,omitempty"`
+	FTPShares           []FTPShareEntry              `json:"ftp_shares,omitempty"`
+	FTPUsers            []FTPUserEntry               `json:"ftp_users,omitempty"`
+	FTPServe            *FTPServeSettings            `json:"ftp_serve,omitempty"`
+	SFTPServe           *SFTPServeSettings           `json:"sftp_serve,omitempty"`
+	TFTPServe           *TFTPServeSettings           `json:"tftp_serve,omitempty"`
+	WebDAVServe         *WebDAVServeSettings         `json:"webdav_serve,omitempty"`
+	Hooks               []hook.Hook                  `json:"hooks,omitempty"`
+	PublicPort          *PublicPortSettings          `json:"public_port,omitempty"`
+	Compat              *CompatSettings              `json:"compat,omitempty"`
+	ExternalPermissions *ExternalPermissionsSettings `json:"external_permissions,omitempty"`
+	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 }
 
 // FTPServeSettings configures the built-in FTP server (stored in DB).
@@ -173,18 +223,20 @@ type FTPShareEntry struct {
 }
 
 type PatchSettings struct {
-	Action     ActionKey                    `json:"action"`
-	External   map[string]external.External `json:"external,omitempty"`
-	RawMounts  *[]RawMountEntry             `json:"raw_mounts,omitempty"` // pointer to distinguish nil (not provided) from empty
-	FTPShares  *[]FTPShareEntry             `json:"ftp_shares,omitempty"` // pointer to distinguish nil from empty
-	FTPUsers   *[]FTPUserEntry              `json:"ftp_users,omitempty"`
-	FTPServe    *FTPServeSettings            `json:"ftp_serve,omitempty"`
-	SFTPServe   *SFTPServeSettings           `json:"sftp_serve,omitempty"`
-	TFTPServe   *TFTPServeSettings           `json:"tftp_serve,omitempty"`
-	WebDAVServe *WebDAVServeSettings         `json:"webdav_serve,omitempty"`
-	Hooks       *[]hook.Hook                 `json:"hooks,omitempty"` // pointer to distinguish nil from empty
-	PublicPort *PublicPortSettings          `json:"public_port,omitempty"`
-	Compat     *CompatSettings              `json:"compat,omitempty"`
+	Action              ActionKey                    `json:"action"`
+	External            map[string]external.External `json:"external,omitempty"`
+	RawMounts           *[]RawMountEntry             `json:"raw_mounts,omitempty"` // pointer to distinguish nil (not provided) from empty
+	FTPShares           *[]FTPShareEntry             `json:"ftp_shares,omitempty"` // pointer to distinguish nil from empty
+	FTPUsers            *[]FTPUserEntry              `json:"ftp_users,omitempty"`
+	FTPServe            *FTPServeSettings            `json:"ftp_serve,omitempty"`
+	SFTPServe           *SFTPServeSettings           `json:"sftp_serve,omitempty"`
+	TFTPServe           *TFTPServeSettings           `json:"tftp_serve,omitempty"`
+	WebDAVServe         *WebDAVServeSettings         `json:"webdav_serve,omitempty"`
+	Hooks               *[]hook.Hook                 `json:"hooks,omitempty"` // pointer to distinguish nil from empty
+	PublicPort          *PublicPortSettings          `json:"public_port,omitempty"`
+	Compat              *CompatSettings              `json:"compat,omitempty"`
+	ExternalPermissions *ExternalPermissionsSettings `json:"external_permissions,omitempty"`
+	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 }
 
 type ActionKey string
@@ -285,7 +337,40 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 		settings.Compat = patch.Compat
 	}
 
+	// Handle external-permissions update (if provided)
+	if patch.ExternalPermissions != nil {
+		settings.ExternalPermissions = patch.ExternalPermissions
+	}
+
+	// Handle forward-auth update (if provided)
+	if patch.ForwardAuth != nil {
+		settings.ForwardAuth = patch.ForwardAuth
+	}
+
 	return s.UpdateSettings(ctx, settings)
+}
+
+// GetExternalPermissionsSettings returns the current external-permissions
+// configuration or nil if none has been set. Used by the API layer to
+// decide whether to enforce permissions under forward auth and by the
+// permission resolver to map external groups to capability keys.
+func (s *Service) GetExternalPermissionsSettings(ctx context.Context) *ExternalPermissionsSettings {
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		return nil
+	}
+	return settings.ExternalPermissions
+}
+
+// GetForwardAuthSettings returns the current forward-auth configuration
+// or nil if none has been set. Used by the server layer to configure
+// the forward-auth Slot at startup and on settings changes.
+func (s *Service) GetForwardAuthSettings(ctx context.Context) *ForwardAuthSettings {
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		return nil
+	}
+	return settings.ForwardAuth
 }
 
 func (s *Service) UpdateSettings(ctx context.Context, settings *Settings) error {

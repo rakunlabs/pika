@@ -5,6 +5,10 @@
 
   const info = $derived(appStore.info);
   const authEnabled = $derived(info?.auth_enabled ?? false);
+  // builtinAuth gates features that require the built-in users table
+  // (user CRUD, permission bundle CRUD). Forward-auth-only deployments
+  // configure permissions via the Settings > External Permissions section.
+  const builtinAuth = $derived(info?.builtin_auth ?? false);
 
   const hasRawMounts = $derived((info?.raw_mounts?.length ?? 0) > 0);
 
@@ -23,7 +27,7 @@
       items.push({ path: '/settings', label: 'Settings', icon: Settings });
     }
 
-    if (authEnabled && appStore.hasPermission('users.manage')) {
+    if (builtinAuth && appStore.hasPermission('users.manage')) {
       items.push({ path: '/users', label: 'Users', icon: Users });
     }
 

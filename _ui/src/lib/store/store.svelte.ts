@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-import type { RawMount } from '@/lib/types/config';
+import type { RawMount, Capability } from '@/lib/types/config';
 
 export interface AppInfo {
   name: string;
@@ -8,9 +8,22 @@ export interface AppInfo {
   commit?: string;
   date?: string;
   user?: string;
+  // auth_enabled is true when permission checks are enforced — that is,
+  // under built-in auth OR under forward auth with ExternalPermissions.Enabled.
   auth_enabled?: boolean;
+  // builtin_auth is true only when session-based built-in auth is active.
+  // The Users/Permissions management pages require this.
+  builtin_auth?: boolean;
+  // forward_auth_enabled is true when the forward-auth Slot is active.
+  forward_auth_enabled?: boolean;
+  // forward_auth_redirect_url is the external SSO login URL (if configured).
+  forward_auth_redirect_url?: string;
   is_superadmin?: boolean;
   permissions?: string[];
+  // capabilities is the canonical list of capability keys the server knows
+  // about, with display names and descriptions. Used by the UI to render
+  // permission-bundle editors and the external-permissions mapping form.
+  capabilities?: Capability[];
   setup_required?: boolean;
   raw_mounts?: RawMount[];
 }

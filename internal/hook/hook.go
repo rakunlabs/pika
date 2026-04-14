@@ -40,9 +40,9 @@ type HookFilter struct {
 }
 
 // Target defines a single push destination for hook events.
-// Exactly one of HTTP, Kafka, Redis, or NATS should be set.
+// Exactly one of HTTP, Kafka, Redis, NATS, or Log should be set.
 type Target struct {
-	// Type identifies the target kind: "http", "kafka", "redis", or "nats".
+	// Type identifies the target kind: "http", "kafka", "redis", "nats", or "log".
 	Type string `json:"type"`
 	// HTTP holds configuration for HTTP webhook targets.
 	HTTP *HTTPTarget `json:"http,omitempty"`
@@ -52,6 +52,8 @@ type Target struct {
 	Redis *RedisTarget `json:"redis,omitempty"`
 	// NATS holds configuration for NATS targets.
 	NATS *NATSTarget `json:"nats,omitempty"`
+	// Log holds configuration for local slog logging targets.
+	Log *LogTarget `json:"log,omitempty"`
 	// BodyTemplate is an optional Go text/template string for customizing the
 	// event payload. When empty, the default JSON payload is used.
 	BodyTemplate string `json:"body_template,omitempty"`
@@ -199,6 +201,24 @@ type NATSTarget struct {
 	Username string `json:"username,omitempty"`
 	// Password for user/password authentication (optional).
 	Password string `json:"password,omitempty"`
+}
+
+// LogTarget configures a local slog logging target.
+// When an event matches, the sink writes one structured log line
+// at the configured Level, using Message as the log message and
+// Fields as key/value attributes. Both Message and each Fields value
+// are Go text/templates rendered against the Event.
+type LogTarget struct {
+	// Level is the slog level: "debug", "info", "warn", or "error".
+	// Default: "info".
+	Level string `json:"level,omitempty"`
+	// Message is a Go template for the log message. If empty,
+	// the event type string (e.g. "file.created") is used.
+	Message string `json:"message,omitempty"`
+	// Fields is a map of attribute name to Go template.
+	// Each template is rendered against the Event at dispatch time.
+	// Example: {"mount": "{{.Mount}}", "size": "{{.Size}}"}
+	Fields map[string]string `json:"fields,omitempty"`
 }
 
 // Matches reports whether the hook should fire for the given event type, mount, and path.

@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"time"
 
-	mforwardauth "github.com/rakunlabs/ada/middleware/forwardauth"
 	"github.com/rakunlabs/chu"
 	"github.com/rakunlabs/logi"
 	"github.com/rakunlabs/pika/internal/storage"
@@ -42,18 +41,14 @@ type Server struct {
 
 	BasePath string `cfg:"base_path"`
 
-	ForwardAuth *mforwardauth.ForwardAuth `cfg:"forward_auth"`
-
-	// Auth enables built-in user/password authentication.
-	// Mutually exclusive with ForwardAuth.
+	// Auth configures built-in user/password authentication.
 	Auth Auth `cfg:"auth"`
 }
 
 // Auth configures built-in user/password authentication.
-// When enabled, the first visit to the UI will show a setup screen
-// to create the initial admin account (no seed_user config needed).
+// Built-in auth is always enabled. The first visit to the UI will show a
+// setup screen to create the initial admin account.
 type Auth struct {
-	Enabled bool `cfg:"enabled" default:"true"`
 	// SessionTTL is the session lifetime (default: 24h).
 	SessionTTL time.Duration `cfg:"session_ttl"`
 	// Cookie configures session cookie properties.

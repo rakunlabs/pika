@@ -1,11 +1,17 @@
 <script lang="ts">
   import { appStore } from '@/lib/store/store.svelte';
-  import { Blocks, LogIn } from 'lucide-svelte';
+  import { Blocks, LogIn, ExternalLink } from 'lucide-svelte';
 
   let username = $state('');
   let password = $state('');
   let error = $state('');
   let loading = $state(false);
+
+  const ssoUrl = $derived(
+    appStore.info?.forward_auth_enabled && appStore.info?.forward_auth_redirect_url
+      ? appStore.info.forward_auth_redirect_url
+      : null
+  );
 
   async function handleSubmit(e: Event) {
     e.preventDefault();
@@ -77,6 +83,22 @@
           {loading ? 'Signing in...' : 'Sign in'}
         </button>
       </form>
+
+      {#if ssoUrl}
+        <div class="flex items-center gap-3 my-5">
+          <div class="flex-1 h-px bg-slate-200"></div>
+          <span class="text-xs text-slate-400">or</span>
+          <div class="flex-1 h-px bg-slate-200"></div>
+        </div>
+
+        <a
+          href={ssoUrl}
+          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 text-sm font-medium rounded-md border border-slate-300 hover:bg-slate-200 transition-colors"
+        >
+          <ExternalLink size={14} />
+          Login with SSO
+        </a>
+      {/if}
     </div>
   </div>
 </div>

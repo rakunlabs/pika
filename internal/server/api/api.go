@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"log/slog"
 
 	"github.com/rakunlabs/ada"
+	mforwardauth "github.com/rakunlabs/ada/middleware/forwardauth"
 	"github.com/rakunlabs/pika/internal/config"
 	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/rawfs"
@@ -27,12 +29,42 @@ import (
 	"github.com/rakunlabs/pika/internal/service"
 )
 
-// userMiddleware extracts the X-User header and injects it into the request context.
-func userMiddleware(next http.Handler) http.Handler {
+// userMiddleware extracts the X-User header and (optionally) a groups header
+// and injects them into the request context. The groups header is read only
+// when ExternalPermissions.Enabled is true in settings — typically under
+// forward auth, where an upstream gateway populates both X-User and the
+// configured groups header via its auth_response_headers allowlist.
+//
+// This is a method on *api so it can access the live settings on each
+// request (hot-reloadable via PatchSettings).
+func (a *api) userMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := r.Header.Get("X-User")
 		if user != "" {
-			r = r.WithContext(service.WithUser(r.Context(), user))
+			ctx := service.WithUser(r.Context(), user)
+
+			if ext := a.svc.GetExternalPermissionsSettings(r.Context()); ext != nil && ext.Enabled {
+				headerName := ext.GroupsHeader
+				if headerName == "" {
+					headerName = "X-Groups"
+				}
+				separator := ext.GroupsSeparator
+				if separator == "" {
+					separator = ","
+				}
+				var groups []string
+				for _, v := range r.Header.Values(headerName) {
+					for _, g := range strings.Split(v, separator) {
+						if g = strings.TrimSpace(g); g != "" {
+							groups = append(groups, g)
+						}
+					}
+				}
+				if len(groups) > 0 {
+					ctx = service.WithExternalGroups(ctx, groups)
+				}
+			}
+			r = r.WithContext(ctx)
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -56,8 +88,24 @@ type api struct {
 	info              Info
 	encStore          *secret.Storage     // nil if encryption is disabled
 	sessionStore      *session.Store      // nil if built-in auth is disabled
+	forwardAuthSlot   *ada.Slot           // runtime-togglable forward-auth middleware
 	rawHandler        *RawHandler         // nil if no raw mounts configured
 	startPublicServer PublicServerStarter // set by server.go
+}
+
+// permissionsEnforced reports whether permission checks should run for the
+// current request. With built-in auth always enabled this returns true.
+// It also returns true when external-permissions are enabled (for
+// forward-auth users whose identity comes from the external service).
+func (a *api) permissionsEnforced(ctx context.Context) bool {
+	// Built-in auth is always on.
+	if a.sessionStore != nil {
+		return true
+	}
+	if ext := a.svc.GetExternalPermissionsSettings(ctx); ext != nil && ext.Enabled {
+		return true
+	}
+	return false
 }
 
 type response struct {
@@ -76,15 +124,16 @@ func HandlePublic(m *ada.Mux, svc *service.Service, rh *RawHandler) error {
 	return nil
 }
 
-func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, sessionStore *session.Store, rh *RawHandler, publicStarter PublicServerStarter) error {
+func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, sessionStore *session.Store, forwardAuthSlot *ada.Slot, rh *RawHandler, publicStarter PublicServerStarter) error {
 	// Set hook service identification from config
 	hook.ServiceName = config.ServiceName
 	hook.Version = config.Version
 
-	api := &api{svc: svc, info: info, encStore: encStore, sessionStore: sessionStore, rawHandler: rh, startPublicServer: publicStarter}
+	api := &api{svc: svc, info: info, encStore: encStore, sessionStore: sessionStore, forwardAuthSlot: forwardAuthSlot, rawHandler: rh, startPublicServer: publicStarter}
 
-	// Inject X-User header into context for all API requests
-	m.Use(userMiddleware)
+	// Inject X-User header (and, when ExternalPermissions is enabled, the
+	// configured groups header) into context for all API requests.
+	m.Use(api.userMiddleware)
 
 	m.ErrorHandler(api.errorHandler)
 
@@ -105,87 +154,97 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 		mAuth.GET("/api/v1/auth/setup", mAuth.Wrap(api.getSetupStatus))
 		mAuth.POST("/api/v1/auth/setup", mAuth.Wrap(api.setup))
 
-		// User management endpoints — protected by session middleware + permission
-		m.GET("/api/v1/users", m.Wrap(api.withPerm("users.manage", api.listUsers)))
-		m.POST("/api/v1/users", m.Wrap(api.withPerm("users.manage", api.createUser)))
-		m.GET("/api/v1/users/*", m.Wrap(api.withPerm("users.manage", api.getUser)))
-		m.PATCH("/api/v1/users/*", m.Wrap(api.withPerm("users.manage", api.updateUser)))
-		m.DELETE("/api/v1/users/*", m.Wrap(api.withPerm("users.manage", api.deleteUser)))
-		m.POST("/api/v1/users-kick/*", m.Wrap(api.withPerm("users.manage", api.kickUser)))
+		// User management endpoints — only available under built-in auth, since
+		// the users table is the only place permissions can attach for session
+		// users. Forward auth uses the ExternalPermissions mapping instead.
+		m.GET("/api/v1/users", m.Wrap(api.withPerm(service.CapUsersManage, api.listUsers)))
+		m.POST("/api/v1/users", m.Wrap(api.withPerm(service.CapUsersManage, api.createUser)))
+		m.GET("/api/v1/users/*", m.Wrap(api.withPerm(service.CapUsersManage, api.getUser)))
+		m.PATCH("/api/v1/users/*", m.Wrap(api.withPerm(service.CapUsersManage, api.updateUser)))
+		m.DELETE("/api/v1/users/*", m.Wrap(api.withPerm(service.CapUsersManage, api.deleteUser)))
+		m.POST("/api/v1/users-kick/*", m.Wrap(api.withPerm(service.CapUsersManage, api.kickUser)))
 
-		// Permission management endpoints
-		m.GET("/api/v1/permissions", m.Wrap(api.withPerm("permissions.manage", api.listPermissions)))
-		m.POST("/api/v1/permissions", m.Wrap(api.withPerm("permissions.manage", api.createPermission)))
-		m.PATCH("/api/v1/permissions/*", m.Wrap(api.withPerm("permissions.manage", api.updatePermission)))
-		m.DELETE("/api/v1/permissions/*", m.Wrap(api.withPerm("permissions.manage", api.deletePermission)))
+		// Permission bundle management — also built-in only, since the
+		// forward-auth path stores its mapping directly in ExternalPermissions.
+		m.GET("/api/v1/permissions", m.Wrap(api.withPerm(service.CapPermissionsManage, api.listPermissions)))
+		m.POST("/api/v1/permissions", m.Wrap(api.withPerm(service.CapPermissionsManage, api.createPermission)))
+		m.PATCH("/api/v1/permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.updatePermission)))
+		m.DELETE("/api/v1/permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.deletePermission)))
 
 		// User permission assignment endpoints
-		m.GET("/api/v1/user-permissions/*", m.Wrap(api.withPerm("permissions.manage", api.getUserPermissions)))
-		m.PUT("/api/v1/user-permissions/*", m.Wrap(api.withPerm("permissions.manage", api.setUserPermissions)))
+		m.GET("/api/v1/user-permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.getUserPermissions)))
+		m.PUT("/api/v1/user-permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.setUserPermissions)))
 	}
 
-	m.GET("/api/v1/folder", m.Wrap(api.withPerm("files.read", api.getFolder)))
-	m.GET("/api/v1/folder/*", m.Wrap(api.withPerm("files.read", api.getFolder)))
-	m.POST("/api/v1/folder/*", m.Wrap(api.withPerm("files.write", api.postFolder)))
-	m.DELETE("/api/v1/folder/*", m.Wrap(api.withPerm("files.write", api.deleteFolder)))
+	m.GET("/api/v1/folder", m.Wrap(api.withPerm(service.CapFilesRead, api.getFolder)))
+	m.GET("/api/v1/folder/*", m.Wrap(api.withPerm(service.CapFilesRead, api.getFolder)))
+	m.POST("/api/v1/folder/*", m.Wrap(api.withPerm(service.CapFilesWrite, api.postFolder)))
+	m.DELETE("/api/v1/folder/*", m.Wrap(api.withPerm(service.CapFilesWrite, api.deleteFolder)))
 
-	m.GET("/api/v1/file/*", m.Wrap(api.withPerm("files.read", api.getFile)))
-	m.POST("/api/v1/file/*", m.Wrap(api.withPerm("files.write", api.postFile)))
-	m.DELETE("/api/v1/file/*", m.Wrap(api.withPerm("files.write", api.deleteFile)))
+	m.GET("/api/v1/file/*", m.Wrap(api.withPerm(service.CapFilesRead, api.getFile)))
+	m.POST("/api/v1/file/*", m.Wrap(api.withPerm(service.CapFilesWrite, api.postFile)))
+	m.DELETE("/api/v1/file/*", m.Wrap(api.withPerm(service.CapFilesWrite, api.deleteFile)))
 
 	// File versions endpoint
-	m.GET("/api/v1/versions/*", m.Wrap(api.withPerm("files.read", api.getFileVersions)))
-	m.PATCH("/api/v1/versions/*", m.Wrap(api.withPerm("files.write", api.patchFileVersion)))
+	m.GET("/api/v1/versions/*", m.Wrap(api.withPerm(service.CapFilesRead, api.getFileVersions)))
+	m.PATCH("/api/v1/versions/*", m.Wrap(api.withPerm(service.CapFilesWrite, api.patchFileVersion)))
 
 	// Variant endpoints
-	m.GET("/api/v1/variants/*", m.Wrap(api.withPerm("files.read", api.listVariants)))
+	m.GET("/api/v1/variants/*", m.Wrap(api.withPerm(service.CapFilesRead, api.listVariants)))
 
 	// Render endpoint — resolves inheritance and variations for preview
-	m.POST("/api/v1/render/*", m.Wrap(api.withPerm("files.read", api.renderFile)))
+	m.POST("/api/v1/render/*", m.Wrap(api.withPerm(service.CapFilesRead, api.renderFile)))
 
 	// Token management endpoints
-	m.GET("/api/v1/tokens", m.Wrap(api.withPerm("tokens.manage", api.listTokens)))
-	m.POST("/api/v1/tokens", m.Wrap(api.withPerm("tokens.manage", api.createToken)))
-	m.DELETE("/api/v1/tokens/*", m.Wrap(api.withPerm("tokens.manage", api.deleteToken)))
-	m.PATCH("/api/v1/tokens/*", m.Wrap(api.withPerm("tokens.manage", api.patchToken)))
+	m.GET("/api/v1/tokens", m.Wrap(api.withPerm(service.CapTokensManage, api.listTokens)))
+	m.POST("/api/v1/tokens", m.Wrap(api.withPerm(service.CapTokensManage, api.createToken)))
+	m.DELETE("/api/v1/tokens/*", m.Wrap(api.withPerm(service.CapTokensManage, api.deleteToken)))
+	m.PATCH("/api/v1/tokens/*", m.Wrap(api.withPerm(service.CapTokensManage, api.patchToken)))
 
 	// Format conversion endpoint
-	m.POST("/api/v1/convert", m.Wrap(api.withPerm("files.read", api.convertFormat)))
+	m.POST("/api/v1/convert", m.Wrap(api.withPerm(service.CapFilesRead, api.convertFormat)))
 
-	// Search endpoint (SSE streaming) — not wrapped with withPerm (standard handler, not ada handler)
+	// Search endpoint (SSE streaming) — not wrapped with withPerm since it is a
+	// raw http.Handler, not an ada handler. The check is inlined at the top
+	// of searchHandler instead.
 	m.GET("/api/v1/search", api.searchHandler)
 
 	// Key rotation endpoint (requires admin_secret)
-	m.POST("/api/v1/rotate", m.Wrap(api.withPerm("settings.manage", api.rotateKey)))
-	m.POST("/api/v1/tls-generate", m.Wrap(api.withPerm("settings.manage", api.generateTLS)))
-	m.POST("/api/v1/ssh-keygen", m.Wrap(api.withPerm("settings.manage", api.generateSSHKey)))
+	m.POST("/api/v1/rotate", m.Wrap(api.withPerm(service.CapSettingsManage, api.rotateKey)))
+	m.POST("/api/v1/tls-generate", m.Wrap(api.withPerm(service.CapSettingsManage, api.generateTLS)))
+	m.POST("/api/v1/ssh-keygen", m.Wrap(api.withPerm(service.CapSettingsManage, api.generateSSHKey)))
 
 	// Admin secret management endpoints
-	m.GET("/api/v1/admin-secret/status", m.Wrap(api.withPerm("settings.manage", api.adminSecretStatus)))
-	m.PUT("/api/v1/admin-secret", m.Wrap(api.withPerm("settings.manage", api.setAdminSecret)))
+	m.GET("/api/v1/admin-secret/status", m.Wrap(api.withPerm(service.CapSettingsManage, api.adminSecretStatus)))
+	m.PUT("/api/v1/admin-secret", m.Wrap(api.withPerm(service.CapSettingsManage, api.setAdminSecret)))
 
 	// Settings
-	m.GET("/api/v1/settings", m.Wrap(api.withPerm("settings.manage", api.getSettings)))
-	m.POST("/api/v1/settings", m.Wrap(api.withPerm("settings.manage", api.postSettings)))
+	m.GET("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.getSettings)))
+	m.POST("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.postSettings)))
 
 	// Backup & Restore (requires admin secret)
-	m.GET("/api/v1/backup", m.Wrap(api.withPerm("settings.manage", api.exportBackup)))
-	m.POST("/api/v1/backup", m.Wrap(api.withPerm("settings.manage", api.importBackup)))
+	m.GET("/api/v1/backup", m.Wrap(api.withPerm(service.CapSettingsManage, api.exportBackup)))
+	m.POST("/api/v1/backup", m.Wrap(api.withPerm(service.CapSettingsManage, api.importBackup)))
 
 	// Raw filesystem browsing and management (for UI, uses session auth)
-	m.GET("/api/v1/raw/*", m.Wrap(api.withPerm("raw.read", api.rawHandler.serveRaw)))
-	m.PUT("/api/v1/raw/*", m.Wrap(api.withPerm("raw.write", api.rawHandler.writeFile)))
-	m.DELETE("/api/v1/raw/*", m.Wrap(api.withPerm("raw.write", api.rawHandler.deleteFile)))
-	m.POST("/api/v1/raw-mkdir/*", m.Wrap(api.withPerm("raw.write", api.rawHandler.mkDir)))
-	m.POST("/api/v1/raw-rename", m.Wrap(api.withPerm("raw.write", api.rawHandler.renameFile)))
-	m.POST("/api/v1/raw-copy", m.Wrap(api.withPerm("raw.write", api.rawHandler.copyFile)))
-	m.POST("/api/v1/raw-move", m.Wrap(api.withPerm("raw.write", api.rawHandler.moveFile)))
+	m.GET("/api/v1/raw/*", m.Wrap(api.withPerm(service.CapRawRead, api.rawHandler.serveRaw)))
+	m.PUT("/api/v1/raw/*", m.Wrap(api.withPerm(service.CapRawWrite, api.rawHandler.writeFile)))
+	m.DELETE("/api/v1/raw/*", m.Wrap(api.withPerm(service.CapRawWrite, api.rawHandler.deleteFile)))
+	m.POST("/api/v1/raw-mkdir/*", m.Wrap(api.withPerm(service.CapRawWrite, api.rawHandler.mkDir)))
+	m.POST("/api/v1/raw-rename", m.Wrap(api.withPerm(service.CapRawWrite, api.rawHandler.renameFile)))
+	m.POST("/api/v1/raw-copy", m.Wrap(api.withPerm(service.CapRawWrite, api.rawHandler.copyFile)))
+	m.POST("/api/v1/raw-move", m.Wrap(api.withPerm(service.CapRawWrite, api.rawHandler.moveFile)))
 
-	// External resource browsing
-	m.GET("/api/v1/external/*/paths", m.Wrap(api.listExternalPaths))
+	// External resource browsing — listing external paths exposes the shape
+	// of configured secret backends, so it's gated on settings management.
+	m.GET("/api/v1/external/*/paths", m.Wrap(api.withPerm(service.CapSettingsManage, api.listExternalPaths)))
 
-	m.GET("/api/v1/info", m.Wrap(api.infoHandler))
-	m.GET("/healthz", m.Wrap(api.healthzHandler))
+	// info and healthz are registered on the unprotected mux so the SPA
+	// can always boot (even when forward-auth would redirect API calls).
+	// The handler itself checks context for user identity and returns
+	// appropriate info — full details when authenticated, minimal when not.
+	mAuth.GET("/api/v1/info", mAuth.Wrap(api.infoHandler))
+	mAuth.GET("/healthz", mAuth.Wrap(api.healthzHandler))
 
 	return nil
 }
@@ -214,48 +273,67 @@ func (a *api) healthzHandler(c *ada.Context) error {
 }
 
 func (a *api) infoHandler(c *ada.Context) error {
-	username := service.UserFromContext(c.Request.Context())
+	ctx := c.Request.Context()
+
+	// This endpoint lives on the unprotected mux (mAuth) so the SPA can
+	// always boot. Try to identify the caller from the session cookie or
+	// forward-auth headers — but never block if neither is present.
+	username := service.UserFromContext(ctx)
+	if username == "" && a.sessionStore != nil {
+		if cookie, err := c.Request.Cookie(a.sessionStore.CookieName()); err == nil && cookie.Value != "" {
+			if sess := a.sessionStore.Get(cookie.Value); sess != nil {
+				username = sess.Username
+				ctx = service.WithUserInfo(ctx, sess.Username, sess.UserID)
+			}
+		}
+	}
+	// Also check X-User header (forward-auth identity without middleware).
+	if username == "" {
+		if xUser := c.Request.Header.Get("X-User"); xUser != "" {
+			username = xUser
+			ctx = service.WithUser(ctx, xUser)
+		}
+	}
+
+	// Expose the forward-auth redirect URL (if configured) so the login
+	// page can show a "Login with SSO" button for unauthenticated users.
+	var forwardAuthRedirectURL string
+	if a.forwardAuthSlot != nil && a.forwardAuthSlot.Enabled() {
+		if fa := a.svc.GetForwardAuthSettings(ctx); fa != nil && fa.RedirectURL != "" {
+			forwardAuthRedirectURL = fa.RedirectURL
+		}
+	}
 
 	resp := struct {
 		Info
-		User         string      `json:"user,omitempty"`
-		AuthEnabled  bool        `json:"auth_enabled"`
-		IsSuperadmin bool        `json:"is_superadmin"`
-		Permissions  []string    `json:"permissions"`
-		RawMounts    []MountInfo `json:"raw_mounts,omitempty"`
+		User                   string               `json:"user,omitempty"`
+		AuthEnabled            bool                 `json:"auth_enabled"`
+		BuiltinAuth            bool                 `json:"builtin_auth"`
+		ForwardAuthEnabled     bool                 `json:"forward_auth_enabled"`
+		ForwardAuthRedirectURL string               `json:"forward_auth_redirect_url,omitempty"`
+		IsSuperadmin           bool                 `json:"is_superadmin"`
+		Permissions            []string             `json:"permissions"`
+		Capabilities           []service.Capability `json:"capabilities"`
+		RawMounts              []MountInfo          `json:"raw_mounts,omitempty"`
 	}{
-		Info:        a.info,
-		User:        username,
-		AuthEnabled: a.sessionStore != nil,
-		Permissions: []string{},
-		RawMounts:   a.rawHandler.MountsInfo(),
+		Info:                   a.info,
+		User:                   username,
+		AuthEnabled:            a.permissionsEnforced(ctx),
+		BuiltinAuth:            a.sessionStore != nil,
+		ForwardAuthEnabled:     a.forwardAuthSlot != nil && a.forwardAuthSlot.Enabled(),
+		ForwardAuthRedirectURL: forwardAuthRedirectURL,
+		Permissions:            []string{},
+		Capabilities:           service.KnownCapabilities,
+		RawMounts:              a.rawHandler.MountsInfo(),
 	}
 
-	// Populate permissions if auth is enabled and user is authenticated
-	if a.sessionStore != nil && username != "" && username != "system" {
-		keys, isSuperadmin, err := a.svc.GetUserPermissionKeysByUsername(c.Request.Context(), username)
+	// Resolve capability keys via the unified resolver — handles both
+	// built-in users (DB lookup) and forward-auth users (group mapping).
+	if resp.AuthEnabled && username != "" && username != "system" {
+		keys, isSuperadmin, _, err := a.svc.ResolveUserCapabilityKeys(ctx, username)
 		if err == nil {
 			resp.IsSuperadmin = isSuperadmin
-			if isSuperadmin {
-				// Superadmins get all unique capability keys from all permissions
-				allPerms, err := a.svc.ListPermissions(c.Request.Context())
-				if err == nil {
-					seen := make(map[string]struct{})
-					var allKeys []string
-					for _, p := range allPerms {
-						for _, k := range p.Keys {
-							if _, ok := seen[k]; !ok {
-								seen[k] = struct{}{}
-								allKeys = append(allKeys, k)
-							}
-						}
-					}
-					if allKeys == nil {
-						allKeys = []string{}
-					}
-					resp.Permissions = allKeys
-				}
-			} else {
+			if keys != nil {
 				resp.Permissions = keys
 			}
 		}
@@ -334,7 +412,59 @@ func (a *api) postSettings(c *ada.Context) error {
 		}
 	}
 
+	// If forward-auth was updated, hot-swap the Slot.
+	if patchSettings.ForwardAuth != nil {
+		a.reloadForwardAuth(c.Request.Context())
+	}
+
+	// If external permissions were updated, userMiddleware picks up the new
+	// settings on the next request automatically — just log the change so
+	// admins can confirm it took effect.
+	if patchSettings.ExternalPermissions != nil {
+		if patchSettings.ExternalPermissions.Enabled {
+			slog.Info("external permissions enabled",
+				"groups_header", patchSettings.ExternalPermissions.GroupsHeader,
+				"mapping_entries", len(patchSettings.ExternalPermissions.Mapping),
+				"superadmins", len(patchSettings.ExternalPermissions.Superadmins),
+			)
+		} else {
+			slog.Info("external permissions disabled")
+		}
+	}
+
 	return c.SetStatus(http.StatusOK).SendJSON(patchSettings)
+}
+
+// reloadForwardAuth reads the current forward-auth settings from DB and
+// hot-swaps the ada.Slot — enabling, replacing, or disabling the
+// forward-auth middleware at runtime without a server restart.
+func (a *api) reloadForwardAuth(ctx context.Context) {
+	fa := a.svc.GetForwardAuthSettings(ctx)
+	if fa != nil && fa.Enabled && fa.Address != "" {
+		cfg := mforwardauth.ForwardAuth{
+			Address:                  fa.Address,
+			AuthResponseHeaders:      fa.AuthResponseHeaders,
+			AuthResponseHeadersRegex: fa.AuthResponseHeadersRegex,
+			AuthRequestHeaders:       fa.AuthRequestHeaders,
+			TrustForwardHeader:       fa.TrustForwardHeader,
+			InsecureSkipVerify:       fa.InsecureSkipVerify,
+			RedirectURL:              fa.RedirectURL,
+			RedirectCode:             fa.RedirectCode,
+			RedirectStatusCodes:      fa.RedirectStatusCodes,
+			RequestMethod:            fa.RequestMethod,
+		}
+		if fa.Timeout != "" {
+			if d, err := time.ParseDuration(fa.Timeout); err == nil {
+				cfg.Timeout = d
+			}
+		}
+		a.forwardAuthSlot.Replace(mforwardauth.Middleware(mforwardauth.WithConfig(cfg)))
+		a.forwardAuthSlot.Enable()
+		slog.Info("forward-auth reloaded", "address", fa.Address)
+	} else {
+		a.forwardAuthSlot.Disable()
+		slog.Info("forward-auth disabled")
+	}
 }
 
 // reloadHooks reads hooks from settings and updates the dispatcher.
@@ -1243,6 +1373,23 @@ func (a *api) setAdminSecret(c *ada.Context) error {
 // searchHandler uses SSE to stream search results as they are found.
 // The client can abort the connection to cancel the search.
 func (a *api) searchHandler(w http.ResponseWriter, r *http.Request) {
+	// Inline permission check — this is a raw http.Handler, not an ada
+	// handler, so it can't use the withPerm wrapper. Semantics must match
+	// a withPerm(files.read, ...) call exactly.
+	if a.permissionsEnforced(r.Context()) {
+		username := service.UserFromContext(r.Context())
+		if username != "" && username != "system" {
+			if err := a.svc.CheckPermission(r.Context(), username, service.CapFilesRead); err != nil {
+				if errors.Is(err, service.ErrForbidden) {
+					http.Error(w, `{"message":"forbidden"}`, http.StatusForbidden)
+				} else {
+					http.Error(w, `{"message":"permission check failed"}`, http.StatusInternalServerError)
+				}
+				return
+			}
+		}
+	}
+
 	query := r.URL.Query().Get("q")
 	if query == "" {
 		http.Error(w, `{"message":"query parameter 'q' is required"}`, http.StatusBadRequest)

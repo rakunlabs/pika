@@ -44,16 +44,12 @@
   let editPermKeys = $state<string[]>([]);
   let confirmDeletePermId = $state<string | null>(null);
 
-  const knownKeys: { key: string; name: string; description: string }[] = [
-    { key: 'users.manage', name: 'User Management', description: 'Create, edit, delete and kick users' },
-    { key: 'permissions.manage', name: 'Permission Management', description: 'Create, edit, delete permissions and assign them to users' },
-    { key: 'settings.manage', name: 'Settings Management', description: 'View and modify server settings, admin secret, backup/restore, key rotation' },
-    { key: 'tokens.manage', name: 'Token Management', description: 'Create, edit and revoke API access tokens' },
-    { key: 'files.read', name: 'Configurations Read', description: 'View folders, files, versions, variants, render and search configurations' },
-    { key: 'files.write', name: 'Configurations Write', description: 'Create, update and delete folders and configuration files' },
-    { key: 'raw.read', name: 'Raw Files Read', description: 'Browse and download raw files from mounted filesystems' },
-    { key: 'raw.write', name: 'Raw Files Write', description: 'Upload, delete, rename, copy and move raw files' },
-  ];
+  // Canonical list of capability keys — sourced from the server via
+  // /api/v1/info so this stays in sync with the Go constants in
+  // internal/service/capabilities.go automatically.
+  const knownKeys = $derived<{ key: string; name: string; description: string }[]>(
+    appStore.info?.capabilities ?? []
+  );
 
   const users = $derived(appStore.users);
   const total = $derived(appStore.usersTotal);

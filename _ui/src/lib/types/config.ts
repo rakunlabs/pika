@@ -357,12 +357,20 @@ export interface NATSTarget {
   password?: string;
 }
 
+// Local slog logging target for hooks
+export interface LogTarget {
+  level?: 'debug' | 'info' | 'warn' | 'error';
+  message?: string;                 // Go text/template rendered against the Event
+  fields?: Record<string, string>;  // key -> Go text/template value
+}
+
 export interface HookTarget {
-  type: string;            // "http", "kafka", "redis", or "nats"
+  type: string;            // "http", "kafka", "redis", "nats", or "log"
   http?: HTTPTarget;
   kafka?: KafkaTarget;
   redis?: RedisTarget;
   nats?: NATSTarget;
+  log?: LogTarget;
   body_template?: string;  // Go text/template for custom payload
 }
 
@@ -397,6 +405,35 @@ export interface ConsulKVSettings {
   base_path?: string; // default: "/consul"
 }
 
+// Forward-auth settings — delegates authentication to an external service.
+// The middleware is hot-swapped via an ada.Slot at runtime.
+export interface ForwardAuthSettings {
+  enabled: boolean;
+  address: string;
+  auth_response_headers?: string[];
+  auth_response_headers_regex?: string;
+  auth_request_headers?: string[];
+  trust_forward_header?: boolean;
+  insecure_skip_verify?: boolean;
+  timeout?: string;          // Go duration string, e.g. "10s"
+  redirect_url?: string;
+  redirect_code?: number;
+  redirect_status_codes?: number[];
+  request_method?: string;
+}
+
+// External permissions settings — enables forward-auth permission enforcement.
+// The groups header (default X-Groups) is read from each request and mapped
+// to pika capability keys via the Mapping. Superadmins is an allowlist of
+// usernames that bypass all permission checks.
+export interface ExternalPermissionsSettings {
+  enabled: boolean;
+  groups_header?: string;         // default: "X-Groups"
+  groups_separator?: string;      // default: ","
+  mapping?: Record<string, string[]>;
+  superadmins?: string[];
+}
+
 // Settings from API
 export interface Settings {
   external?: Record<string, ExternalResource>;
@@ -410,6 +447,15 @@ export interface Settings {
   hooks?: Hook[];
   public_port?: PublicPortSettings;
   compat?: CompatSettings;
+  external_permissions?: ExternalPermissionsSettings;
+  forward_auth?: ForwardAuthSettings;
+}
+
+// Capability descriptor returned by /api/v1/info
+export interface Capability {
+  key: string;
+  name: string;
+  description: string;
 }
 
 // API response types

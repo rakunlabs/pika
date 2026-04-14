@@ -297,27 +297,60 @@ Pika is configured via environment variables (prefixed with `PIKA_`) or a config
 
 ### Built-in Authentication
 
+Built-in session-based authentication is always enabled. On first launch, the UI shows a setup screen to create the initial admin account.
+
+Session lifetime and cookie properties can be tuned via the config file or environment variables:
+
 ```yaml
 server:
   auth:
     session_ttl: 24h
+    cookie:
+      secure: true
+      same_site: lax
 ```
-
-On first launch, the UI will show a setup screen to create your initial admin account.
 
 ### Forward Auth
 
-Pika supports forward authentication (e.g., with Turna, Authelia, Authentik):
+Pika supports forward authentication (e.g., with Turna, Authelia, Authentik). Forward-auth is configured and toggled at runtime from **Settings > Forward Auth** in the UI — no server restart required. The middleware is hot-swapped via an [ada Slot](https://rakunlabs.github.io/ada/guide/runtime-reload.html).
 
-```yaml
-server:
-  forward_auth:
-    address: http://authelia:9091/api/verify
-    request_headers:
-      - Cookie
-    response_headers:
-      - X-User
+When enabled, pika uses a **session-first** strategy:
+
+1. If the request has a valid local session cookie, the user is authenticated immediately (forward-auth is skipped).
+2. If no session cookie is present and forward-auth is enabled, pika delegates authentication to the configured external auth service.
+3. If neither succeeds, the request gets a 401.
+
+This means local login always works — even when forward-auth is active. The `/api/v1/info` endpoint is always accessible so the SPA can boot and show the local login page regardless of forward-auth redirects.
+
+#### Forward-Auth Permissions
+
+Under forward auth, pika can translate external group names into its own capability keys. This is configured at runtime in **Settings > Forward Auth > Permissions** tab in the UI, and persisted in the database alongside other settings. The pika-native capability keys are:
+
+| Key                    | Grants                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------- |
+| `files.read`           | View configurations, versions, variants, render, search, convert                |
+| `files.write`          | Create, update, delete configurations and variants                              |
+| `raw.read`             | Browse and download raw mount contents                                          |
+| `raw.write`            | Upload, delete, rename, copy, move raw mount contents                           |
+| `settings.manage`      | View and modify server settings, admin secret, backup/restore, key rotation    |
+| `tokens.manage`        | Create, edit, revoke API access tokens                                          |
+| `users.manage`         | Create, edit, delete, kick users (built-in auth only)                           |
+| `permissions.manage`   | Define permission bundles and assign them (built-in auth only)                  |
+
+Example mapping: if your gateway emits `X-Groups: pika-editor,auditors` for a user, a mapping like
+
 ```
+pika-editor  →  files.read, files.write, raw.read
+auditors     →  files.read, raw.read, tokens.manage
+```
+
+grants that user the union of both sets. A user in multiple groups gets the union; unknown groups are ignored. Users not in the Superadmins allowlist and without any matching group are **denied** any restricted action (403).
+
+When external permissions are **disabled** (the default), forward-auth users have no permission checks applied — pika trusts the gateway completely. Enable enforcement from the **Permissions** tab once the mapping is in place.
+
+The groups header name and value separator are configurable. If your gateway uses `X-Pika-Roles` with `|` separators, set both fields in the Permissions form; pika also accepts repeated header lines as a single concatenated list.
+
+Forward-auth users are identified purely by username — pika does not create rows in its `users` table for them. User and Permission bundle management in the UI remains available only under built-in auth.
 
 ## Kubernetes Deployment
 

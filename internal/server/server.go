@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
+	"time"
 
 	"github.com/rakunlabs/ada"
 	"github.com/rakunlabs/into"
@@ -29,11 +31,68 @@ import (
 	"github.com/rakunlabs/pika/internal/service"
 )
 
-func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info api.Info, encStore *secret.Storage) error {
-	if cfg.Server.ForwardAuth != nil && cfg.Server.Auth.Enabled {
-		return fmt.Errorf("forward_auth and auth are mutually exclusive; configure only one")
+// buildForwardAuthMiddleware converts a ForwardAuthSettings (stored in DB)
+// into an ada forward-auth middleware.
+func buildForwardAuthMiddleware(fa *service.ForwardAuthSettings) ada.MiddlewareFunc {
+	cfg := mforwardauth.ForwardAuth{
+		Address:                  fa.Address,
+		AuthResponseHeaders:      fa.AuthResponseHeaders,
+		AuthResponseHeadersRegex: fa.AuthResponseHeadersRegex,
+		AuthRequestHeaders:       fa.AuthRequestHeaders,
+		TrustForwardHeader:       fa.TrustForwardHeader,
+		InsecureSkipVerify:       fa.InsecureSkipVerify,
+		RedirectURL:              fa.RedirectURL,
+		RedirectCode:             fa.RedirectCode,
+		RedirectStatusCodes:      fa.RedirectStatusCodes,
+		RequestMethod:            fa.RequestMethod,
 	}
 
+	if fa.Timeout != "" {
+		if d, err := time.ParseDuration(fa.Timeout); err == nil {
+			cfg.Timeout = d
+		}
+	}
+
+	return mforwardauth.Middleware(mforwardauth.WithConfig(cfg))
+}
+
+// combinedAuthMiddleware returns a middleware that tries session authentication
+// first and falls back to forward-auth (via the Slot) when no valid session
+// exists. If neither succeeds the request receives 401 Unauthorized.
+//
+// Auth endpoints (/api/v1/auth/*) are registered on a separate mux that does
+// not pass through this middleware, so the local login page is always reachable.
+func combinedAuthMiddleware(store *session.Store, slot *ada.Slot) ada.MiddlewareFunc {
+	fwdAuth := slot.Middleware()
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// 1. Session-first: check cookie
+			if cookie, err := r.Cookie(store.CookieName()); err == nil && cookie.Value != "" {
+				if sess := store.Get(cookie.Value); sess != nil {
+					ctx := service.WithUserInfo(r.Context(), sess.Username, sess.UserID)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+
+			// 2. Forward-auth fallback (if the Slot is enabled).
+			// The forward-auth middleware handles response on its own:
+			//   - success: copies configured response headers, calls next
+			//   - failure: returns the auth-service response (401/redirect)
+			if slot.Enabled() {
+				fwdAuth(next).ServeHTTP(w, r)
+				return
+			}
+
+			// 3. Neither succeeded.
+			w.Header().Set("Content-Type", "application/json")
+			http.Error(w, `{"message":"unauthorized"}`, http.StatusUnauthorized)
+		})
+	}
+}
+
+func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info api.Info, encStore *secret.Storage) error {
 	// Build initial raw mount handler from DB settings (includes hook dispatcher)
 	rh := api.BuildInitialRawHandler(ctx, svc)
 
@@ -56,32 +115,43 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	m := server.Group(cfg.Server.BasePath)
 	mAuth := server.Group(cfg.Server.BasePath)
 
-	var sessionStore *session.Store
+	// --- Authentication setup ---
+	// Local auth (session-based) is always enabled.
+	// Forward-auth can be layered on top via an ada.Slot that is toggled
+	// at runtime from the settings UI.
 
-	if cfg.Server.ForwardAuth != nil {
-		slog.Info("forward auth enabled", "url", cfg.Server.ForwardAuth.Address)
-		m.Use(mforwardauth.Middleware(mforwardauth.WithConfig(*cfg.Server.ForwardAuth)))
-	} else if cfg.Server.Auth.Enabled {
-		slog.Info("built-in auth enabled")
+	slog.Info("built-in auth enabled")
 
-		cookieOpts := session.CookieOptions{
-			Name:     cfg.Server.Auth.Cookie.Name,
-			Domain:   cfg.Server.Auth.Cookie.Domain,
-			Path:     cfg.Server.Auth.Cookie.Path,
-			Secure:   cfg.Server.Auth.Cookie.Secure,
-			SameSite: session.ParseSameSite(cfg.Server.Auth.Cookie.SameSite),
-		}
-
-		sessionStore = session.NewStore(svc.SessionStorage(), cfg.Server.Auth.SessionTTL, cookieOpts)
-		m.Use(sessionStore.Middleware)
-
-		// Ensure at least one superadmin exists (handles upgrade from older versions)
-		if err := svc.EnsureSuperadmin(ctx); err != nil {
-			slog.Warn("failed to ensure superadmin", "error", err)
-		}
-	} else {
-		slog.Info("no auth configured — admin API is unprotected")
+	cookieOpts := session.CookieOptions{
+		Name:     cfg.Server.Auth.Cookie.Name,
+		Domain:   cfg.Server.Auth.Cookie.Domain,
+		Path:     cfg.Server.Auth.Cookie.Path,
+		Secure:   cfg.Server.Auth.Cookie.Secure,
+		SameSite: session.ParseSameSite(cfg.Server.Auth.Cookie.SameSite),
 	}
+
+	sessionStore := session.NewStore(svc.SessionStorage(), cfg.Server.Auth.SessionTTL, cookieOpts)
+
+	// Ensure at least one superadmin exists (handles upgrade from older versions)
+	if err := svc.EnsureSuperadmin(ctx); err != nil {
+		slog.Warn("failed to ensure superadmin", "error", err)
+	}
+
+	// Create the forward-auth Slot — starts as NoOp (disabled).
+	// The api layer will populate it from DB settings at startup
+	// and hot-swap it when settings change.
+	forwardAuthSlot := ada.NewSlot(ada.NoOp())
+	forwardAuthSlot.Disable()
+
+	// Load forward-auth settings from DB and populate the Slot if enabled.
+	if fa := svc.GetForwardAuthSettings(ctx); fa != nil && fa.Enabled && fa.Address != "" {
+		forwardAuthSlot.Replace(buildForwardAuthMiddleware(fa))
+		forwardAuthSlot.Enable()
+		slog.Info("forward-auth enabled from settings", "address", fa.Address)
+	}
+
+	// Register the combined auth middleware on the admin API group.
+	m.Use(combinedAuthMiddleware(sessionStore, forwardAuthSlot))
 
 	// publicServerStarter is a callback that creates and starts the public HTTP server.
 	// It is passed into the api layer so it can dynamically start/stop the public server
@@ -90,7 +160,7 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		return startPublicServer(ctx, cfg, svc, settings, rh2)
 	}
 
-	if err := api.Handle(m, mData, mAuth, svc, info, encStore, sessionStore, rh, publicServerStarter); err != nil {
+	if err := api.Handle(m, mData, mAuth, svc, info, encStore, sessionStore, forwardAuthSlot, rh, publicServerStarter); err != nil {
 		return err
 	}
 

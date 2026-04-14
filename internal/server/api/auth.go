@@ -54,17 +54,6 @@ func (a *api) logout(c *ada.Context) error {
 	return c.SetStatus(http.StatusOK).SendJSON(response{Message: "logged out"})
 }
 
-// me returns the current authenticated user's info.
-func (a *api) me(c *ada.Context) error {
-	user := service.UserFromContext(c.Request.Context())
-
-	return c.SetStatus(http.StatusOK).SendJSON(struct {
-		User string `json:"user"`
-	}{
-		User: user,
-	})
-}
-
 // listUsers returns users with optional pagination, sorting and filtering.
 //
 // Supported query parameters (via github.com/rakunlabs/query):

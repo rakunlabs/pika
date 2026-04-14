@@ -131,9 +131,19 @@ func (d *Dispatcher) UpdateHooks(hooks []Hook) {
 				targetType: t.Type,
 			})
 
-			// Compile body template
+			// Compile body template. The "log" target renders its own
+			// Message and Fields directly from the Event, so it ignores
+			// any body template — warn if one was supplied and skip compilation
+			// to avoid wasted work on every dispatch.
 			var bodyTmpl *template.Template
-			if t.BodyTemplate != "" {
+			switch {
+			case t.Type == "log":
+				if t.BodyTemplate != "" {
+					slog.Warn("log target ignores body_template; use LogTarget.Message and LogTarget.Fields instead",
+						"hook", h.Name,
+					)
+				}
+			case t.BodyTemplate != "":
 				tmpl, err := template.New("body").Parse(t.BodyTemplate)
 				if err != nil {
 					slog.Error("failed to compile body template",
@@ -208,6 +218,11 @@ func (d *Dispatcher) dispatch(ctx context.Context, event Event) {
 		eventCopy := event
 		eventCopy.Hook = hi.hook.Name
 
+		// Carry the full event on the context so event-aware sinks (e.g. the
+		// local log sink) can recover it without a Sink interface change.
+		// Other sinks ignore ctx.Value entirely.
+		sinkCtx := contextWithEvent(ctx, eventCopy)
+
 		for i, se := range hi.sinks {
 			payload, key, err := renderPayload(eventCopy, hi.bodyTemplates[i], hi.keyTemplates[i])
 			if err != nil {
@@ -219,7 +234,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, event Event) {
 				continue
 			}
 
-			if err := se.sink.Send(ctx, payload, key); err != nil {
+			if err := se.sink.Send(sinkCtx, payload, key); err != nil {
 				slog.Error("failed to send hook event",
 					"hook", hi.hook.Name,
 					"target_type", se.targetType,
@@ -281,6 +296,8 @@ func (d *Dispatcher) buildSink(ctx context.Context, t Target) (Sink, error) {
 		return NewRedisSink(ctx, t.Redis, d.resolver)
 	case "nats":
 		return NewNATSSink(t.NATS)
+	case "log":
+		return NewLogSink(t.Log)
 	default:
 		return nil, fmt.Errorf("unknown target type %q", t.Type)
 	}
