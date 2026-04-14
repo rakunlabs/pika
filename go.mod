@@ -12,7 +12,7 @@ require (
 	github.com/nats-io/nats.go v1.50.0
 	github.com/pin/tftp/v3 v3.2.0
 	github.com/pkg/sftp v1.13.10
-	github.com/rakunlabs/ada v0.3.1
+	github.com/rakunlabs/ada v0.3.2
 	github.com/rakunlabs/ada/handler/folder v0.1.1
 	github.com/rakunlabs/ada/middleware/cors v0.1.3
 	github.com/rakunlabs/ada/middleware/forwardauth v0.1.2
