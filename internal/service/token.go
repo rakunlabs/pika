@@ -114,7 +114,7 @@ func (s *Service) CreateToken(ctx context.Context, req *CreateTokenRequest) (*Cr
 		HashedKey: hashKey(rawKey),
 		Scopes:    req.Scopes,
 		CreatedAt: time.Now(),
-		CreatedBy: UserFromContext(ctx),
+		CreatedBy: AuditUserFromContext(ctx),
 		ExpiresAt: req.ExpiresAt,
 		Active:    true,
 	}

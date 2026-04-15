@@ -72,24 +72,14 @@ function createAppStore() {
     try {
       const response = await axios.get('/api/v1/info');
       info = response.data;
+      // /api/v1/info is unprotected and always returns 200. When auth is
+      // enforced, the server only populates `user` for an identified caller,
+      // so that's the signal we use to decide between showing the app and
+      // routing to Login/Setup.
+      authenticated = info?.auth_enabled ? !!info?.user : true;
+    } catch {
+      info = { name: 'pika', version: 'unknown' };
       authenticated = true;
-    } catch (err: any) {
-      if (err?.response?.status === 401) {
-        authenticated = false;
-        // Check if this is a fresh install needing setup
-        info = { name: 'pika', version: 'unknown', auth_enabled: true };
-        try {
-          const setupRes = await axios.get('/api/v1/auth/setup');
-          if (setupRes.data?.required) {
-            info = { ...info, setup_required: true };
-          }
-        } catch {
-          // Setup endpoint not available, just show login
-        }
-      } else {
-        info = { name: 'pika', version: 'unknown' };
-        authenticated = true; // No auth configured
-      }
     }
   }
 

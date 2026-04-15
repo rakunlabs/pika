@@ -63,8 +63,8 @@ func TestUserMiddlewareNoHeader(t *testing.T) {
 	a := newTestAPI(t)
 
 	ctx := runMiddleware(t, a, nil)
-	if u := service.UserFromContext(ctx); u != "system" {
-		t.Errorf("no X-User: want system sentinel, got %q", u)
+	if u := service.UserFromContext(ctx); u != "" {
+		t.Errorf("no X-User: want empty user, got %q", u)
 	}
 	if g := service.ExternalGroupsFromContext(ctx); g != nil {
 		t.Errorf("no X-User: want nil groups, got %v", g)

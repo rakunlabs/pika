@@ -314,6 +314,7 @@ func (a *api) infoHandler(c *ada.Context) error {
 		IsSuperadmin           bool                 `json:"is_superadmin"`
 		Permissions            []string             `json:"permissions"`
 		Capabilities           []service.Capability `json:"capabilities"`
+		SetupRequired          bool                 `json:"setup_required,omitempty"`
 		RawMounts              []MountInfo          `json:"raw_mounts,omitempty"`
 	}{
 		Info:                   a.info,
@@ -329,13 +330,21 @@ func (a *api) infoHandler(c *ada.Context) error {
 
 	// Resolve capability keys via the unified resolver — handles both
 	// built-in users (DB lookup) and forward-auth users (group mapping).
-	if resp.AuthEnabled && username != "" && username != "system" {
+	if resp.AuthEnabled && username != "" {
 		keys, isSuperadmin, _, err := a.svc.ResolveUserCapabilityKeys(ctx, username)
 		if err == nil {
 			resp.IsSuperadmin = isSuperadmin
 			if keys != nil {
 				resp.Permissions = keys
 			}
+		}
+	}
+
+	// Fresh-install detection: built-in auth is active but no users exist yet.
+	// The SPA uses this to route to the Setup page instead of Login.
+	if a.sessionStore != nil && username == "" {
+		if count, err := a.svc.UserCount(ctx); err == nil && count == 0 {
+			resp.SetupRequired = true
 		}
 	}
 
@@ -1378,7 +1387,7 @@ func (a *api) searchHandler(w http.ResponseWriter, r *http.Request) {
 	// a withPerm(files.read, ...) call exactly.
 	if a.permissionsEnforced(r.Context()) {
 		username := service.UserFromContext(r.Context())
-		if username != "" && username != "system" {
+		if username != "" {
 			if err := a.svc.CheckPermission(r.Context(), username, service.CapFilesRead); err != nil {
 				if errors.Is(err, service.ErrForbidden) {
 					http.Error(w, `{"message":"forbidden"}`, http.StatusForbidden)

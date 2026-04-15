@@ -159,7 +159,7 @@ func (s *Service) ResolveUserCapabilityKeys(
 	ctx context.Context,
 	username string,
 ) (keys []string, isSuperadmin bool, source PermissionSource, err error) {
-	if username == "" || username == "system" {
+	if username == "" {
 		return nil, false, PermissionSourceNone, nil
 	}
 

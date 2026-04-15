@@ -98,8 +98,9 @@ func (a *api) setUserPermissions(c *ada.Context) error {
 //   - Superadmin (built-in is_superadmin or external Superadmins allowlist) → allow
 //   - Built-in auth with unknown capability key → allow (progressive restriction)
 //   - External auth with any configured mapping → strict: missing key denies
-//   - "system" sentinel user (no authenticated user in ctx) → allow, since
-//     this is only produced by server-internal code paths
+//   - No authenticated user in context → allow. In practice the auth
+//     middleware rejects unauthenticated requests before they reach here,
+//     so this branch only covers internal server-side calls.
 func (a *api) withPerm(perm string, handler func(*ada.Context) error) func(*ada.Context) error {
 	return func(c *ada.Context) error {
 		ctx := c.Request.Context()
@@ -109,7 +110,7 @@ func (a *api) withPerm(perm string, handler func(*ada.Context) error) func(*ada.
 		}
 
 		username := service.UserFromContext(ctx)
-		if username == "" || username == "system" {
+		if username == "" {
 			return handler(c)
 		}
 

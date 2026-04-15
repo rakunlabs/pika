@@ -203,7 +203,7 @@ func (s *Service) SetFile(ctx context.Context, key string, data *File, expectedV
 				{
 					Status:    FileStatusTypeCreated,
 					Timestamp: tummy.Now().Unix(),
-					Author:    UserFromContext(ctx),
+					Author:    AuditUserFromContext(ctx),
 				},
 			},
 		}
@@ -224,7 +224,7 @@ func (s *Service) SetFile(ctx context.Context, key string, data *File, expectedV
 			Type:          hook.EventConfigCreated,
 			ConfigKey:     key,
 			ConfigVersion: createdVersion,
-			User:          UserFromContext(ctx),
+			User:          AuditUserFromContext(ctx),
 		})
 	}
 
@@ -264,7 +264,7 @@ func (s *Service) DeleteFile(ctx context.Context, key string, version int64) err
 				fv[i].Status = append(fv[i].Status, FileStatus{
 					Status:    FileStatusTypeDeleted,
 					Timestamp: tummy.Now().Unix(),
-					Author:    UserFromContext(ctx),
+					Author:    AuditUserFromContext(ctx),
 				})
 				break
 			}
@@ -285,7 +285,7 @@ func (s *Service) DeleteFile(ctx context.Context, key string, version int64) err
 			Type:          hook.EventConfigDeleted,
 			ConfigKey:     key,
 			ConfigVersion: version,
-			User:          UserFromContext(ctx),
+			User:          AuditUserFromContext(ctx),
 		})
 	}
 
