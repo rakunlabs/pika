@@ -31,7 +31,7 @@ build-container: build ## Build the container image with test tag
 .PHONY: run
 run: export LOG_LEVEL := debug
 run: ## Run the application
-	go run $(MAIN_FILE)
+	go run -ldflags="-X main.date=$(BUILD_DATE) -X main.commit=$(BUILD_COMMIT) -X main.version=$(VERSION)" $(MAIN_FILE)
 
 .PHONY: run-ui
 run-ui: ## Run the frontend development server
