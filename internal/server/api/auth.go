@@ -10,50 +10,6 @@ import (
 	"github.com/rakunlabs/query"
 )
 
-// loginRequest is the request body for login.
-type loginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-// login authenticates a user and sets a session cookie.
-func (a *api) login(c *ada.Context) error {
-	var req loginRequest
-	if err := c.Bind(&req); err != nil {
-		return errors.Join(err, service.ErrBadRequest)
-	}
-
-	if req.Username == "" || req.Password == "" {
-		return errors.Join(fmt.Errorf("username and password are required"), service.ErrBadRequest)
-	}
-
-	userInfo, err := a.svc.Authenticate(c.Request.Context(), req.Username, req.Password)
-	if err != nil {
-		return err
-	}
-
-	cookie, err := a.sessionStore.Create(userInfo.ID, userInfo.Username)
-	if err != nil {
-		return fmt.Errorf("creating session: %w", err)
-	}
-
-	http.SetCookie(c.Response, cookie)
-
-	return c.SetStatus(http.StatusOK).SendJSON(userInfo)
-}
-
-// logout clears the session cookie and deletes the session.
-func (a *api) logout(c *ada.Context) error {
-	cookie, err := c.Request.Cookie(a.sessionStore.CookieName())
-	if err == nil && cookie.Value != "" {
-		a.sessionStore.Delete(cookie.Value)
-	}
-
-	http.SetCookie(c.Response, a.sessionStore.ClearCookie())
-
-	return c.SetStatus(http.StatusOK).SendJSON(response{Message: "logged out"})
-}
-
 // listUsers returns users with optional pagination, sorting and filtering.
 //
 // Supported query parameters (via github.com/rakunlabs/query):
@@ -146,59 +102,4 @@ func (a *api) kickUser(c *ada.Context) error {
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(response{Message: "user sessions terminated"})
-}
-
-// getSetupStatus returns whether initial setup is required (no users exist yet).
-func (a *api) getSetupStatus(c *ada.Context) error {
-	count, err := a.svc.UserCount(c.Request.Context())
-	if err != nil {
-		return err
-	}
-
-	return c.SetStatus(http.StatusOK).SendJSON(struct {
-		Required bool `json:"required"`
-	}{
-		Required: count == 0,
-	})
-}
-
-// setup creates the first admin user. Only works when zero users exist.
-// On success it also creates a session so the user is immediately logged in.
-func (a *api) setup(c *ada.Context) error {
-	// Check if setup is still available
-	count, err := a.svc.UserCount(c.Request.Context())
-	if err != nil {
-		return err
-	}
-	if count > 0 {
-		return errors.Join(fmt.Errorf("setup already completed"), service.ErrBadRequest)
-	}
-
-	var req loginRequest
-	if err := c.Bind(&req); err != nil {
-		return errors.Join(err, service.ErrBadRequest)
-	}
-
-	if req.Username == "" || req.Password == "" {
-		return errors.Join(fmt.Errorf("username and password are required"), service.ErrBadRequest)
-	}
-
-	// Create the first user as superadmin
-	userInfo, err := a.svc.CreateSetupUser(c.Request.Context(), &service.CreateUserRequest{
-		Username: req.Username,
-		Password: req.Password,
-	})
-	if err != nil {
-		return err
-	}
-
-	// Auto-login: create a session so the user is immediately authenticated
-	cookie, err := a.sessionStore.Create(userInfo.ID, userInfo.Username)
-	if err != nil {
-		return fmt.Errorf("creating session: %w", err)
-	}
-
-	http.SetCookie(c.Response, cookie)
-
-	return c.SetStatus(http.StatusCreated).SendJSON(userInfo)
 }

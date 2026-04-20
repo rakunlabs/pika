@@ -7,25 +7,20 @@ export interface AppInfo {
   version: string;
   commit?: string;
   date?: string;
-  user?: string;
-  // auth_enabled is true when permission checks are enforced — that is,
-  // under built-in auth OR under forward auth with ExternalPermissions.Enabled.
-  auth_enabled?: boolean;
-  // builtin_auth is true only when session-based built-in auth is active.
-  // The Users/Permissions management pages require this.
-  builtin_auth?: boolean;
-  // forward_auth_enabled is true when the forward-auth Slot is active.
-  forward_auth_enabled?: boolean;
-  // forward_auth_redirect_url is the external SSO login URL (if configured).
-  forward_auth_redirect_url?: string;
-  is_superadmin?: boolean;
-  permissions?: string[];
-  // capabilities is the canonical list of capability keys the server knows
-  // about, with display names and descriptions. Used by the UI to render
-  // permission-bundle editors and the external-permissions mapping form.
   capabilities?: Capability[];
-  setup_required?: boolean;
   raw_mounts?: RawMount[];
+}
+
+export interface Identity {
+  subject: string;
+  name?: string;
+  email?: string;
+  email_verified?: boolean;
+  roles?: string[];
+  scopes?: string[];
+  provider: string;
+  claims?: Record<string, any>;
+  issued_at: string;
 }
 
 export interface UserInfo {
@@ -54,57 +49,98 @@ export interface PermissionInfo {
   created_at: string;
 }
 
+export interface LoginStrategy {
+  name: string;
+  kind: string;
+  label: string;
+  url: string;
+  fields?: any[];
+  register?: { url: string; fields?: any[] };
+}
+
+export interface LoginInfo {
+  title: string;
+  subtitle?: string;
+  icon?: string;
+  version?: string;
+  signup_first?: boolean;
+  strategies: LoginStrategy[];
+}
+
 function createAppStore() {
   let info = $state<AppInfo | null>(null);
+  let identity = $state<Identity | null>(null);
   let authenticated = $state<boolean | null>(null); // null = unknown, true/false = resolved
   let users = $state<UserInfo[]>([]);
   let usersTotal = $state(0);
   let lastUserQuery = $state<UserQuery>({});
   let permissions = $state<PermissionInfo[]>([]);
+  let loginInfo = $state<LoginInfo | null>(null);
 
-  function hasPermission(key: string): boolean {
-    if (!info?.auth_enabled) return true;
-    if (info?.is_superadmin) return true;
-    return info?.permissions?.includes(key) ?? false;
+  function hasPermission(_key: string): boolean {
+    // With the new model, the backend authorizes every request; the UI
+    // optimistically shows admin nav and relies on 403 feedback.
+    return !!identity;
   }
 
   async function loadInfo(): Promise<void> {
     try {
       const response = await axios.get('/api/v1/info');
       info = response.data;
-      // /api/v1/info is unprotected and always returns 200. When auth is
-      // enforced, the server only populates `user` for an identified caller,
-      // so that's the signal we use to decide between showing the app and
-      // routing to Login/Setup.
-      authenticated = info?.auth_enabled ? !!info?.user : true;
     } catch {
-      info = { name: 'pika', version: 'unknown' };
-      authenticated = true;
+      info = { name: 'pika', version: 'unknown', capabilities: [], raw_mounts: [] };
     }
   }
 
-  async function setup(username: string, password: string): Promise<void> {
-    await axios.post('/api/v1/auth/setup', { username, password });
-    authenticated = true;
-    // Reload info to get full server details now that we're authenticated
-    await loadInfo();
+  async function loadIdentity(): Promise<void> {
+    try {
+      // ada mounts /login/* at the root (not under /api/v1) because the
+      // current ada version (v0.1.2) mis-handles non-root Base prefixes.
+      const response = await axios.get('/login/me');
+      // Guard against SPA fallback: if the catch-all folder handler served
+      // index.html with 200, axios will treat it as success. Only accept a
+      // real JSON identity object.
+      if (!response.data || typeof response.data !== 'object' || !('subject' in response.data)) {
+        identity = null;
+        authenticated = false;
+        return;
+      }
+      identity = response.data;
+      authenticated = true;
+    } catch (err: any) {
+      if (err?.response?.status === 401) {
+        identity = null;
+        authenticated = false;
+      } else {
+        // Network error or other — treat as unauthenticated to avoid infinite spinner
+        identity = null;
+        authenticated = false;
+      }
+    }
   }
 
-  async function login(username: string, password: string): Promise<void> {
-    const response = await axios.post('/api/v1/auth/login', { username, password });
-    authenticated = true;
-    // Reload info to get user details
-    await loadInfo();
+  async function loadLoginInfo(): Promise<void> {
+    const response = await axios.get('/login/info');
+    loginInfo = response.data;
+  }
+
+  async function loginWith(url: string, body: Record<string, string>): Promise<void> {
+    await axios.post(url, body, { headers: { Accept: 'application/json' } });
+    await loadIdentity();
+  }
+
+  async function registerWith(url: string, body: Record<string, string>): Promise<void> {
+    await axios.post(url, body, { headers: { Accept: 'application/json' } });
+    await loadIdentity();
   }
 
   async function logout(): Promise<void> {
     try {
-      await axios.post('/api/v1/auth/logout');
-    } catch {
-      // Ignore errors
+      await axios.post('/logout');
+    } finally {
+      identity = null;
+      authenticated = false;
     }
-    authenticated = false;
-    info = { name: 'pika', version: 'unknown', auth_enabled: true };
   }
 
   function buildUserQueryParams(q: UserQuery): URLSearchParams {
@@ -194,10 +230,10 @@ function createAppStore() {
     (error) => {
       if (
         error?.response?.status === 401 &&
-        info?.auth_enabled &&
-        !error.config?.url?.includes('/auth/')
+        !error.config?.url?.includes('/login/')
       ) {
         authenticated = false;
+        identity = null;
       }
       return Promise.reject(error);
     }
@@ -205,14 +241,18 @@ function createAppStore() {
 
   return {
     get info() { return info; },
+    get identity() { return identity; },
     get authenticated() { return authenticated; },
+    get loginInfo() { return loginInfo; },
     get users() { return users; },
     get usersTotal() { return usersTotal; },
     get permissions() { return permissions; },
     hasPermission,
     loadInfo,
-    setup,
-    login,
+    loadIdentity,
+    loadLoginInfo,
+    loginWith,
+    registerWith,
     logout,
     loadUsers,
     createUser,

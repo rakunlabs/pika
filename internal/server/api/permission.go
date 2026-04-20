@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/rakunlabs/ada"
@@ -90,34 +91,21 @@ func (a *api) setUserPermissions(c *ada.Context) error {
 	return c.SetStatus(http.StatusOK).SendJSON(response{Message: "user permissions updated"})
 }
 
-// withPerm wraps a handler with a permission check.
-// If permission enforcement is not active (no built-in auth and no enabled
-// external-permissions block), the check is skipped.
-//
-// Enforcement semantics:
-//   - Superadmin (built-in is_superadmin or external Superadmins allowlist) → allow
-//   - Built-in auth with unknown capability key → allow (progressive restriction)
-//   - External auth with any configured mapping → strict: missing key denies
-//   - No authenticated user in context → allow. In practice the auth
-//     middleware rejects unauthenticated requests before they reach here,
-//     so this branch only covers internal server-side calls.
-func (a *api) withPerm(perm string, handler func(*ada.Context) error) func(*ada.Context) error {
+// withPerm wraps a handler with a capability check against the resolved
+// capability set in the request context (set by authx.CapMiddleware).
+func (a *api) withPerm(need string, handler func(*ada.Context) error) func(*ada.Context) error {
 	return func(c *ada.Context) error {
-		ctx := c.Request.Context()
-
-		if !a.permissionsEnforced(ctx) {
-			return handler(c)
+		caps := service.CapabilitiesFromContext(c.Request.Context())
+		if !caps.Has(need) {
+			return fmt.Errorf("capability %q required: %w", need, service.ErrForbidden)
 		}
-
-		username := service.UserFromContext(ctx)
-		if username == "" {
-			return handler(c)
-		}
-
-		if err := a.svc.CheckPermission(ctx, username, perm); err != nil {
-			return err
-		}
-
 		return handler(c)
 	}
+}
+
+// writeJSONError writes a JSON error response with the given status code.
+func writeJSONError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	fmt.Fprintf(w, `{"code":%q,"message":%q}`, code, message)
 }

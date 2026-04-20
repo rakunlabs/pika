@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rakunlabs/ada/middleware/auth/identity"
 	"github.com/rakunlabs/query"
 )
 
@@ -288,4 +289,52 @@ func containsOperation(ops []string, op string) bool {
 // findTokenByHash looks up a token by its hashed key.
 func (s *Service) findTokenByHash(ctx context.Context, hashed string) (*Token, error) {
 	return s.store.Tokens().FindByHash(ctx, hashed)
+}
+
+// ValidateTokenIdentity validates the raw key and returns an *identity.Identity
+// populated with the token's metadata. Returns ErrUnauthorized for unknown
+// keys, ErrForbidden for disabled/expired tokens.
+func (s *Service) ValidateTokenIdentity(ctx context.Context, rawKey string) (*identity.Identity, error) {
+	hashed := hashKey(rawKey)
+	token, err := s.store.Tokens().FindByHash(ctx, hashed)
+	if err != nil {
+		return nil, fmt.Errorf("invalid token: %w", ErrUnauthorized)
+	}
+	if !token.Active {
+		return nil, fmt.Errorf("token disabled: %w", ErrForbidden)
+	}
+	if token.ExpiresAt != nil && time.Now().After(*token.ExpiresAt) {
+		return nil, fmt.Errorf("token expired: %w", ErrForbidden)
+	}
+
+	scopes := make([]string, 0, len(token.Scopes))
+	for _, sc := range token.Scopes {
+		scopes = append(scopes, sc.Path)
+	}
+	return &identity.Identity{
+		Subject:  token.Name,
+		Name:     token.Name,
+		Provider: "apikey",
+		Scopes:   scopes,
+		Claims: map[string]any{
+			"token_id":   token.ID,
+			"operations": flatOps(token.Scopes),
+		},
+		IssuedAt: time.Now(),
+	}, nil
+}
+
+func flatOps(scopes []TokenScope) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, sc := range scopes {
+		for _, op := range sc.Operations {
+			if _, dup := seen[op]; dup {
+				continue
+			}
+			seen[op] = struct{}{}
+			out = append(out, op)
+		}
+	}
+	return out
 }

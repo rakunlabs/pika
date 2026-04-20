@@ -2,9 +2,14 @@
 /data
 /bin
 /dist
+/docs
 /_fork
 /.claude
 coverage.out
 .env
 .env.*
 /pika
+
+# Local Go workspace (for developing against sibling repos like ../ada)
+go.work
+go.work.sum

@@ -15,12 +15,17 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '^/(api|data|raw)/': {
+      '^/(api|data|raw|login)/': {
         target: 'http://localhost:8080',
         changeOrigin: true,
         secure: true,
         ws: true,
         followRedirects: true
+      },
+      '^/logout$': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        secure: true
       }
     },
     port: 3000

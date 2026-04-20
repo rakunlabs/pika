@@ -79,18 +79,6 @@ func createPermAndAssign(t *testing.T, svc *service.Service, userID, key, name s
 	}
 }
 
-// enableExternalPerms patches settings with the given external-permissions block.
-func enableExternalPerms(t *testing.T, svc *service.Service, cfg *service.ExternalPermissionsSettings) {
-	t.Helper()
-	err := svc.PatchSettings(context.Background(), &service.PatchSettings{
-		Action:              service.ActionKeySet,
-		ExternalPermissions: cfg,
-	})
-	if err != nil {
-		t.Fatalf("PatchSettings: %v", err)
-	}
-}
-
 // ---- ResolveUserCapabilityKeys ----
 
 func TestResolveEmptyUsername(t *testing.T) {
@@ -182,10 +170,10 @@ func TestResolveBuiltinSuperadminGetsAllKnownKeys(t *testing.T) {
 	}
 }
 
-func TestResolveForwardAuthUserNoSettings(t *testing.T) {
+func TestResolveUnknownUserReturnsNone(t *testing.T) {
 	svc := newTestService(t)
 
-	// No users table entry, no external-permissions settings at all.
+	// No users table entry.
 	keys, isSuper, source, err := svc.ResolveUserCapabilityKeys(context.Background(), "bob")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -195,117 +183,6 @@ func TestResolveForwardAuthUserNoSettings(t *testing.T) {
 	}
 	if source != service.PermissionSourceNone {
 		t.Errorf("want source=none, got %q", source)
-	}
-}
-
-func TestResolveForwardAuthUserDisabled(t *testing.T) {
-	svc := newTestService(t)
-	enableExternalPerms(t, svc, &service.ExternalPermissionsSettings{
-		Enabled: false,
-		Mapping: map[string][]string{"admins": {service.CapFilesRead}},
-	})
-
-	_, _, source, err := svc.ResolveUserCapabilityKeys(context.Background(), "bob")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if source != service.PermissionSourceNone {
-		t.Errorf("disabled external permissions should fall through, got source=%q", source)
-	}
-}
-
-func TestResolveForwardAuthSuperadmin(t *testing.T) {
-	svc := newTestService(t)
-	enableExternalPerms(t, svc, &service.ExternalPermissionsSettings{
-		Enabled:     true,
-		Superadmins: []string{"bob", "carol"},
-	})
-
-	keys, isSuper, source, err := svc.ResolveUserCapabilityKeys(context.Background(), "bob")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !isSuper {
-		t.Error("bob should be superadmin via allowlist")
-	}
-	if source != service.PermissionSourceExternal {
-		t.Errorf("want source=external, got %q", source)
-	}
-	if len(keys) != len(service.KnownCapabilityKeys()) {
-		t.Errorf("forward-auth superadmin should get all known keys, got %d", len(keys))
-	}
-}
-
-func TestResolveForwardAuthMappingSingleGroup(t *testing.T) {
-	svc := newTestService(t)
-	enableExternalPerms(t, svc, &service.ExternalPermissionsSettings{
-		Enabled: true,
-		Mapping: map[string][]string{
-			"pika-editor": {service.CapFilesRead, service.CapFilesWrite},
-		},
-	})
-
-	ctx := service.WithExternalGroups(context.Background(), []string{"pika-editor"})
-	keys, isSuper, source, err := svc.ResolveUserCapabilityKeys(ctx, "bob")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if isSuper {
-		t.Error("bob should not be superadmin")
-	}
-	if source != service.PermissionSourceExternal {
-		t.Errorf("want source=external, got %q", source)
-	}
-	if !slices.Contains(keys, service.CapFilesRead) || !slices.Contains(keys, service.CapFilesWrite) {
-		t.Errorf("expected mapped keys, got %v", keys)
-	}
-}
-
-func TestResolveForwardAuthMappingMultipleGroupsDedup(t *testing.T) {
-	svc := newTestService(t)
-	enableExternalPerms(t, svc, &service.ExternalPermissionsSettings{
-		Enabled: true,
-		Mapping: map[string][]string{
-			"pika-reader": {service.CapFilesRead, service.CapRawRead},
-			"pika-writer": {service.CapFilesRead, service.CapFilesWrite}, // overlap on files.read
-		},
-	})
-
-	ctx := service.WithExternalGroups(context.Background(), []string{"pika-reader", "pika-writer", "unknown-group"})
-	keys, _, _, err := svc.ResolveUserCapabilityKeys(ctx, "bob")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Should contain all three capabilities exactly once.
-	want := []string{service.CapFilesRead, service.CapFilesWrite, service.CapRawRead}
-	if len(keys) != len(want) {
-		t.Errorf("want exactly %d keys, got %d: %v", len(want), len(keys), keys)
-	}
-	for _, w := range want {
-		if !slices.Contains(keys, w) {
-			t.Errorf("missing capability %q, got %v", w, keys)
-		}
-	}
-}
-
-func TestResolveForwardAuthNoGroupsInContext(t *testing.T) {
-	svc := newTestService(t)
-	enableExternalPerms(t, svc, &service.ExternalPermissionsSettings{
-		Enabled: true,
-		Mapping: map[string][]string{"admins": {service.CapFilesRead}},
-	})
-
-	// Plain context — no groups stashed.
-	keys, _, source, err := svc.ResolveUserCapabilityKeys(context.Background(), "bob")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(keys) != 0 {
-		t.Errorf("no groups in ctx should yield no keys, got %v", keys)
-	}
-	if source != service.PermissionSourceExternal {
-		t.Errorf("source should still be external, got %q", source)
 	}
 }
 
@@ -356,67 +233,13 @@ func TestCheckPermissionBuiltinSuperadminAllows(t *testing.T) {
 	}
 }
 
-func TestCheckPermissionExternalStrictDeny(t *testing.T) {
-	svc := newTestService(t)
-	enableExternalPerms(t, svc, &service.ExternalPermissionsSettings{
-		Enabled: true,
-		Mapping: map[string][]string{
-			"pika-reader": {service.CapFilesRead},
-		},
-	})
-
-	ctx := service.WithExternalGroups(context.Background(), []string{"pika-reader"})
-
-	// Has files.read via mapping.
-	if err := svc.CheckPermission(ctx, "bob", service.CapFilesRead); err != nil {
-		t.Errorf("bob should have files.read, got %v", err)
-	}
-
-	// Does NOT have files.write — must deny (strict, not progressive).
-	err := svc.CheckPermission(ctx, "bob", service.CapFilesWrite)
-	if !errors.Is(err, service.ErrForbidden) {
-		t.Errorf("bob should be forbidden for files.write, got %v", err)
-	}
-}
-
-func TestCheckPermissionExternalSuperadminAllowsAll(t *testing.T) {
-	svc := newTestService(t)
-	enableExternalPerms(t, svc, &service.ExternalPermissionsSettings{
-		Enabled:     true,
-		Superadmins: []string{"bob"},
-	})
-
-	ctx := context.Background()
-	for _, cap := range service.KnownCapabilityKeys() {
-		if err := svc.CheckPermission(ctx, "bob", cap); err != nil {
-			t.Errorf("bob (superadmin) denied for %q: %v", cap, err)
-		}
-	}
-}
-
 func TestCheckPermissionNoConfigAllowAll(t *testing.T) {
 	svc := newTestService(t)
-	// No users, no external permissions. Current "unrestricted" behavior.
+	// No users, no permissions. Current "unrestricted" behavior.
 	for _, cap := range service.KnownCapabilityKeys() {
 		if err := svc.CheckPermission(context.Background(), "random", cap); err != nil {
 			t.Errorf("no-config: want allow for %q, got %v", cap, err)
 		}
-	}
-}
-
-// ---- Context helpers ----
-
-func TestExternalGroupsContextRoundTrip(t *testing.T) {
-	groups := []string{"g1", "g2", "g3"}
-	ctx := service.WithExternalGroups(context.Background(), groups)
-
-	got := service.ExternalGroupsFromContext(ctx)
-	if !slices.Equal(got, groups) {
-		t.Errorf("round-trip mismatch: got %v, want %v", got, groups)
-	}
-
-	if got := service.ExternalGroupsFromContext(context.Background()); got != nil {
-		t.Errorf("plain context: want nil, got %v", got)
 	}
 }
 

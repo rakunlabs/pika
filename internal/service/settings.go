@@ -147,6 +147,7 @@ type Settings struct {
 	Compat              *CompatSettings              `json:"compat,omitempty"`
 	ExternalPermissions *ExternalPermissionsSettings `json:"external_permissions,omitempty"`
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
+	Auth                *AuthSettings                `json:"auth,omitempty"`
 }
 
 // FTPServeSettings configures the built-in FTP server (stored in DB).
@@ -237,6 +238,7 @@ type PatchSettings struct {
 	Compat              *CompatSettings              `json:"compat,omitempty"`
 	ExternalPermissions *ExternalPermissionsSettings `json:"external_permissions,omitempty"`
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
+	Auth                *AuthSettings                `json:"auth,omitempty"`
 }
 
 type ActionKey string
@@ -347,6 +349,11 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 		settings.ForwardAuth = patch.ForwardAuth
 	}
 
+	// Handle auth settings update (if provided)
+	if patch.Auth != nil {
+		settings.Auth = patch.Auth
+	}
+
 	return s.UpdateSettings(ctx, settings)
 }
 
@@ -374,6 +381,11 @@ func (s *Service) GetForwardAuthSettings(ctx context.Context) *ForwardAuthSettin
 }
 
 func (s *Service) UpdateSettings(ctx context.Context, settings *Settings) error {
+	return s.store.Settings().Set(ctx, settings)
+}
+
+// SaveSettings persists a full Settings object — used by the auth migration path at boot.
+func (s *Service) SaveSettings(ctx context.Context, settings *Settings) error {
 	return s.store.Settings().Set(ctx, settings)
 }
 

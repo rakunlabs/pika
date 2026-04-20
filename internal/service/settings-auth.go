@@ -1,0 +1,302 @@
+package service
+
+import (
+	"context"
+	"time"
+)
+
+// AuthSettings is the runtime auth configuration stored in the settings table.
+// Replaces the legacy ForwardAuthSettings + ExternalPermissionsSettings.
+// See docs/superpowers/specs/2026-04-18-ada-auth-migration-design.md.
+type AuthSettings struct {
+	UI     AuthUI     `json:"ui"`
+	Cookie AuthCookie `json:"cookie"`
+	Issuer AuthIssuer `json:"issuer"`
+
+	// Supported strategies. Deliberately absent:
+	//   - basic + magic-link: not exposed in the UI or wired into authx
+	//   - apikey: pika hardcodes `Authorization: Bearer <key>` at boot
+	//     time (authx.BuildAPIKey). There is no configurable header — it
+	//     would let two clients silently disagree about where to put the
+	//     token. Tokens are managed under Settings → Access Tokens.
+	Local  *LocalStrategySettings   `json:"local,omitempty"`
+	OAuth2 []OAuth2StrategySettings `json:"oauth2,omitempty"`
+	LDAP   *LDAPStrategySettings    `json:"ldap,omitempty"`
+	Header *HeaderStrategySettings  `json:"header,omitempty"`
+
+	// RateLimit guards password-bearing endpoints (login, signup) against
+	// brute-force attacks. When nil, defaults are applied at boot.
+	RateLimit *AuthRateLimitSettings `json:"rate_limit,omitempty"`
+
+	// LinkByVerifiedEmail, when true (default), merges an incoming
+	// external identity (OAuth2, LDAP, Header) into an existing user row
+	// whose email matches the IdP-asserted email — but only if the IdP
+	// marks the email as verified (OIDC `email_verified: true`). Without
+	// this, two logins by the same person from different providers
+	// produce two separate pika users.
+	//
+	// Set to false if you don't trust your IdPs' email-verification
+	// claim (or you have overlapping email domains across tenants).
+	// When disabled, every new (provider, subject) creates a brand-new
+	// pika user that an admin can later link manually.
+	LinkByVerifiedEmail *bool `json:"link_by_verified_email,omitempty"`
+
+	Capabilities CapabilityMapping `json:"capabilities"`
+}
+
+// LinkByVerifiedEmailEnabled returns the effective value (default true)
+// of AuthSettings.LinkByVerifiedEmail, handling both nil settings and nil
+// fields uniformly.
+func (s *AuthSettings) LinkByVerifiedEmailEnabled() bool {
+	if s == nil || s.LinkByVerifiedEmail == nil {
+		return true
+	}
+	return *s.LinkByVerifiedEmail
+}
+
+// AuthRateLimitSettings controls the sliding-window rate limiter applied to
+// POST /login/pass/* and POST /login/register/*. Two independent axes run
+// in parallel: per-client-IP and per-username. Either axis tripping its hard
+// threshold rejects the request with 429 + Retry-After.
+//
+// Below the soft threshold the request is unaffected. At soft..hard the
+// middleware sleeps for an exponentially-growing delay (BackoffBase * 2^n,
+// capped at BackoffMax) before invoking the handler. At/above hard, the
+// request is rejected without reaching the handler.
+//
+// Changes take effect at next server start.
+type AuthRateLimitSettings struct {
+	// Enabled turns the whole limiter on or off. Default true.
+	Enabled bool `json:"enabled"`
+
+	// Window is the sliding-window length. Default 15m.
+	Window time.Duration `json:"window,omitempty"`
+
+	// IPSoftThreshold is the per-IP count at which backoff engages. Default 3.
+	IPSoftThreshold int `json:"ip_soft_threshold,omitempty"`
+
+	// IPHardThreshold is the per-IP count at which requests get 429. Default 30.
+	IPHardThreshold int `json:"ip_hard_threshold,omitempty"`
+
+	// UserSoftThreshold is the per-username count at which backoff engages. Default 3.
+	UserSoftThreshold int `json:"user_soft_threshold,omitempty"`
+
+	// UserHardThreshold is the per-username count at which requests get 429. Default 15.
+	UserHardThreshold int `json:"user_hard_threshold,omitempty"`
+
+	// BackoffBase is the base of the exponential delay. Default 1s.
+	BackoffBase time.Duration `json:"backoff_base,omitempty"`
+
+	// BackoffMax caps the per-request delay. Default 15s.
+	BackoffMax time.Duration `json:"backoff_max,omitempty"`
+
+	// TrustedProxyCIDRs lists CIDR blocks whose XFF / X-Real-IP /
+	// True-Client-IP headers are honored for client-IP extraction. Empty
+	// (default) means use RemoteAddr only — required when pika is
+	// directly internet-facing. Set to your reverse-proxy's network when
+	// running behind nginx/traefik/etc.
+	TrustedProxyCIDRs []string `json:"trusted_proxy_cidrs,omitempty"`
+}
+
+// DefaultAuthRateLimitSettings returns the out-of-the-box rate-limit config
+// applied when a settings row has no rate_limit block.
+func DefaultAuthRateLimitSettings() *AuthRateLimitSettings {
+	return &AuthRateLimitSettings{
+		Enabled:           true,
+		Window:            15 * time.Minute,
+		IPSoftThreshold:   3,
+		IPHardThreshold:   30,
+		UserSoftThreshold: 3,
+		UserHardThreshold: 15,
+		BackoffBase:       time.Second,
+		BackoffMax:        15 * time.Second,
+	}
+}
+
+// WithDefaults fills unset fields with their defaults. Mutates and returns
+// the receiver. A nil receiver yields a fresh fully-defaulted struct.
+func (s *AuthRateLimitSettings) WithDefaults() *AuthRateLimitSettings {
+	d := DefaultAuthRateLimitSettings()
+	if s == nil {
+		return d
+	}
+	if s.Window <= 0 {
+		s.Window = d.Window
+	}
+	if s.IPSoftThreshold <= 0 {
+		s.IPSoftThreshold = d.IPSoftThreshold
+	}
+	if s.IPHardThreshold <= 0 {
+		s.IPHardThreshold = d.IPHardThreshold
+	}
+	if s.UserSoftThreshold <= 0 {
+		s.UserSoftThreshold = d.UserSoftThreshold
+	}
+	if s.UserHardThreshold <= 0 {
+		s.UserHardThreshold = d.UserHardThreshold
+	}
+	if s.BackoffBase <= 0 {
+		s.BackoffBase = d.BackoffBase
+	}
+	if s.BackoffMax <= 0 {
+		s.BackoffMax = d.BackoffMax
+	}
+	return s
+}
+
+// AuthUI carries the editable branding of the login screen. Note that
+// Version is intentionally absent: the login UI displays the server
+// version from the build-time ldflags (plumbed via authx.Deps.Version),
+// so operators cannot desync the displayed version from the actual
+// running binary.
+type AuthUI struct {
+	Title        string            `json:"title,omitempty"`
+	Subtitle     string            `json:"subtitle,omitempty"`
+	Icon         string            `json:"icon,omitempty"`
+	Theme        map[string]string `json:"theme,omitempty"`
+	CustomCSSURL string            `json:"custom_css_url,omitempty"`
+}
+
+type AuthCookie struct {
+	Name     string `json:"name,omitempty"`
+	Domain   string `json:"domain,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Secure   bool   `json:"secure,omitempty"`
+	HttpOnly bool   `json:"http_only,omitempty"`
+	SameSite string `json:"same_site,omitempty"`
+}
+
+type AuthIssuer struct {
+	AccessTTL     time.Duration `json:"access_ttl,omitempty"`
+	RefreshTTL    time.Duration `json:"refresh_ttl,omitempty"`
+	RotateRefresh bool          `json:"rotate_refresh,omitempty"`
+}
+
+type LocalStrategySettings struct {
+	Enabled bool   `json:"enabled"`
+	Name    string `json:"name,omitempty"`
+}
+
+type OAuth2StrategySettings struct {
+	Name         string   `json:"name"`
+	DisplayName  string   `json:"display_name,omitempty"`
+	IssuerURL    string   `json:"issuer_url,omitempty"`
+	ClientID     string   `json:"client_id,omitempty"`
+	ClientSecret string   `json:"client_secret,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
+	DisablePKCE  bool     `json:"disable_pkce,omitempty"`
+	PasswordFlow bool     `json:"password_flow,omitempty"`
+}
+
+type LDAPStrategySettings struct {
+	Name         string `json:"name,omitempty"`
+	Addr         string `json:"addr,omitempty"`
+	BindDN       string `json:"bind_dn,omitempty"`
+	BindPassword string `json:"bind_password,omitempty"`
+	UserBaseDN   string `json:"user_base_dn,omitempty"`
+	UserFilter   string `json:"user_filter,omitempty"`
+	GroupBaseDN  string `json:"group_base_dn,omitempty"`
+	GroupFilter  string `json:"group_filter,omitempty"`
+	TLS          bool   `json:"tls,omitempty"`
+	InsecureSkip bool   `json:"insecure_skip,omitempty"`
+}
+
+type HeaderStrategySettings struct {
+	Name           string   `json:"name,omitempty"`
+	User           string   `json:"user,omitempty"`
+	Email          string   `json:"email,omitempty"`
+	DisplayName    string   `json:"display_name_header,omitempty"`
+	Roles          string   `json:"roles,omitempty"`
+	Groups         string   `json:"groups,omitempty"`
+	TrustedProxies []string `json:"trusted_proxies,omitempty"`
+}
+
+type CapabilityMapping struct {
+	Superadmins  []string            `json:"superadmins,omitempty"`
+	RoleMapping  map[string][]string `json:"role_mapping,omitempty"`
+	ScopeMapping map[string][]string `json:"scope_mapping,omitempty"`
+}
+
+// GetAuthSettings returns the current AuthSettings from DB settings, or nil
+// when nothing has been configured yet.
+func (s *Service) GetAuthSettings(ctx context.Context) *AuthSettings {
+	settings, err := s.Settings(ctx)
+	if err != nil || settings == nil {
+		return nil
+	}
+	return settings.Auth
+}
+
+// DefaultAuthSettings returns the baseline AuthSettings applied when the
+// DB has no stored auth config. Mirrors what the authx manager uses at
+// boot when settings.Auth is nil — exposed here so API responses can show
+// the effective config instead of a blank form.
+func DefaultAuthSettings() *AuthSettings {
+	return &AuthSettings{
+		UI:    AuthUI{Title: "Pika"},
+		Local: &LocalStrategySettings{Enabled: true, Name: "local"},
+	}
+}
+
+// WithEffectiveDefaults fills unset fields on a sparse settings object so
+// callers see the live runtime config. Only applied when the whole auth
+// block has never been configured (s is nil or the receiver has no
+// strategy at all) — an operator who explicitly saved auth with no Local
+// strategy retains that intent. Call sites:
+//
+//   - GET /api/v1/settings (read path): surfaces the boot defaults so
+//     "Local strategy disabled" isn't shown for a fresh install where
+//     login actually works via the implicit default.
+//   - authx.Manager.Boot: applies the same defaults so runtime and API
+//     view agree.
+//
+// Rules when filling:
+//   - Nil receiver → fresh struct with Local enabled and RateLimit defaults.
+//   - Non-nil receiver with at least one strategy configured → no Local
+//     auto-fill; only RateLimit zero-fields are filled.
+//   - Non-nil receiver with no strategy at all → Local auto-fill (treat
+//     as "equivalent to nil" since otherwise the server has no way to
+//     authenticate anyone).
+//
+// Mutates and returns the receiver.
+func (s *AuthSettings) WithEffectiveDefaults() *AuthSettings {
+	if s == nil {
+		d := DefaultAuthSettings()
+		d.RateLimit = DefaultAuthRateLimitSettings()
+		return d
+	}
+	if !s.hasAnyStrategy() {
+		d := DefaultAuthSettings()
+		s.Local = d.Local
+	}
+	s.RateLimit = s.RateLimit.WithDefaults()
+	return s
+}
+
+// hasAnyStrategy reports whether any authentication strategy has been
+// configured. A settings object with zero strategies leaves the server
+// unable to authenticate anyone, so the default local strategy is
+// applied in that case — matching what the authx manager does at boot
+// from a fresh DB.
+func (s *AuthSettings) hasAnyStrategy() bool {
+	if s == nil {
+		return false
+	}
+	if s.Local != nil {
+		return true
+	}
+	if len(s.OAuth2) > 0 {
+		return true
+	}
+	if s.LDAP != nil {
+		return true
+	}
+	if s.Header != nil {
+		return true
+	}
+	// APIKey is always built (see AuthSettings doc), so it never
+	// contributes to this check — hasAnyStrategy is about login-form
+	// strategies that the operator has opted into, not about boot-time
+	// fixtures.
+	return false
+}

@@ -14,10 +14,22 @@ type sessionStorage struct {
 }
 
 func (s *sessionStorage) Create(ctx context.Context, session *service.Session) error {
+	var userID interface{}
+	if session.UserID != "" {
+		userID = session.UserID
+	}
+	var payload interface{}
+	if len(session.Payload) > 0 {
+		payload = session.Payload
+	}
+	var refreshID interface{}
+	if session.RefreshID != "" {
+		refreshID = session.RefreshID
+	}
 	_, err := s.q.ExecContext(ctx,
-		`INSERT INTO sessions (id, user_id, username, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		session.ID, session.UserID, session.Username,
+		`INSERT INTO sessions (id, user_id, username, payload, refresh_id, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		session.ID, userID, session.Username, payload, refreshID,
 		session.CreatedAt.Format(timeFormat), session.ExpiresAt.Format(timeFormat),
 	)
 	return err
@@ -25,13 +37,15 @@ func (s *sessionStorage) Create(ctx context.Context, session *service.Session) e
 
 func (s *sessionStorage) Get(ctx context.Context, id string) (*service.Session, error) {
 	row := s.q.QueryRowContext(ctx,
-		`SELECT id, user_id, username, created_at, expires_at
+		`SELECT id, user_id, username, payload, refresh_id, created_at, expires_at
 		 FROM sessions WHERE id = ?`, id,
 	)
 
 	var sess service.Session
+	var userID sql.NullString
+	var refreshID sql.NullString
 	var createdAt, expiresAt string
-	err := row.Scan(&sess.ID, &sess.UserID, &sess.Username, &createdAt, &expiresAt)
+	err := row.Scan(&sess.ID, &userID, &sess.Username, &sess.Payload, &refreshID, &createdAt, &expiresAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, service.ErrNotFound
@@ -39,6 +53,12 @@ func (s *sessionStorage) Get(ctx context.Context, id string) (*service.Session, 
 		return nil, err
 	}
 
+	if userID.Valid {
+		sess.UserID = userID.String
+	}
+	if refreshID.Valid {
+		sess.RefreshID = refreshID.String
+	}
 	sess.CreatedAt = parseTime(createdAt)
 	sess.ExpiresAt = parseTime(expiresAt)
 	return &sess, nil

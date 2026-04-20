@@ -32,6 +32,10 @@ func (s *Storage) Users() service.UserStorage {
 	return s.backend.Users()
 }
 
+func (s *Storage) UserIdentities() service.UserIdentityStorage {
+	return s.backend.UserIdentities()
+}
+
 func (s *Storage) Tokens() service.TokenStorage {
 	return s.backend.Tokens()
 }

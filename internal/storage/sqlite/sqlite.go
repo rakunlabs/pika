@@ -148,14 +148,15 @@ func (s *Sqlite) Close() error {
 	return s.db.Close()
 }
 
-func (s *Sqlite) Users() service.UserStorage               { return &userStorage{q: s.q} }
-func (s *Sqlite) Tokens() service.TokenStorage             { return &tokenStorage{q: s.q} }
-func (s *Sqlite) Sessions() service.SessionStorage         { return &sessionStorage{q: s.q} }
-func (s *Sqlite) Permissions() service.PermissionStorage   { return &permissionStorage{q: s.q} }
-func (s *Sqlite) Folders() service.FolderStorage           { return &folderStorage{q: s.q} }
-func (s *Sqlite) Files() service.FileStorage               { return &fileStorage{q: s.q} }
-func (s *Sqlite) FileVersions() service.FileVersionStorage { return &fileVersionStorage{q: s.q} }
-func (s *Sqlite) Settings() service.SettingsStorage        { return &settingsStorage{q: s.q} }
+func (s *Sqlite) Users() service.UserStorage                  { return &userStorage{q: s.q} }
+func (s *Sqlite) UserIdentities() service.UserIdentityStorage { return &userIdentityStorage{q: s.q} }
+func (s *Sqlite) Tokens() service.TokenStorage                { return &tokenStorage{q: s.q} }
+func (s *Sqlite) Sessions() service.SessionStorage            { return &sessionStorage{q: s.q} }
+func (s *Sqlite) Permissions() service.PermissionStorage      { return &permissionStorage{q: s.q} }
+func (s *Sqlite) Folders() service.FolderStorage              { return &folderStorage{q: s.q} }
+func (s *Sqlite) Files() service.FileStorage                  { return &fileStorage{q: s.q} }
+func (s *Sqlite) FileVersions() service.FileVersionStorage    { return &fileVersionStorage{q: s.q} }
+func (s *Sqlite) Settings() service.SettingsStorage           { return &settingsStorage{q: s.q} }
 
 func (s *Sqlite) Tx(ctx context.Context, fn func(ctx context.Context, tx service.Storage) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)

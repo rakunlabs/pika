@@ -6,17 +6,50 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
+	"github.com/rakunlabs/ada/middleware/auth/identity"
 	"github.com/rakunlabs/query"
 	"golang.org/x/crypto/bcrypt"
 )
 
-// User represents an application user stored in the database.
+// dummyHash is a precomputed bcrypt hash used to equalize the time taken by
+// Authenticate when a username does not exist. Without this, an attacker
+// can probe valid usernames by measuring response latency: a real user
+// triggers a bcrypt compare (~100ms), a non-existent user returns
+// immediately. Running CompareHashAndPassword against this throwaway hash
+// in the not-found path closes that timing channel.
+//
+// Initialized lazily on first use to avoid paying the bcrypt cost during
+// package init when callers may never authenticate (e.g. CLI tools).
+var dummyHash []byte
+
+func ensureDummyHash() {
+	if dummyHash != nil {
+		return
+	}
+	h, err := bcrypt.GenerateFromPassword([]byte("not-a-real-password"), bcrypt.DefaultCost)
+	if err != nil {
+		// Should never happen; fall back to a fixed bcrypt-shaped value
+		// so CompareHashAndPassword still consumes time on each call.
+		dummyHash = []byte("$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidinvali")
+		return
+	}
+	dummyHash = h
+}
+
+// User represents an application user stored in the database. A user may
+// have zero or many linked external identities (OAuth2, LDAP, Header) and
+// optionally a local password. External-only users have External=true and
+// an empty PasswordHash — they can never be authenticated via local.
 type User struct {
 	ID           string    `json:"id"`
 	Username     string    `json:"username"`
 	PasswordHash string    `json:"password_hash"`
+	Email        string    `json:"email"`
+	DisplayName  string    `json:"display_name"`
+	External     bool      `json:"external"`
 	Disabled     bool      `json:"disabled"`
 	IsSuperadmin bool      `json:"is_superadmin"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -27,6 +60,9 @@ type User struct {
 type UserInfo struct {
 	ID             string    `json:"id"`
 	Username       string    `json:"username"`
+	Email          string    `json:"email,omitempty"`
+	DisplayName    string    `json:"display_name,omitempty"`
+	External       bool      `json:"external,omitempty"`
 	Disabled       bool      `json:"disabled"`
 	IsSuperadmin   bool      `json:"is_superadmin"`
 	ActiveSessions int64     `json:"active_sessions"`
@@ -40,17 +76,23 @@ type CreateUserRequest struct {
 	Password string `json:"password"`
 }
 
-// UpdateUserRequest is the request body for updating a user.
+// UpdateUserRequest is the request body for updating a user. Only
+// non-nil fields are applied; omitted fields keep their existing value.
 type UpdateUserRequest struct {
-	Username *string `json:"username,omitempty"`
-	Password *string `json:"password,omitempty"`
-	Disabled *bool   `json:"disabled,omitempty"`
+	Username    *string `json:"username,omitempty"`
+	Password    *string `json:"password,omitempty"`
+	Email       *string `json:"email,omitempty"`
+	DisplayName *string `json:"display_name,omitempty"`
+	Disabled    *bool   `json:"disabled,omitempty"`
 }
 
 func (u *User) toInfo() UserInfo {
 	return UserInfo{
 		ID:           u.ID,
 		Username:     u.Username,
+		Email:        u.Email,
+		DisplayName:  u.DisplayName,
+		External:     u.External,
 		Disabled:     u.Disabled,
 		IsSuperadmin: u.IsSuperadmin,
 		CreatedAt:    u.CreatedAt,
@@ -119,10 +161,19 @@ func (s *Service) createUser(ctx context.Context, req *CreateUserRequest, supera
 
 // Authenticate verifies a username/password combination.
 // Returns the user info on success, or ErrUnauthorized on failure.
+//
+// On a username-not-found, this still runs bcrypt against a throwaway hash
+// so the response time is comparable to a real user with a wrong password.
+// Without this, an attacker can probe for valid usernames by measuring
+// latency.
 func (s *Service) Authenticate(ctx context.Context, username, password string) (*UserInfo, error) {
 	user, err := s.store.Users().GetByUsername(ctx, username)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
+			ensureDummyHash()
+			// Result intentionally ignored — we just want the
+			// CPU work to happen so timings match.
+			_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
 			return nil, fmt.Errorf("invalid credentials: %w", ErrUnauthorized)
 		}
 		return nil, err
@@ -135,6 +186,8 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, fmt.Errorf("invalid credentials: %w", ErrUnauthorized)
 	}
+
+	slog.Info("auth: login success", "username", user.Username)
 
 	info := user.toInfo()
 	return &info, nil
@@ -172,6 +225,19 @@ func (s *Service) GetUser(ctx context.Context, id string) (*UserInfo, error) {
 	return &info, nil
 }
 
+// GetUserByUsername retrieves a user by username. Used by the auth layer to
+// resolve an identity's subject (username) to its stable user_id so
+// session rows can be targeted by admin flows (kick, disable).
+func (s *Service) GetUserByUsername(ctx context.Context, username string) (*UserInfo, error) {
+	user, err := s.store.Users().GetByUsername(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+
+	info := user.toInfo()
+	return &info, nil
+}
+
 // UpdateUser updates a user's properties.
 // If the user is being disabled, all their active sessions are deleted.
 func (s *Service) UpdateUser(ctx context.Context, id string, req *UpdateUserRequest) error {
@@ -190,6 +256,15 @@ func (s *Service) UpdateUser(ctx context.Context, id string, req *UpdateUserRequ
 			return fmt.Errorf("hashing password: %w", err)
 		}
 		user.PasswordHash = string(hash)
+	}
+
+	if req.Email != nil {
+		// Normalize with the same rules the provisioner uses so
+		// auto-linking against this row remains consistent.
+		user.Email = normalizeEmail(*req.Email)
+	}
+	if req.DisplayName != nil {
+		user.DisplayName = *req.DisplayName
 	}
 
 	wasDisabled := user.Disabled
@@ -266,4 +341,46 @@ func (s *Service) EnsureSuperadmin(ctx context.Context) error {
 	earliest.UpdatedAt = time.Now()
 
 	return s.store.Users().Update(ctx, &earliest)
+}
+
+// VerifyIdentity validates username/password and returns an *identity.Identity
+// populated from the DB user. Returns ErrUnauthorized on bad credentials.
+func (s *Service) VerifyIdentity(ctx context.Context, username, password string) (*identity.Identity, error) {
+	info, err := s.Authenticate(ctx, username, password)
+	if err != nil {
+		return nil, err
+	}
+	id := &identity.Identity{
+		Subject:  info.Username,
+		Name:     info.Username,
+		Provider: "local",
+		IssuedAt: time.Now(),
+	}
+	if info.IsSuperadmin {
+		id.Roles = []string{"superadmin"}
+	}
+	return id, nil
+}
+
+// BootstrapFirstUser creates the initial superadmin user. Returns ErrConflict
+// when a user already exists (serves as the concurrent-setup race guard).
+func (s *Service) BootstrapFirstUser(ctx context.Context, username, password string) (*identity.Identity, error) {
+	count, err := s.UserCount(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if count > 0 {
+		return nil, ErrConflict
+	}
+	info, err := s.CreateSetupUser(ctx, &CreateUserRequest{Username: username, Password: password})
+	if err != nil {
+		return nil, err
+	}
+	return &identity.Identity{
+		Subject:  info.Username,
+		Name:     info.Username,
+		Provider: "local",
+		Roles:    []string{"superadmin"},
+		IssuedAt: time.Now(),
+	}, nil
 }

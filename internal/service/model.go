@@ -21,6 +21,7 @@ var (
 // Each entity has its own typed repository.
 type Storage interface {
 	Users() UserStorage
+	UserIdentities() UserIdentityStorage
 	Tokens() TokenStorage
 	Sessions() SessionStorage
 	Permissions() PermissionStorage
@@ -39,10 +40,51 @@ type UserStorage interface {
 	Create(ctx context.Context, user *User) error
 	Get(ctx context.Context, id string) (*User, error)
 	GetByUsername(ctx context.Context, username string) (*User, error)
+	// GetByEmail looks up a user by their canonical email. Returns
+	// ErrNotFound when no user has that email or when email is empty.
+	// Used for auto-linking an external identity to an existing local
+	// user when AuthSettings.LinkByVerifiedEmail is true.
+	GetByEmail(ctx context.Context, email string) (*User, error)
 	List(ctx context.Context, q *query.Query) ([]User, int64, error)
 	Update(ctx context.Context, user *User) error
 	Delete(ctx context.Context, id string) error
 	Count(ctx context.Context) (int64, error)
+}
+
+// UserIdentity is a third-party credential attached to a pika user.
+// One user can have many identities (e.g. local + Google + GitHub) and
+// any identity resolves back to the same user_id so permissions and
+// admin operations are unified. Local (password) auth does NOT produce a
+// UserIdentity row — the users.password_hash column is the credential.
+type UserIdentity struct {
+	ID          string     `json:"id"`
+	UserID      string     `json:"user_id"`
+	Provider    string     `json:"provider"`               // e.g. "google", "github", "keycloak"
+	Subject     string     `json:"subject"`                // provider's stable user ID (OIDC sub)
+	Email       string     `json:"email,omitempty"`        // snapshot at last login
+	DisplayName string     `json:"display_name,omitempty"` // snapshot at last login
+	CreatedAt   time.Time  `json:"created_at"`
+	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
+}
+
+// UserIdentityStorage manages external identity links. (provider, subject)
+// is globally unique; the store enforces that at the DB level.
+type UserIdentityStorage interface {
+	// Upsert creates or updates the (provider, subject) row. If the pair
+	// is new, CreatedAt is set; if it exists, Email/DisplayName/
+	// LastLoginAt are refreshed. Returns the resulting row.
+	Upsert(ctx context.Context, identity *UserIdentity) (*UserIdentity, error)
+	// FindByProviderSubject returns the existing link or ErrNotFound.
+	FindByProviderSubject(ctx context.Context, provider, subject string) (*UserIdentity, error)
+	// ListByUserID returns every identity linked to a user, oldest first.
+	ListByUserID(ctx context.Context, userID string) ([]UserIdentity, error)
+	// Delete removes a single (provider, subject) link. Used for admin
+	// "unlink" operations.
+	Delete(ctx context.Context, id string) error
+	// DeleteByUserID removes every identity for a user (used when the
+	// user row is deleted; FK CASCADE handles this too but the explicit
+	// method keeps the code symmetric with other stores).
+	DeleteByUserID(ctx context.Context, userID string) error
 }
 
 // Session represents an active user session stored in the database.
@@ -50,6 +92,8 @@ type Session struct {
 	ID        string    `json:"id"`
 	UserID    string    `json:"user_id"`
 	Username  string    `json:"username"`
+	Payload   []byte    `json:"payload,omitempty"`
+	RefreshID string    `json:"refresh_id,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
 }

@@ -5,9 +5,8 @@ import "context"
 type contextKey string
 
 const (
-	userContextKey           contextKey = "user"
-	userIDContextKey         contextKey = "user_id"
-	externalGroupsContextKey contextKey = "external_groups"
+	userContextKey   contextKey = "user"
+	userIDContextKey contextKey = "user_id"
 )
 
 // WithUser returns a new context with the user name set.
@@ -58,22 +57,3 @@ func UserIDFromContext(ctx context.Context) string {
 	return ""
 }
 
-// WithExternalGroups returns a new context carrying the list of external
-// group names supplied by the forward-auth gateway (typically via an
-// X-Groups response header). The list is opaque to the service layer and
-// is translated to capability keys by the permission resolver using the
-// Settings.ExternalPermissions.Mapping.
-func WithExternalGroups(ctx context.Context, groups []string) context.Context {
-	return context.WithValue(ctx, externalGroupsContextKey, groups)
-}
-
-// ExternalGroupsFromContext returns the external group names previously
-// stashed by WithExternalGroups. Returns nil if no groups are set — for
-// built-in auth users, for requests without a groups header, or when
-// external permissions are disabled.
-func ExternalGroupsFromContext(ctx context.Context) []string {
-	if g, ok := ctx.Value(externalGroupsContextKey).([]string); ok {
-		return g
-	}
-	return nil
-}

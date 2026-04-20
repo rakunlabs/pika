@@ -5,14 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
-	"time"
 
 	"github.com/rakunlabs/ada"
 	"github.com/rakunlabs/into"
 
 	mcors "github.com/rakunlabs/ada/middleware/cors"
-	mforwardauth "github.com/rakunlabs/ada/middleware/forwardauth"
 	mlog "github.com/rakunlabs/ada/middleware/log"
 	mrecover "github.com/rakunlabs/ada/middleware/recover"
 	mrequestid "github.com/rakunlabs/ada/middleware/requestid"
@@ -26,70 +23,21 @@ import (
 	"github.com/rakunlabs/pika/internal/serve/tftpserve"
 	"github.com/rakunlabs/pika/internal/serve/webdavserve"
 	"github.com/rakunlabs/pika/internal/server/api"
+	"github.com/rakunlabs/pika/internal/server/authx"
 	"github.com/rakunlabs/pika/internal/server/compat"
-	"github.com/rakunlabs/pika/internal/server/session"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
-// buildForwardAuthMiddleware converts a ForwardAuthSettings (stored in DB)
-// into an ada forward-auth middleware.
-func buildForwardAuthMiddleware(fa *service.ForwardAuthSettings) ada.MiddlewareFunc {
-	cfg := mforwardauth.ForwardAuth{
-		Address:                  fa.Address,
-		AuthResponseHeaders:      fa.AuthResponseHeaders,
-		AuthResponseHeadersRegex: fa.AuthResponseHeadersRegex,
-		AuthRequestHeaders:       fa.AuthRequestHeaders,
-		TrustForwardHeader:       fa.TrustForwardHeader,
-		InsecureSkipVerify:       fa.InsecureSkipVerify,
-		RedirectURL:              fa.RedirectURL,
-		RedirectCode:             fa.RedirectCode,
-		RedirectStatusCodes:      fa.RedirectStatusCodes,
-		RequestMethod:            fa.RequestMethod,
+// cookieName returns the session cookie name, preferring the AuthSettings
+// value, then the config value, then the default "pika_session".
+func cookieName(s *service.AuthSettings, cfg *config.Config) string {
+	if s != nil && s.Cookie.Name != "" {
+		return s.Cookie.Name
 	}
-
-	if fa.Timeout != "" {
-		if d, err := time.ParseDuration(fa.Timeout); err == nil {
-			cfg.Timeout = d
-		}
+	if cfg.Server.Auth.Cookie.Name != "" {
+		return cfg.Server.Auth.Cookie.Name
 	}
-
-	return mforwardauth.Middleware(mforwardauth.WithConfig(cfg))
-}
-
-// combinedAuthMiddleware returns a middleware that tries session authentication
-// first and falls back to forward-auth (via the Slot) when no valid session
-// exists. If neither succeeds the request receives 401 Unauthorized.
-//
-// Auth endpoints (/api/v1/auth/*) are registered on a separate mux that does
-// not pass through this middleware, so the local login page is always reachable.
-func combinedAuthMiddleware(store *session.Store, slot *ada.Slot) ada.MiddlewareFunc {
-	fwdAuth := slot.Middleware()
-
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// 1. Session-first: check cookie
-			if cookie, err := r.Cookie(store.CookieName()); err == nil && cookie.Value != "" {
-				if sess := store.Get(cookie.Value); sess != nil {
-					ctx := service.WithUserInfo(r.Context(), sess.Username, sess.UserID)
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
-				}
-			}
-
-			// 2. Forward-auth fallback (if the Slot is enabled).
-			// The forward-auth middleware handles response on its own:
-			//   - success: copies configured response headers, calls next
-			//   - failure: returns the auth-service response (401/redirect)
-			if slot.Enabled() {
-				fwdAuth(next).ServeHTTP(w, r)
-				return
-			}
-
-			// 3. Neither succeeded.
-			w.Header().Set("Content-Type", "application/json")
-			http.Error(w, `{"message":"unauthorized"}`, http.StatusUnauthorized)
-		})
-	}
+	return "pika_session"
 }
 
 func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info api.Info, encStore *secret.Storage) error {
@@ -115,43 +63,52 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	m := server.Group(cfg.Server.BasePath)
 	mAuth := server.Group(cfg.Server.BasePath)
 
-	// --- Authentication setup ---
-	// Local auth (session-based) is always enabled.
-	// Forward-auth can be layered on top via an ada.Slot that is toggled
-	// at runtime from the settings UI.
+	// --- Authentication setup via authx.Manager ---
 
-	slog.Info("built-in auth enabled")
-
-	cookieOpts := session.CookieOptions{
-		Name:     cfg.Server.Auth.Cookie.Name,
-		Domain:   cfg.Server.Auth.Cookie.Domain,
-		Path:     cfg.Server.Auth.Cookie.Path,
-		Secure:   cfg.Server.Auth.Cookie.Secure,
-		SameSite: session.ParseSameSite(cfg.Server.Auth.Cookie.SameSite),
+	// Migrate legacy forward-auth / external-permissions settings into AuthSettings on boot.
+	boot, err := svc.Settings(ctx)
+	if err != nil {
+		return fmt.Errorf("read settings for auth boot: %w", err)
+	}
+	if boot != nil && boot.Auth == nil && (boot.ForwardAuth != nil || boot.ExternalPermissions != nil) {
+		service.MigrateLegacyAuthSettings(boot)
+		if err := svc.SaveSettings(ctx, boot); err != nil {
+			slog.Warn("auth settings migration write-back failed", "error", err)
+		}
 	}
 
-	sessionStore := session.NewStore(svc.SessionStorage(), cfg.Server.Auth.SessionTTL, cookieOpts)
+	authSettings := svc.GetAuthSettings(ctx)
 
-	// Ensure at least one superadmin exists (handles upgrade from older versions)
-	if err := svc.EnsureSuperadmin(ctx); err != nil {
-		slog.Warn("failed to ensure superadmin", "error", err)
+	mgr := authx.New(authx.Deps{
+		Svc:          svc,
+		SessionStore: authx.NewSessionStore(svc, cookieName(authSettings, cfg)),
+		BasePath:     cfg.Server.BasePath + "/",
+		CookieName:   cookieName(authSettings, cfg),
+		// Version comes from build-time ldflags (cmd/pika/main.go),
+		// not from settings — so the login UI shows the real binary
+		// version and no operator can spoof it.
+		Version: info.Version,
+	})
+	if err := mgr.Boot(ctx, authSettings); err != nil {
+		return fmt.Errorf("auth manager boot: %w", err)
 	}
 
-	// Create the forward-auth Slot — starts as NoOp (disabled).
-	// The api layer will populate it from DB settings at startup
-	// and hot-swap it when settings change.
-	forwardAuthSlot := ada.NewSlot(ada.NoOp())
-	forwardAuthSlot.Disable()
-
-	// Load forward-auth settings from DB and populate the Slot if enabled.
-	if fa := svc.GetForwardAuthSettings(ctx); fa != nil && fa.Enabled && fa.Address != "" {
-		forwardAuthSlot.Replace(buildForwardAuthMiddleware(fa))
-		forwardAuthSlot.Enable()
-		slog.Info("forward-auth enabled from settings", "address", fa.Address)
+	// Brute-force protection on the unprotected auth group: rate-limit
+	// POST /login/pass/* and POST /login/register/* per client-IP and
+	// per-username. Other auth routes (info/me/logout) pass through.
+	rlSettings := (*service.AuthRateLimitSettings)(nil)
+	if authSettings != nil {
+		rlSettings = authSettings.RateLimit
 	}
+	rlSettings = rlSettings.WithDefaults()
+	trustedProxies := authx.ParseCIDRs(rlSettings.TrustedProxyCIDRs)
+	mAuth.Use(authx.LoginGuard(rlSettings, trustedProxies))
 
-	// Register the combined auth middleware on the admin API group.
-	m.Use(combinedAuthMiddleware(sessionStore, forwardAuthSlot))
+	// Mount /login/* and /logout on the unprotected group.
+	mgr.Mount(mAuth)
+
+	// Protected group: require auth + resolve capabilities.
+	m.Use(mgr.Require(), mgr.CapMiddleware())
 
 	// publicServerStarter is a callback that creates and starts the public HTTP server.
 	// It is passed into the api layer so it can dynamically start/stop the public server
@@ -160,12 +117,13 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		return startPublicServer(ctx, cfg, svc, settings, rh2)
 	}
 
-	if err := api.Handle(m, mData, mAuth, svc, info, encStore, sessionStore, forwardAuthSlot, rh, publicServerStarter); err != nil {
+	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, rh, publicServerStarter); err != nil {
 		return err
 	}
 
 	// Read serve settings from DB
-	settings, err := svc.Settings(ctx)
+	var settings *service.Settings
+	settings, err = svc.Settings(ctx)
 	if err != nil {
 		return fmt.Errorf("reading settings for server startup: %w", err)
 	}

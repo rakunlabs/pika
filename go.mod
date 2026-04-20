@@ -14,9 +14,10 @@ require (
 	github.com/pkg/sftp v1.13.10
 	github.com/rakunlabs/ada v0.3.2
 	github.com/rakunlabs/ada/handler/folder v0.1.1
+	github.com/rakunlabs/ada/middleware/auth v0.1.4
 	github.com/rakunlabs/ada/middleware/cors v0.1.3
-	github.com/rakunlabs/ada/middleware/forwardauth v0.1.2
 	github.com/rakunlabs/ada/middleware/log v0.1.7
+	github.com/rakunlabs/ada/middleware/ratelimit v0.1.0
 	github.com/rakunlabs/ada/middleware/recover v0.1.3
 	github.com/rakunlabs/ada/middleware/requestid v0.1.3
 	github.com/rakunlabs/ada/middleware/server v0.1.0
@@ -67,6 +68,7 @@ require (
 	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.25 // indirect
+	github.com/rakunlabs/cache v0.3.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect

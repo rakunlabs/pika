@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Key, Globe, FolderOpen, Share2, Server, Webhook, ShieldAlert, RotateCw, Lock, HardDrive } from "lucide-svelte";
+  import { Key, Globe, FolderOpen, Share2, Server, Webhook, RotateCw, Lock, HardDrive, ShieldCheck, Info } from "lucide-svelte";
 
   import TokensSection from "@/pages/settings/TokensSection.svelte";
   import ExternalResourcesSection from "@/pages/settings/ExternalResourcesSection.svelte";
@@ -8,12 +8,13 @@
   import FileServersSection from "@/pages/settings/FileServersSection.svelte";
   import PublicServerSection from "@/pages/settings/PublicServerSection.svelte";
   import HooksSection from "@/pages/settings/HooksSection.svelte";
-  import ForwardAuthSection from "@/pages/settings/ForwardAuthSection.svelte";
+  import AuthSection from "@/pages/settings/AuthSection.svelte";
   import KeyRotationSection from "@/pages/settings/KeyRotationSection.svelte";
   import SecuritySection from "@/pages/settings/SecuritySection.svelte";
   import BackupSection from "@/pages/settings/BackupSection.svelte";
+  import AboutSection from "@/pages/settings/AboutSection.svelte";
 
-  type Section = 'tokens' | 'external' | 'raw_mounts' | 'ftp_shares' | 'file_servers' | 'public_server' | 'hooks' | 'forward_auth' | 'rotation' | 'security' | 'backup';
+  type Section = 'tokens' | 'external' | 'raw_mounts' | 'ftp_shares' | 'file_servers' | 'public_server' | 'hooks' | 'auth' | 'rotation' | 'security' | 'backup' | 'about';
 
   let activeSection = $state<Section>('tokens');
 
@@ -25,10 +26,11 @@
     { key: 'file_servers',  label: 'File Servers',      icon: Server },
     { key: 'public_server', label: 'Public Server',     icon: Globe },
     { key: 'hooks',         label: 'Hooks',             icon: Webhook },
-    { key: 'forward_auth',  label: 'Forward Auth',      icon: ShieldAlert },
+    { key: 'auth',          label: 'Authentication',    icon: ShieldCheck },
     { key: 'rotation',      label: 'Key Rotation',      icon: RotateCw },
     { key: 'security',      label: 'Security',          icon: Lock },
     { key: 'backup',        label: 'Backup',            icon: HardDrive },
+    { key: 'about',         label: 'About',             icon: Info },
   ];
 </script>
 
@@ -69,14 +71,16 @@
         <PublicServerSection />
       {:else if activeSection === 'hooks'}
         <HooksSection />
-      {:else if activeSection === 'forward_auth'}
-        <ForwardAuthSection />
+      {:else if activeSection === 'auth'}
+        <AuthSection />
       {:else if activeSection === 'rotation'}
         <KeyRotationSection />
       {:else if activeSection === 'security'}
         <SecuritySection />
       {:else if activeSection === 'backup'}
         <BackupSection />
+      {:else if activeSection === 'about'}
+        <AboutSection />
       {/if}
     </div>
   </div>

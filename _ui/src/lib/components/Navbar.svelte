@@ -4,11 +4,7 @@
   import { Blocks, Settings, User, Users, LogOut, HardDrive, FileSliders } from 'lucide-svelte';
 
   const info = $derived(appStore.info);
-  const authEnabled = $derived(info?.auth_enabled ?? false);
-  // builtinAuth gates features that require the built-in users table
-  // (user CRUD, permission bundle CRUD). Forward-auth-only deployments
-  // configure permissions via the Settings > External Permissions section.
-  const builtinAuth = $derived(info?.builtin_auth ?? false);
+  const identity = $derived(appStore.identity);
 
   const hasRawMounts = $derived((info?.raw_mounts?.length ?? 0) > 0);
 
@@ -27,7 +23,7 @@
       items.push({ path: '/settings', label: 'Settings', icon: Settings });
     }
 
-    if (builtinAuth && appStore.hasPermission('users.manage')) {
+    if (appStore.hasPermission('users.manage')) {
       items.push({ path: '/users', label: 'Users', icon: Users });
     }
 
@@ -73,33 +69,20 @@
   <div class="flex-1"></div>
 
   <!-- User + Version Info -->
-  {#if info}
-    <div class="flex items-center gap-2 text-[11px] text-slate-500">
-      {#if info.user && info.user !== 'system'}
-        <span class="flex items-center gap-1 px-1.5 py-0.5 bg-slate-800 rounded text-slate-300">
-          <User size={11} />
-          {info.user}
-          {#if info.is_superadmin}
-            <span class="text-amber-400 text-[9px] font-bold ml-0.5">SA</span>
-          {/if}
-        </span>
-      {/if}
-      {#if authEnabled}
-        <button
-          onclick={handleLogout}
-          class="flex items-center gap-1 px-1.5 py-0.5 bg-slate-800 rounded text-slate-400 hover:text-white hover:bg-slate-700 transition-colors cursor-pointer border-none"
-          title="Sign out"
-        >
-          <LogOut size={11} />
-          <span>Logout</span>
-        </button>
-      {/if}
-      {#if info.commit && info.commit !== '-'}
-        <span class="px-1.5 py-0.5 bg-slate-800 rounded font-mono text-slate-400" title="Commit: {info.commit}">
-          {info.commit}
-        </span>
-      {/if}
-
-    </div>
-  {/if}
+  <div class="flex items-center gap-2 text-[11px] text-slate-500">
+    {#if identity}
+      <span class="flex items-center gap-1 px-1.5 py-0.5 bg-slate-800 rounded text-slate-300">
+        <User size={11} />
+        {identity.name ?? identity.subject}
+      </span>
+      <button
+        onclick={handleLogout}
+        class="flex items-center gap-1 px-1.5 py-0.5 bg-slate-800 rounded text-slate-400 hover:text-white hover:bg-slate-700 transition-colors cursor-pointer border-none"
+        title="Sign out"
+      >
+        <LogOut size={11} />
+        <span>Logout</span>
+      </button>
+    {/if}
+  </div>
 </nav>

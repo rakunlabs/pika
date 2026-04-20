@@ -9,12 +9,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"log/slog"
 
 	"github.com/rakunlabs/ada"
-	mforwardauth "github.com/rakunlabs/ada/middleware/forwardauth"
+	"github.com/rakunlabs/ada/middleware/auth/identity"
 	"github.com/rakunlabs/pika/internal/config"
 	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/rawfs"
@@ -25,50 +24,9 @@ import (
 	"github.com/rakunlabs/pika/internal/serve/sftpserve"
 	"github.com/rakunlabs/pika/internal/serve/tftpserve"
 	"github.com/rakunlabs/pika/internal/serve/webdavserve"
-	"github.com/rakunlabs/pika/internal/server/session"
+	"github.com/rakunlabs/pika/internal/server/authx"
 	"github.com/rakunlabs/pika/internal/service"
 )
-
-// userMiddleware extracts the X-User header and (optionally) a groups header
-// and injects them into the request context. The groups header is read only
-// when ExternalPermissions.Enabled is true in settings — typically under
-// forward auth, where an upstream gateway populates both X-User and the
-// configured groups header via its auth_response_headers allowlist.
-//
-// This is a method on *api so it can access the live settings on each
-// request (hot-reloadable via PatchSettings).
-func (a *api) userMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user := r.Header.Get("X-User")
-		if user != "" {
-			ctx := service.WithUser(r.Context(), user)
-
-			if ext := a.svc.GetExternalPermissionsSettings(r.Context()); ext != nil && ext.Enabled {
-				headerName := ext.GroupsHeader
-				if headerName == "" {
-					headerName = "X-Groups"
-				}
-				separator := ext.GroupsSeparator
-				if separator == "" {
-					separator = ","
-				}
-				var groups []string
-				for _, v := range r.Header.Values(headerName) {
-					for _, g := range strings.Split(v, separator) {
-						if g = strings.TrimSpace(g); g != "" {
-							groups = append(groups, g)
-						}
-					}
-				}
-				if len(groups) > 0 {
-					ctx = service.WithExternalGroups(ctx, groups)
-				}
-			}
-			r = r.WithContext(ctx)
-		}
-		next.ServeHTTP(w, r)
-	})
-}
 
 // Info holds server metadata returned by the info endpoint.
 type Info struct {
@@ -87,25 +45,9 @@ type api struct {
 	svc               *service.Service
 	info              Info
 	encStore          *secret.Storage     // nil if encryption is disabled
-	sessionStore      *session.Store      // nil if built-in auth is disabled
-	forwardAuthSlot   *ada.Slot           // runtime-togglable forward-auth middleware
+	mgr               *authx.Manager      // auth manager (login/logout/cap resolution)
 	rawHandler        *RawHandler         // nil if no raw mounts configured
 	startPublicServer PublicServerStarter // set by server.go
-}
-
-// permissionsEnforced reports whether permission checks should run for the
-// current request. With built-in auth always enabled this returns true.
-// It also returns true when external-permissions are enabled (for
-// forward-auth users whose identity comes from the external service).
-func (a *api) permissionsEnforced(ctx context.Context) bool {
-	// Built-in auth is always on.
-	if a.sessionStore != nil {
-		return true
-	}
-	if ext := a.svc.GetExternalPermissionsSettings(ctx); ext != nil && ext.Enabled {
-		return true
-	}
-	return false
 }
 
 type response struct {
@@ -124,16 +66,12 @@ func HandlePublic(m *ada.Mux, svc *service.Service, rh *RawHandler) error {
 	return nil
 }
 
-func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, sessionStore *session.Store, forwardAuthSlot *ada.Slot, rh *RawHandler, publicStarter PublicServerStarter) error {
+func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, mgr *authx.Manager, rh *RawHandler, publicStarter PublicServerStarter) error {
 	// Set hook service identification from config
 	hook.ServiceName = config.ServiceName
 	hook.Version = config.Version
 
-	api := &api{svc: svc, info: info, encStore: encStore, sessionStore: sessionStore, forwardAuthSlot: forwardAuthSlot, rawHandler: rh, startPublicServer: publicStarter}
-
-	// Inject X-User header (and, when ExternalPermissions is enabled, the
-	// configured groups header) into context for all API requests.
-	m.Use(api.userMiddleware)
+	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, rawHandler: rh, startPublicServer: publicStarter}
 
 	m.ErrorHandler(api.errorHandler)
 
@@ -146,35 +84,25 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	mData.PUT("/raw/*", mData.Wrap(api.putRaw))
 	mData.DELETE("/raw/*", mData.Wrap(api.deleteRaw))
 
-	// Auth endpoints — registered on the unprotected mux (no session middleware)
-	if sessionStore != nil {
-		mAuth.ErrorHandler(api.errorHandler)
-		mAuth.POST("/api/v1/auth/login", mAuth.Wrap(api.login))
-		mAuth.POST("/api/v1/auth/logout", mAuth.Wrap(api.logout))
-		mAuth.GET("/api/v1/auth/setup", mAuth.Wrap(api.getSetupStatus))
-		mAuth.POST("/api/v1/auth/setup", mAuth.Wrap(api.setup))
+	mAuth.ErrorHandler(api.errorHandler)
 
-		// User management endpoints — only available under built-in auth, since
-		// the users table is the only place permissions can attach for session
-		// users. Forward auth uses the ExternalPermissions mapping instead.
-		m.GET("/api/v1/users", m.Wrap(api.withPerm(service.CapUsersManage, api.listUsers)))
-		m.POST("/api/v1/users", m.Wrap(api.withPerm(service.CapUsersManage, api.createUser)))
-		m.GET("/api/v1/users/*", m.Wrap(api.withPerm(service.CapUsersManage, api.getUser)))
-		m.PATCH("/api/v1/users/*", m.Wrap(api.withPerm(service.CapUsersManage, api.updateUser)))
-		m.DELETE("/api/v1/users/*", m.Wrap(api.withPerm(service.CapUsersManage, api.deleteUser)))
-		m.POST("/api/v1/users-kick/*", m.Wrap(api.withPerm(service.CapUsersManage, api.kickUser)))
+	// User management endpoints.
+	m.GET("/api/v1/users", m.Wrap(api.withPerm(service.CapUsersManage, api.listUsers)))
+	m.POST("/api/v1/users", m.Wrap(api.withPerm(service.CapUsersManage, api.createUser)))
+	m.GET("/api/v1/users/*", m.Wrap(api.withPerm(service.CapUsersManage, api.getUser)))
+	m.PATCH("/api/v1/users/*", m.Wrap(api.withPerm(service.CapUsersManage, api.updateUser)))
+	m.DELETE("/api/v1/users/*", m.Wrap(api.withPerm(service.CapUsersManage, api.deleteUser)))
+	m.POST("/api/v1/users-kick/*", m.Wrap(api.withPerm(service.CapUsersManage, api.kickUser)))
 
-		// Permission bundle management — also built-in only, since the
-		// forward-auth path stores its mapping directly in ExternalPermissions.
-		m.GET("/api/v1/permissions", m.Wrap(api.withPerm(service.CapPermissionsManage, api.listPermissions)))
-		m.POST("/api/v1/permissions", m.Wrap(api.withPerm(service.CapPermissionsManage, api.createPermission)))
-		m.PATCH("/api/v1/permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.updatePermission)))
-		m.DELETE("/api/v1/permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.deletePermission)))
+	// Permission bundle management.
+	m.GET("/api/v1/permissions", m.Wrap(api.withPerm(service.CapPermissionsManage, api.listPermissions)))
+	m.POST("/api/v1/permissions", m.Wrap(api.withPerm(service.CapPermissionsManage, api.createPermission)))
+	m.PATCH("/api/v1/permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.updatePermission)))
+	m.DELETE("/api/v1/permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.deletePermission)))
 
-		// User permission assignment endpoints
-		m.GET("/api/v1/user-permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.getUserPermissions)))
-		m.PUT("/api/v1/user-permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.setUserPermissions)))
-	}
+	// User permission assignment endpoints.
+	m.GET("/api/v1/user-permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.getUserPermissions)))
+	m.PUT("/api/v1/user-permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.setUserPermissions)))
 
 	m.GET("/api/v1/folder", m.Wrap(api.withPerm(service.CapFilesRead, api.getFolder)))
 	m.GET("/api/v1/folder/*", m.Wrap(api.withPerm(service.CapFilesRead, api.getFolder)))
@@ -276,62 +204,38 @@ func (a *api) infoHandler(c *ada.Context) error {
 	ctx := c.Request.Context()
 
 	// This endpoint lives on the unprotected mux (mAuth) so the SPA can
-	// always boot. Try to identify the caller from the session cookie or
-	// forward-auth headers — but never block if neither is present.
+	// always boot. Identify the caller from the context (set by the auth
+	// middleware on the protected mux) or fall back to any identity already
+	// in context if the request arrived on the unprotected mux.
 	username := service.UserFromContext(ctx)
-	if username == "" && a.sessionStore != nil {
-		if cookie, err := c.Request.Cookie(a.sessionStore.CookieName()); err == nil && cookie.Value != "" {
-			if sess := a.sessionStore.Get(cookie.Value); sess != nil {
-				username = sess.Username
-				ctx = service.WithUserInfo(ctx, sess.Username, sess.UserID)
-			}
-		}
-	}
-	// Also check X-User header (forward-auth identity without middleware).
-	if username == "" {
-		if xUser := c.Request.Header.Get("X-User"); xUser != "" {
-			username = xUser
-			ctx = service.WithUser(ctx, xUser)
-		}
-	}
-
-	// Expose the forward-auth redirect URL (if configured) so the login
-	// page can show a "Login with SSO" button for unauthenticated users.
-	var forwardAuthRedirectURL string
-	if a.forwardAuthSlot != nil && a.forwardAuthSlot.Enabled() {
-		if fa := a.svc.GetForwardAuthSettings(ctx); fa != nil && fa.RedirectURL != "" {
-			forwardAuthRedirectURL = fa.RedirectURL
-		}
-	}
 
 	resp := struct {
 		Info
-		User                   string               `json:"user,omitempty"`
-		AuthEnabled            bool                 `json:"auth_enabled"`
-		BuiltinAuth            bool                 `json:"builtin_auth"`
-		ForwardAuthEnabled     bool                 `json:"forward_auth_enabled"`
-		ForwardAuthRedirectURL string               `json:"forward_auth_redirect_url,omitempty"`
-		IsSuperadmin           bool                 `json:"is_superadmin"`
-		Permissions            []string             `json:"permissions"`
-		Capabilities           []service.Capability `json:"capabilities"`
-		SetupRequired          bool                 `json:"setup_required,omitempty"`
-		RawMounts              []MountInfo          `json:"raw_mounts,omitempty"`
+		User          string               `json:"user,omitempty"`
+		AuthEnabled   bool                 `json:"auth_enabled"`
+		BuiltinAuth   bool                 `json:"builtin_auth"`
+		IsSuperadmin  bool                 `json:"is_superadmin"`
+		Permissions   []string             `json:"permissions"`
+		Capabilities  []service.Capability `json:"capabilities"`
+		SetupRequired bool                 `json:"setup_required,omitempty"`
+		RawMounts     []MountInfo          `json:"raw_mounts,omitempty"`
 	}{
-		Info:                   a.info,
-		User:                   username,
-		AuthEnabled:            a.permissionsEnforced(ctx),
-		BuiltinAuth:            a.sessionStore != nil,
-		ForwardAuthEnabled:     a.forwardAuthSlot != nil && a.forwardAuthSlot.Enabled(),
-		ForwardAuthRedirectURL: forwardAuthRedirectURL,
-		Permissions:            []string{},
-		Capabilities:           service.KnownCapabilities,
-		RawMounts:              a.rawHandler.MountsInfo(),
+		Info:         a.info,
+		User:         username,
+		AuthEnabled:  true,
+		BuiltinAuth:  true,
+		Permissions:  []string{},
+		Capabilities: service.KnownCapabilities,
+		RawMounts:    a.rawHandler.MountsInfo(),
 	}
 
-	// Resolve capability keys via the unified resolver — handles both
-	// built-in users (DB lookup) and forward-auth users (group mapping).
-	if resp.AuthEnabled && username != "" {
-		keys, isSuperadmin, _, err := a.svc.ResolveUserCapabilityKeys(ctx, username)
+	// Resolve capabilities from context (set by CapMiddleware on protected routes).
+	// On unprotected mux (infoHandler), also try via ResolveLocalCapabilityKeys.
+	caps := service.CapabilitiesFromContext(ctx)
+	if len(caps) > 0 {
+		resp.Permissions = []string(caps)
+	} else if username != "" {
+		keys, isSuperadmin, _, err := a.svc.ResolveLocalCapabilityKeys(ctx, username)
 		if err == nil {
 			resp.IsSuperadmin = isSuperadmin
 			if keys != nil {
@@ -340,9 +244,16 @@ func (a *api) infoHandler(c *ada.Context) error {
 		}
 	}
 
-	// Fresh-install detection: built-in auth is active but no users exist yet.
+	// Check identity from ada's identity package for superadmin status.
+	if id := identity.FromContext(ctx); id != nil {
+		if len(caps) == len(service.KnownCapabilityKeys()) {
+			resp.IsSuperadmin = true
+		}
+	}
+
+	// Fresh-install detection: no users exist yet.
 	// The SPA uses this to route to the Setup page instead of Login.
-	if a.sessionStore != nil && username == "" {
+	if username == "" {
 		if count, err := a.svc.UserCount(ctx); err == nil && count == 0 {
 			resp.SetupRequired = true
 		}
@@ -355,6 +266,15 @@ func (a *api) getSettings(c *ada.Context) error {
 	settings, err := a.svc.Settings(c.Request.Context())
 	if err != nil {
 		return err
+	}
+
+	// Surface the effective auth config, not the raw DB row. When the
+	// settings row has no auth.local block, the server's boot path
+	// applies defaults (local strategy enabled); returning the bare DB
+	// view would make the UI render "disabled" for the strategy the
+	// user is literally using right now.
+	if settings != nil {
+		settings.Auth = settings.Auth.WithEffectiveDefaults()
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(settings)
@@ -421,59 +341,15 @@ func (a *api) postSettings(c *ada.Context) error {
 		}
 	}
 
-	// If forward-auth was updated, hot-swap the Slot.
-	if patchSettings.ForwardAuth != nil {
-		a.reloadForwardAuth(c.Request.Context())
-	}
-
-	// If external permissions were updated, userMiddleware picks up the new
-	// settings on the next request automatically — just log the change so
-	// admins can confirm it took effect.
-	if patchSettings.ExternalPermissions != nil {
-		if patchSettings.ExternalPermissions.Enabled {
-			slog.Info("external permissions enabled",
-				"groups_header", patchSettings.ExternalPermissions.GroupsHeader,
-				"mapping_entries", len(patchSettings.ExternalPermissions.Mapping),
-				"superadmins", len(patchSettings.ExternalPermissions.Superadmins),
-			)
-		} else {
-			slog.Info("external permissions disabled")
+	// If auth settings were updated, reload the auth manager.
+	// TODO: detect cookie/issuer changes and set restart_required in response.
+	if patchSettings.Auth != nil && a.mgr != nil {
+		if err := a.mgr.Reload(c.Request.Context(), patchSettings.Auth); err != nil {
+			return fmt.Errorf("auth reload failed: %w", err)
 		}
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(patchSettings)
-}
-
-// reloadForwardAuth reads the current forward-auth settings from DB and
-// hot-swaps the ada.Slot — enabling, replacing, or disabling the
-// forward-auth middleware at runtime without a server restart.
-func (a *api) reloadForwardAuth(ctx context.Context) {
-	fa := a.svc.GetForwardAuthSettings(ctx)
-	if fa != nil && fa.Enabled && fa.Address != "" {
-		cfg := mforwardauth.ForwardAuth{
-			Address:                  fa.Address,
-			AuthResponseHeaders:      fa.AuthResponseHeaders,
-			AuthResponseHeadersRegex: fa.AuthResponseHeadersRegex,
-			AuthRequestHeaders:       fa.AuthRequestHeaders,
-			TrustForwardHeader:       fa.TrustForwardHeader,
-			InsecureSkipVerify:       fa.InsecureSkipVerify,
-			RedirectURL:              fa.RedirectURL,
-			RedirectCode:             fa.RedirectCode,
-			RedirectStatusCodes:      fa.RedirectStatusCodes,
-			RequestMethod:            fa.RequestMethod,
-		}
-		if fa.Timeout != "" {
-			if d, err := time.ParseDuration(fa.Timeout); err == nil {
-				cfg.Timeout = d
-			}
-		}
-		a.forwardAuthSlot.Replace(mforwardauth.Middleware(mforwardauth.WithConfig(cfg)))
-		a.forwardAuthSlot.Enable()
-		slog.Info("forward-auth reloaded", "address", fa.Address)
-	} else {
-		a.forwardAuthSlot.Disable()
-		slog.Info("forward-auth disabled")
-	}
 }
 
 // reloadHooks reads hooks from settings and updates the dispatcher.
@@ -1383,20 +1259,11 @@ func (a *api) setAdminSecret(c *ada.Context) error {
 // The client can abort the connection to cancel the search.
 func (a *api) searchHandler(w http.ResponseWriter, r *http.Request) {
 	// Inline permission check — this is a raw http.Handler, not an ada
-	// handler, so it can't use the withPerm wrapper. Semantics must match
-	// a withPerm(files.read, ...) call exactly.
-	if a.permissionsEnforced(r.Context()) {
-		username := service.UserFromContext(r.Context())
-		if username != "" {
-			if err := a.svc.CheckPermission(r.Context(), username, service.CapFilesRead); err != nil {
-				if errors.Is(err, service.ErrForbidden) {
-					http.Error(w, `{"message":"forbidden"}`, http.StatusForbidden)
-				} else {
-					http.Error(w, `{"message":"permission check failed"}`, http.StatusInternalServerError)
-				}
-				return
-			}
-		}
+	// handler, so it can't use the withPerm wrapper.
+	caps := service.CapabilitiesFromContext(r.Context())
+	if !caps.Has(service.CapFilesRead) {
+		http.Error(w, `{"message":"forbidden"}`, http.StatusForbidden)
+		return
 	}
 
 	query := r.URL.Query().Get("q")

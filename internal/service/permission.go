@@ -10,22 +10,15 @@ import (
 )
 
 // PermissionSource identifies where a user's capability keys were resolved from.
-// Used by CheckPermission to apply the right enforcement semantics and by
-// infoHandler for diagnostics shipped to the UI.
 type PermissionSource string
 
 const (
-	// PermissionSourceNone means nothing is configured for this user — neither
-	// a built-in users row nor an enabled external-permissions mapping. The
+	// PermissionSourceNone means nothing is configured for this user. The
 	// progressive-restriction model treats this as "allow everything".
 	PermissionSourceNone PermissionSource = "none"
 	// PermissionSourceBuiltin means the keys came from the users / permissions
 	// / user_permissions tables (built-in auth path).
 	PermissionSourceBuiltin PermissionSource = "builtin"
-	// PermissionSourceExternal means the keys came from the settings-stored
-	// ExternalPermissions mapping (forward-auth path). Enforcement is strict:
-	// a missing key denies.
-	PermissionSourceExternal PermissionSource = "external"
 )
 
 // CreatePermissionRequest is the request body for creating a permission.
@@ -140,117 +133,101 @@ func (s *Service) GetUserPermissionKeysByUsername(ctx context.Context, username 
 }
 
 // ResolveUserCapabilityKeys returns the full, deduplicated set of capability
-// keys granted to a user. It unifies the two authentication modes:
+// keys granted to a user from the built-in users/permissions tables.
 //
-//   - Built-in auth: look up users.id → user_permissions → permission_keys.
-//   - Forward auth: look up ExternalPermissions.Superadmins and
-//     ExternalPermissions.Mapping against the group list on ctx
-//     (set by the API userMiddleware from the configured groups header).
-//
-// The returned source indicates which branch produced the keys and is used
-// by CheckPermission to decide enforcement semantics:
-//
-//   - "builtin"  → progressive restriction (unknown key → allow)
-//   - "external" → strict (missing key → deny)
-//   - "none"     → nothing configured (allow, preserves zero-config behavior)
-//
-// Superadmins from either mode receive KnownCapabilityKeys() and isSuperadmin=true.
+// Deprecated: new code should use ResolveLocalCapabilityKeys directly. This
+// method delegates to it and is kept for backward compatibility.
 func (s *Service) ResolveUserCapabilityKeys(
+	ctx context.Context,
+	username string,
+) (keys []string, isSuperadmin bool, source PermissionSource, err error) {
+	return s.ResolveLocalCapabilityKeys(ctx, username)
+}
+
+// ResolveLocalCapabilityKeys returns (keys, isSuperadmin, source, err) for a
+// local user identified by username. If the user is not found in the local DB,
+// returns source=PermissionSourceNone with no keys (not an error).
+func (s *Service) ResolveLocalCapabilityKeys(
 	ctx context.Context,
 	username string,
 ) (keys []string, isSuperadmin bool, source PermissionSource, err error) {
 	if username == "" {
 		return nil, false, PermissionSourceNone, nil
 	}
-
-	// 1. Built-in auth: try the users table first.
-	user, userErr := s.store.Users().GetByUsername(ctx, username)
-	if userErr == nil {
-		if user.IsSuperadmin {
-			return KnownCapabilityKeys(), true, PermissionSourceBuiltin, nil
+	user, err := s.store.Users().GetByUsername(ctx, username)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, false, PermissionSourceNone, nil
 		}
-		dbKeys, err := s.store.Permissions().GetUserCapabilityKeys(ctx, user.ID)
-		if err != nil {
-			return nil, false, PermissionSourceBuiltin, err
-		}
-		return dbKeys, false, PermissionSourceBuiltin, nil
+		return nil, false, "", err
 	}
-	if !errors.Is(userErr, ErrNotFound) {
-		return nil, false, "", userErr
-	}
+	return s.resolveCapabilityKeysForUser(ctx, user)
+}
 
-	// 2. Forward auth: consult ExternalPermissions settings.
-	ext := s.GetExternalPermissionsSettings(ctx)
-	if ext == nil || !ext.Enabled {
+// ResolveUserCapabilityKeysByID returns (keys, isSuperadmin, source, err) for
+// a user identified by their stable pika user ID. Used by CapResolver for
+// external identities (OAuth2, LDAP, Header) after FindOrCreateExternalUser
+// has resolved the session to a concrete user row. An empty userID yields
+// PermissionSourceNone with no error (absent — not a failure).
+func (s *Service) ResolveUserCapabilityKeysByID(
+	ctx context.Context,
+	userID string,
+) (keys []string, isSuperadmin bool, source PermissionSource, err error) {
+	if userID == "" {
 		return nil, false, PermissionSourceNone, nil
 	}
-
-	// 2a. Superadmin allowlist — matched by username.
-	for _, name := range ext.Superadmins {
-		if name == username {
-			return KnownCapabilityKeys(), true, PermissionSourceExternal, nil
+	user, err := s.store.Users().Get(ctx, userID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, false, PermissionSourceNone, nil
 		}
+		return nil, false, "", err
 	}
+	return s.resolveCapabilityKeysForUser(ctx, user)
+}
 
-	// 2b. Translate external group names to capability keys via Mapping.
-	groups := ExternalGroupsFromContext(ctx)
-	if len(groups) == 0 || len(ext.Mapping) == 0 {
-		return nil, false, PermissionSourceExternal, nil
+// resolveCapabilityKeysForUser is the shared tail of both name-keyed and
+// id-keyed resolvers: applies the is_superadmin shortcut, else reads
+// permissions.
+func (s *Service) resolveCapabilityKeysForUser(
+	ctx context.Context,
+	user *User,
+) (keys []string, isSuperadmin bool, source PermissionSource, err error) {
+	if user.IsSuperadmin {
+		return KnownCapabilityKeys(), true, PermissionSourceBuiltin, nil
 	}
-
-	seen := make(map[string]struct{})
-	var mapped []string
-	for _, g := range groups {
-		mappedKeys, ok := ext.Mapping[g]
-		if !ok {
-			continue
-		}
-		for _, k := range mappedKeys {
-			if _, dup := seen[k]; dup {
-				continue
-			}
-			seen[k] = struct{}{}
-			mapped = append(mapped, k)
-		}
+	dbKeys, err := s.store.Permissions().GetUserCapabilityKeys(ctx, user.ID)
+	if err != nil {
+		return nil, false, PermissionSourceBuiltin, err
 	}
-	return mapped, false, PermissionSourceExternal, nil
+	return dbKeys, false, PermissionSourceBuiltin, nil
 }
 
 // CheckPermission checks if a user has a specific capability key.
 // Returns nil if allowed, ErrForbidden if denied.
 //
-// Enforcement semantics depend on the source of the user's keys (see
-// ResolveUserCapabilityKeys):
-//
-//   - Superadmin → always allow.
-//   - Source "none" → allow (nothing configured anywhere).
-//   - Source "builtin" → progressive restriction: if no Permission row
-//     mentions the key, allow; otherwise require the user to have it.
-//   - Source "external" → strict: the user must have the key.
+// Enforcement uses progressive restriction: if no Permission row mentions the
+// key, the check passes (preserving zero-config behavior).
 func (s *Service) CheckPermission(ctx context.Context, username, permKey string) error {
-	keys, isSuperadmin, source, err := s.ResolveUserCapabilityKeys(ctx, username)
+	keys, isSuperadmin, source, err := s.ResolveLocalCapabilityKeys(ctx, username)
 	if err != nil {
 		return fmt.Errorf("permission check failed: %w", err)
 	}
 	if isSuperadmin {
 		return nil
 	}
-
-	switch source {
-	case PermissionSourceNone:
+	if source == PermissionSourceNone {
 		return nil
-	case PermissionSourceBuiltin:
-		// Progressive restriction — preserve the pre-existing zero-config
-		// behavior where an unreferenced capability key means "unrestricted".
-		exists, err := s.store.Permissions().HasCapabilityKey(ctx, permKey)
-		if err != nil {
-			return fmt.Errorf("permission check failed: %w", err)
-		}
-		if !exists {
-			return nil
-		}
-	case PermissionSourceExternal:
-		// Strict: once external permissions are enabled, a missing key denies.
+	}
+
+	// Progressive restriction: if the key is not referenced in any Permission
+	// row, allow unconditionally (zero-config behavior).
+	exists, err := s.store.Permissions().HasCapabilityKey(ctx, permKey)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if !exists {
+		return nil
 	}
 
 	for _, k := range keys {
