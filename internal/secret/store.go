@@ -2,6 +2,7 @@ package secret
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"sync"
 
@@ -73,6 +74,34 @@ func (s *Storage) Tx(ctx context.Context, fn func(ctx context.Context, tx servic
 		}
 		return fn(ctx, encTx)
 	})
+}
+
+// Backup forwards to the backend's Backup method. Encryption-at-rest in
+// the application layer would defeat Badger's streaming backup, so we
+// rely on disk-level encryption (or pika's own encryption_password on
+// the export envelope) for confidentiality.
+func (s *Storage) Backup(w io.Writer, since uint64) (uint64, error) {
+	return s.backend.Backup(w, since)
+}
+
+// BackupUntil forwards to the backend's point-in-time backup.
+func (s *Storage) BackupUntil(w io.Writer, until uint64) (uint64, error) {
+	return s.backend.BackupUntil(w, until)
+}
+
+// Restore forwards to the backend's Restore method.
+func (s *Storage) Restore(r io.Reader) error {
+	return s.backend.Restore(r)
+}
+
+// Wipe forwards to the backend's Wipe.
+func (s *Storage) Wipe() error {
+	return s.backend.Wipe()
+}
+
+// Version forwards to the backend's monotonic version counter.
+func (s *Storage) Version() uint64 {
+	return s.backend.Version()
 }
 
 // RotateKey is retained for future use when column-level encryption is supported.

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"io"
 	"time"
 
 	"github.com/rakunlabs/query"
@@ -33,6 +34,40 @@ type Storage interface {
 	// Tx executes a function within a transaction.
 	// If the function returns an error, the transaction is rolled back.
 	Tx(ctx context.Context, fn func(ctx context.Context, tx Storage) error) error
+
+	// Backup writes a streaming backup of the entire database to w.
+	// since=0 produces a full backup; non-zero values produce an
+	// incremental backup including only entries newer than the given
+	// version. The format is backend-specific (currently Badger's
+	// streaming format) and not interchangeable across major versions
+	// of the storage backend. Returns the latest version included in
+	// the backup so a follow-up incremental can chain off it.
+	Backup(w io.Writer, since uint64) (uint64, error)
+
+	// BackupUntil writes a point-in-time backup containing only entries
+	// whose internal version is ≤ until. Useful for restoring the
+	// database to the exact state it had at a known checkpoint.
+	BackupUntil(w io.Writer, until uint64) (uint64, error)
+
+	// Restore replays a backup stream into the database. Restore is an
+	// upsert: existing keys are overwritten where they overlap with the
+	// stream, but keys absent from the stream are NOT removed. Callers
+	// that want a true "replace" must call Wipe first.
+	Restore(r io.Reader) error
+
+	// Wipe removes every key from the database in one operation —
+	// data, indexes, unique reservations, and bw schema metadata.
+	// After Wipe the in-process bucket handles still work; the next
+	// write repopulates whatever bw needs. This is destructive and
+	// irreversible; callers gating it behind a confirmation prompt
+	// is strongly recommended.
+	Wipe() error
+
+	// Version returns the current monotonic transaction version of the
+	// database. This number is what callers pass to Backup(since=…) and
+	// BackupUntil(until=…). The value increases on every write tx
+	// commit.
+	Version() uint64
 }
 
 // UserStorage manages user records.

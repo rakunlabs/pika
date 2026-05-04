@@ -291,7 +291,7 @@ Pika is configured via environment variables (prefixed with `PIKA_`) or a config
 | `PIKA_SERVER_PORT`           | `8080`             | Listen port (admin UI + authenticated data)      |
 | `PIKA_SERVER_PUBLIC_PORT`    |                    | Public data port (unauthenticated `/data/*`)     |
 | `PIKA_SERVER_BASE_PATH`      | `/`                | Base URL path                                    |
-| `PIKA_STORAGE_PATH`          | `data/pika.db`     | SQLite database path                             |
+| `PIKA_STORAGE_BW_PATH`       | `data/pika`        | BadgerDB data directory                          |
 | `PIKA_SECRET_ENCRYPTION_KEY` |                    | Encryption key — setting this enables encryption |
 | `PIKA_LOG_LEVEL`             | `info`             | Log level                                        |
 
@@ -401,8 +401,8 @@ patches:
                 secure: true
                 same_site: lax
           storage:
-            sqlite:
-              dsn: file:/data/pika.db?cache=shared
+            bw:
+              path: /data/pika
   - target:
       kind: HTTPRoute
       name: pika

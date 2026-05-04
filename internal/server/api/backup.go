@@ -1,19 +1,60 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/rakunlabs/ada"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
+// backupInfoResponse is what GET /api/v1/backup/info returns. The UI
+// uses DBVersion to prefill incremental ("since") and point-in-time
+// ("until") inputs without having to first export a backup just to read
+// the version.
+type backupInfoResponse struct {
+	DBVersion uint64 `json:"db_version"`
+}
+
+// getBackupInfo handles GET /api/v1/backup/info
+//
+// Auth: same admin-secret gate as the export endpoint. Returning the
+// version doesn't leak data, but pinning it behind the same gate keeps
+// the surface uniform.
+func (a *api) getBackupInfo(c *ada.Context) error {
+	adminSecret := c.Request.URL.Query().Get("admin_secret")
+	if adminSecret == "" {
+		adminSecret = c.Request.Header.Get("X-Admin-Secret")
+	}
+	if adminSecret == "" {
+		return errors.Join(fmt.Errorf("admin_secret is required"), service.ErrBadRequest)
+	}
+	if err := a.svc.VerifyAdminSecret(c.Request.Context(), adminSecret); err != nil {
+		return err
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(backupInfoResponse{
+		DBVersion: a.svc.Version(),
+	})
+}
+
 // exportBackup handles GET /api/v1/backup
-// Requires admin_secret as a query parameter or X-Admin-Secret header.
-// Optionally accepts encryption_password query param or X-Encryption-Password header
-// to encrypt the backup payload.
+//
+// Streams a `.pikabw` container (header + payload). Optional query/header
+// parameters:
+//
+//	since=<uint64>                — incremental backup (entries newer than)
+//	until=<uint64>                — point-in-time snapshot (entries up to)
+//	encryption_password=<string>  — encrypt payload with ChaCha20
+//	X-Admin-Secret                — auth (also accepted as ?admin_secret=)
+//	X-Encryption-Password         — auth-style header equivalent of the query param
+//
+// since and until are mutually exclusive. The DB version captured at
+// export time is returned in X-Pika-DB-Version (informational; the same
+// value is also embedded in the .pikabw header).
 func (a *api) exportBackup(c *ada.Context) error {
 	adminSecret := c.Request.URL.Query().Get("admin_secret")
 	if adminSecret == "" {
@@ -32,92 +73,130 @@ func (a *api) exportBackup(c *ada.Context) error {
 		encryptionPassword = c.Request.Header.Get("X-Encryption-Password")
 	}
 
-	c.Response.Header().Set("Content-Type", "application/json")
-	c.Response.Header().Set("Content-Disposition", `attachment; filename="pika-backup.json"`)
+	since, err := parseUintParam(c, "since")
+	if err != nil {
+		return err
+	}
+	until, err := parseUintParam(c, "until")
+	if err != nil {
+		return err
+	}
+	if since != 0 && until != 0 {
+		return errors.Join(fmt.Errorf("since and until are mutually exclusive"), service.ErrBadRequest)
+	}
+
+	timestamp := time.Now().UTC().Format("20060102-150405")
+	filename := fmt.Sprintf("pika-backup-%s-v%d.pikabw", timestamp, a.svc.Version())
+
+	c.Response.Header().Set("Content-Type", "application/octet-stream")
+	c.Response.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	c.SetStatus(http.StatusOK)
 
-	encoder := json.NewEncoder(c.Response)
-	encoder.SetIndent("", "  ")
-
-	if encryptionPassword != "" {
-		encrypted, err := a.svc.ExportEncrypted(c.Request.Context(), encryptionPassword)
-		if err != nil {
-			return fmt.Errorf("encrypted export failed: %w", err)
-		}
-		return encoder.Encode(encrypted)
+	if _, err := a.svc.Backup(c.Request.Context(), c.Response, service.BackupOptions{
+		Since:              since,
+		Until:              until,
+		EncryptionPassword: encryptionPassword,
+	}); err != nil {
+		// Headers may already be flushed by the time Backup fails, so
+		// this error is best-effort. The transfer-aware client should
+		// notice the truncated stream.
+		return err
 	}
-
-	backup, err := a.svc.Export(c.Request.Context())
-	if err != nil {
-		return fmt.Errorf("export failed: %w", err)
-	}
-
-	return encoder.Encode(backup)
+	return nil
 }
 
 // importBackup handles POST /api/v1/backup
-// Expects a JSON body with: { "admin_secret": "...", "mode": "replace"|"merge", "data": { ... } }
-// The "data" field can be either a plain BackupData object or an EncryptedBackup envelope.
-// If the data contains "encrypted": true, the "encryption_password" field is required to decrypt it.
+//
+// Body MUST be the raw `.pikabw` stream (Content-Type:
+// application/octet-stream). Auth fields ride on headers/query so the
+// body can be streamed straight through to Service.Restore without
+// having to spool it through JSON.
+//
+//	X-Admin-Secret          — admin secret (or ?admin_secret=)
+//	X-Encryption-Password   — required when the backup header has the
+//	                          encrypted flag set (or ?encryption_password=)
+//	X-Pika-Wipe             — set to "true"/"1" to wipe the database
+//	                          before restoring (or ?wipe=true). The
+//	                          backup is validated (magic + decryption
+//	                          test if encrypted) BEFORE any wipe runs.
+//
+// Default behaviour is upsert (no wipe). The merge/replace modes from
+// the SQLite era are gone; the wipe flag is the closest equivalent of
+// the old "replace" mode.
 func (a *api) importBackup(c *ada.Context) error {
-	var req struct {
-		AdminSecret        string          `json:"admin_secret"`
-		Mode               string          `json:"mode"`
-		EncryptionPassword string          `json:"encryption_password"`
-		Data               json.RawMessage `json:"data"`
+	adminSecret := c.Request.URL.Query().Get("admin_secret")
+	if adminSecret == "" {
+		adminSecret = c.Request.Header.Get("X-Admin-Secret")
 	}
-	if err := c.Bind(&req); err != nil {
-		return errors.Join(err, service.ErrBadRequest)
-	}
-
-	if req.AdminSecret == "" {
+	if adminSecret == "" {
 		return errors.Join(fmt.Errorf("admin_secret is required"), service.ErrBadRequest)
 	}
-	if len(req.Data) == 0 {
-		return errors.Join(fmt.Errorf("data is required"), service.ErrBadRequest)
-	}
-	if req.Mode == "" {
-		req.Mode = service.ImportModeMerge
-	}
-
-	if err := a.svc.VerifyAdminSecret(c.Request.Context(), req.AdminSecret); err != nil {
+	if err := a.svc.VerifyAdminSecret(c.Request.Context(), adminSecret); err != nil {
 		return err
 	}
 
-	// Detect whether the data is an encrypted envelope or plain backup
-	var backupData *service.BackupData
-
-	var probe struct {
-		Encrypted bool `json:"encrypted"`
-	}
-	if err := json.Unmarshal(req.Data, &probe); err != nil {
-		return errors.Join(fmt.Errorf("invalid data format"), service.ErrBadRequest)
+	encryptionPassword := c.Request.URL.Query().Get("encryption_password")
+	if encryptionPassword == "" {
+		encryptionPassword = c.Request.Header.Get("X-Encryption-Password")
 	}
 
-	if probe.Encrypted {
-		// Encrypted backup — decrypt first
-		var envelope service.EncryptedBackup
-		if err := json.Unmarshal(req.Data, &envelope); err != nil {
-			return errors.Join(fmt.Errorf("invalid encrypted backup format"), service.ErrBadRequest)
-		}
-
-		decrypted, err := service.DecryptBackupData(&envelope, req.EncryptionPassword)
-		if err != nil {
-			return err
-		}
-		backupData = decrypted
-	} else {
-		// Plain backup — parse directly
-		var plain service.BackupData
-		if err := json.Unmarshal(req.Data, &plain); err != nil {
-			return errors.Join(fmt.Errorf("invalid backup data format"), service.ErrBadRequest)
-		}
-		backupData = &plain
+	wipe, err := parseBoolFlag(
+		c.Request.URL.Query().Get("wipe"),
+		c.Request.Header.Get("X-Pika-Wipe"),
+	)
+	if err != nil {
+		return errors.Join(fmt.Errorf("wipe must be a boolean: %w", err), service.ErrBadRequest)
 	}
 
-	if err := a.svc.Import(c.Request.Context(), backupData, req.Mode); err != nil {
-		return fmt.Errorf("import failed: %w", err)
+	if c.Request.Body == nil {
+		return errors.Join(fmt.Errorf("request body is empty"), service.ErrBadRequest)
+	}
+	defer c.Request.Body.Close()
+
+	if err := a.svc.Restore(c.Request.Context(), c.Request.Body, service.RestoreOptions{
+		Password: encryptionPassword,
+		Wipe:     wipe,
+	}); err != nil {
+		return fmt.Errorf("restore failed: %w", err)
 	}
 
-	return c.SetStatus(http.StatusOK).SendJSON(response{Message: "backup imported successfully"})
+	msg := "backup restored successfully"
+	if wipe {
+		msg = "database wiped and backup restored successfully"
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(response{Message: msg})
 }
+
+// parseBoolFlag returns the first non-empty candidate parsed via
+// strconv.ParseBool. Empty candidates are skipped — the caller can
+// pass both a query param and a header without having to pre-check
+// either, and the first non-empty wins. Returns (false, nil) when
+// every candidate is empty.
+func parseBoolFlag(candidates ...string) (bool, error) {
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		return strconv.ParseBool(c)
+	}
+	return false, nil
+}
+
+// parseUintParam returns the named query parameter as a uint64. An
+// empty/missing param returns 0 with no error. A non-numeric value is a
+// 400.
+func parseUintParam(c *ada.Context, name string) (uint64, error) {
+	raw := c.Request.URL.Query().Get(name)
+	if raw == "" {
+		return 0, nil
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, errors.Join(fmt.Errorf("%s must be a non-negative integer: %w", name, err), service.ErrBadRequest)
+	}
+	return v, nil
+}
+
+// keep io referenced — the import handler streams Request.Body
+// straight to the service layer.
+var _ io.Reader = (io.Reader)(nil)

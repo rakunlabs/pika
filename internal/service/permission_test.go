@@ -1,34 +1,23 @@
 package service_test
 
 import (
-	"context"
 	"errors"
-	"path/filepath"
 	"slices"
 	"testing"
 
 	"github.com/rakunlabs/pika/internal/service"
-	"github.com/rakunlabs/pika/internal/storage/sqlite"
+	bwstore "github.com/rakunlabs/pika/internal/storage/bw"
 )
 
-// newTestService boots an in-memory-like Service backed by a temp SQLite DB
-// with all migrations applied. Each test gets a fresh, isolated database.
+// newTestService boots an in-memory bw-backed Service. Each test
+// gets a fresh, isolated database (Badger in-memory mode skips the
+// on-disk directory entirely).
 func newTestService(t *testing.T) *service.Service {
 	t.Helper()
 
-	dbPath := filepath.Join(t.TempDir(), "pika-test.db")
-	dsn := "file:" + dbPath + "?cache=shared"
-
-	ctx := context.Background()
-	store, err := sqlite.New(ctx, &sqlite.Config{
-		DSN: dsn,
-		Migration: sqlite.Migration{
-			Enabled: true,
-			DSN:     dsn,
-		},
-	})
+	store, err := bwstore.New(t.Context(), &bwstore.Config{InMemory: true})
 	if err != nil {
-		t.Fatalf("sqlite.New: %v", err)
+		t.Fatalf("bw.New: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
@@ -39,7 +28,7 @@ func newTestService(t *testing.T) *service.Service {
 // password hash + timestamps are populated correctly. Returns the created id.
 func createUserHelper(t *testing.T, svc *service.Service, username string) string {
 	t.Helper()
-	info, err := svc.CreateUser(context.Background(), &service.CreateUserRequest{
+	info, err := svc.CreateUser(t.Context(), &service.CreateUserRequest{
 		Username: username,
 		Password: "test-password-1234",
 	})
@@ -52,7 +41,7 @@ func createUserHelper(t *testing.T, svc *service.Service, username string) strin
 // createSuperadminHelper inserts a superadmin via CreateSetupUser.
 func createSuperadminHelper(t *testing.T, svc *service.Service, username string) string {
 	t.Helper()
-	info, err := svc.CreateSetupUser(context.Background(), &service.CreateUserRequest{
+	info, err := svc.CreateSetupUser(t.Context(), &service.CreateUserRequest{
 		Username: username,
 		Password: "test-password-1234",
 	})
@@ -65,7 +54,7 @@ func createSuperadminHelper(t *testing.T, svc *service.Service, username string)
 // createPermHelper creates a Permission bundle and assigns it to the given user.
 func createPermAndAssign(t *testing.T, svc *service.Service, userID, key, name string, caps []string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	perm, err := svc.CreatePermission(ctx, &service.CreatePermissionRequest{
 		Key:  key,
 		Name: name,
@@ -84,7 +73,7 @@ func createPermAndAssign(t *testing.T, svc *service.Service, userID, key, name s
 func TestResolveEmptyUsername(t *testing.T) {
 	svc := newTestService(t)
 
-	keys, isSuper, source, err := svc.ResolveUserCapabilityKeys(context.Background(), "")
+	keys, isSuper, source, err := svc.ResolveUserCapabilityKeys(t.Context(), "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -96,7 +85,7 @@ func TestResolveEmptyUsername(t *testing.T) {
 func TestResolveSystemUsername(t *testing.T) {
 	svc := newTestService(t)
 
-	_, _, source, err := svc.ResolveUserCapabilityKeys(context.Background(), "system")
+	_, _, source, err := svc.ResolveUserCapabilityKeys(t.Context(), "system")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,7 +98,7 @@ func TestResolveBuiltinUserWithNoPermissions(t *testing.T) {
 	svc := newTestService(t)
 	createUserHelper(t, svc, "alice")
 
-	keys, isSuper, source, err := svc.ResolveUserCapabilityKeys(context.Background(), "alice")
+	keys, isSuper, source, err := svc.ResolveUserCapabilityKeys(t.Context(), "alice")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -130,7 +119,7 @@ func TestResolveBuiltinUserWithPermissions(t *testing.T) {
 	createPermAndAssign(t, svc, userID, "editor", "Editor",
 		[]string{service.CapFilesRead, service.CapFilesWrite})
 
-	keys, isSuper, source, err := svc.ResolveUserCapabilityKeys(context.Background(), "alice")
+	keys, isSuper, source, err := svc.ResolveUserCapabilityKeys(t.Context(), "alice")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -149,7 +138,7 @@ func TestResolveBuiltinSuperadminGetsAllKnownKeys(t *testing.T) {
 	svc := newTestService(t)
 	createSuperadminHelper(t, svc, "root")
 
-	keys, isSuper, source, err := svc.ResolveUserCapabilityKeys(context.Background(), "root")
+	keys, isSuper, source, err := svc.ResolveUserCapabilityKeys(t.Context(), "root")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -174,7 +163,7 @@ func TestResolveUnknownUserReturnsNone(t *testing.T) {
 	svc := newTestService(t)
 
 	// No users table entry.
-	keys, isSuper, source, err := svc.ResolveUserCapabilityKeys(context.Background(), "bob")
+	keys, isSuper, source, err := svc.ResolveUserCapabilityKeys(t.Context(), "bob")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -194,7 +183,7 @@ func TestCheckPermissionBuiltinProgressiveUnrestricted(t *testing.T) {
 
 	// No Permission rows mention files.read at all, so progressive restriction
 	// should treat it as unrestricted and allow alice through.
-	err := svc.CheckPermission(context.Background(), "alice", service.CapFilesRead)
+	err := svc.CheckPermission(t.Context(), "alice", service.CapFilesRead)
 	if err != nil {
 		t.Errorf("want nil (progressive allow), got %v", err)
 	}
@@ -209,13 +198,13 @@ func TestCheckPermissionBuiltinRestrictedUserMissing(t *testing.T) {
 	createPermAndAssign(t, svc, aliceID, "reader", "Reader", []string{service.CapFilesRead})
 
 	// alice: allowed.
-	if err := svc.CheckPermission(context.Background(), "alice", service.CapFilesRead); err != nil {
+	if err := svc.CheckPermission(t.Context(), "alice", service.CapFilesRead); err != nil {
 		t.Errorf("alice should be allowed, got %v", err)
 	}
 
 	// bob: the key is "known" to the system now, so progressive restriction
 	// kicks in and denies since bob doesn't have it.
-	err := svc.CheckPermission(context.Background(), "bob", service.CapFilesRead)
+	err := svc.CheckPermission(t.Context(), "bob", service.CapFilesRead)
 	if !errors.Is(err, service.ErrForbidden) {
 		t.Errorf("bob should be forbidden, got %v", err)
 	}
@@ -227,7 +216,7 @@ func TestCheckPermissionBuiltinSuperadminAllows(t *testing.T) {
 
 	// Superadmin passes every check even when no permissions are configured.
 	for _, cap := range service.KnownCapabilityKeys() {
-		if err := svc.CheckPermission(context.Background(), "root", cap); err != nil {
+		if err := svc.CheckPermission(t.Context(), "root", cap); err != nil {
 			t.Errorf("superadmin denied for %q: %v", cap, err)
 		}
 	}
@@ -237,7 +226,7 @@ func TestCheckPermissionNoConfigAllowAll(t *testing.T) {
 	svc := newTestService(t)
 	// No users, no permissions. Current "unrestricted" behavior.
 	for _, cap := range service.KnownCapabilityKeys() {
-		if err := svc.CheckPermission(context.Background(), "random", cap); err != nil {
+		if err := svc.CheckPermission(t.Context(), "random", cap); err != nil {
 			t.Errorf("no-config: want allow for %q, got %v", cap, err)
 		}
 	}

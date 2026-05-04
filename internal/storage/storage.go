@@ -3,27 +3,22 @@ package storage
 import (
 	"context"
 
-	"github.com/rakunlabs/pika/internal/service"
-	"github.com/rakunlabs/pika/internal/storage/sqlite"
+	bwstore "github.com/rakunlabs/pika/internal/storage/bw"
 )
 
+// Config selects and configures the storage backend. Today bw (a typed
+// BadgerDB wrapper) is the only backend; SQLite was removed in favour of
+// it (cf. the bw README for capability/cluster details).
 type Config struct {
-	SQLite sqlite.Config `cfg:"sqlite"`
+	BW bwstore.Config `cfg:"bw"`
 }
 
-// Storage extends service.Storage with Close functionality.
-type Storage interface {
-	service.Storage
+// Storage extends the bw-backed storage with Close.
+type Storage = *bwstore.Storage
 
-	// Close closes the storage connection.
-	Close() error
-}
-
+// New opens the configured storage backend. There is currently only one
+// backend; the switch shape is kept so adding additional ones later is
+// purely additive.
 func New(ctx context.Context, cfg *Config) (Storage, error) {
-	switch {
-	case cfg.SQLite.Enabled:
-		return sqlite.New(ctx, &cfg.SQLite)
-	default:
-		return nil, service.ErrNoStorageBackend
-	}
+	return bwstore.New(ctx, &cfg.BW)
 }

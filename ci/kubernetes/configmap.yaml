@@ -13,5 +13,5 @@ data:
           secure: true
           same_site: lax
     storage:
-      sqlite:
-        dsn: file:/data/pika.db?cache=shared
+      bw:
+        path: /data/pika

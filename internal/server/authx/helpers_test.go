@@ -1,32 +1,21 @@
 package authx
 
 import (
-	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/rakunlabs/pika/internal/service"
-	"github.com/rakunlabs/pika/internal/storage/sqlite"
+	bwstore "github.com/rakunlabs/pika/internal/storage/bw"
 )
 
-// newTestService boots an in-memory-like Service backed by a temp SQLite DB
-// with all migrations applied. Each test gets a fresh, isolated database.
+// newTestService boots an in-memory bw-backed Service. Each test gets
+// a fresh, isolated database (Badger in-memory mode skips the on-
+// disk directory entirely).
 func newTestService(t *testing.T) *service.Service {
 	t.Helper()
 
-	dbPath := filepath.Join(t.TempDir(), "pika-test.db")
-	dsn := "file:" + dbPath + "?cache=shared"
-
-	ctx := context.Background()
-	store, err := sqlite.New(ctx, &sqlite.Config{
-		DSN: dsn,
-		Migration: sqlite.Migration{
-			Enabled: true,
-			DSN:     dsn,
-		},
-	})
+	store, err := bwstore.New(t.Context(), &bwstore.Config{InMemory: true})
 	if err != nil {
-		t.Fatalf("sqlite.New: %v", err)
+		t.Fatalf("bw.New: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
