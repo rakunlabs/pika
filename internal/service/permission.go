@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -23,18 +24,25 @@ const (
 
 // CreatePermissionRequest is the request body for creating a permission.
 type CreatePermissionRequest struct {
-	Key         string   `json:"key"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Keys        []string `json:"keys"`
+	Key         string              `json:"key"`
+	Name        string              `json:"name"`
+	Description string              `json:"description"`
+	Keys        []string            `json:"keys"`
+	KeyPatterns map[string][]string `json:"key_patterns,omitempty"`
 }
 
 // UpdatePermissionRequest is the request body for updating a permission.
+//
+// KeyPatterns semantics on update:
+//   - omitted (nil)  → patterns left untouched
+//   - present (even if empty map) → patterns replaced wholesale; keys not
+//     in the map become unrestricted
 type UpdatePermissionRequest struct {
-	Key         *string  `json:"key,omitempty"`
-	Name        *string  `json:"name,omitempty"`
-	Description *string  `json:"description,omitempty"`
-	Keys        []string `json:"keys,omitempty"`
+	Key         *string             `json:"key,omitempty"`
+	Name        *string             `json:"name,omitempty"`
+	Description *string             `json:"description,omitempty"`
+	Keys        []string            `json:"keys,omitempty"`
+	KeyPatterns map[string][]string `json:"key_patterns,omitempty"`
 }
 
 func generatePermissionID() (string, error) {
@@ -65,6 +73,7 @@ func (s *Service) CreatePermission(ctx context.Context, req *CreatePermissionReq
 		Name:        req.Name,
 		Description: req.Description,
 		Keys:        req.Keys,
+		KeyPatterns: sanitizeKeyPatterns(req.KeyPatterns),
 		CreatedAt:   time.Now(),
 	}
 
@@ -99,8 +108,60 @@ func (s *Service) UpdatePermission(ctx context.Context, id string, req *UpdatePe
 	if req.Keys != nil {
 		perm.Keys = req.Keys
 	}
+	if req.KeyPatterns != nil {
+		perm.KeyPatterns = sanitizeKeyPatterns(req.KeyPatterns)
+	}
 
 	return s.store.Permissions().Update(ctx, perm)
+}
+
+// sanitizeKeyPatterns trims whitespace, drops empty patterns, deduplicates,
+// and returns nil when the result is empty (so JSON omitempty stays clean).
+// It also rejects any pattern containing ".." segments to avoid path-traversal
+// surprises in glob matching — patterns are intended to scope down, not to
+// reach outside their natural namespace.
+func sanitizeKeyPatterns(in map[string][]string) map[string][]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(in))
+	for k, ps := range in {
+		seen := make(map[string]struct{}, len(ps))
+		var clean []string
+		for _, p := range ps {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			// Reject obvious traversal attempts. doublestar treats ".." as
+			// a literal segment, but allowing it in a permission pattern
+			// is almost certainly a mistake.
+			if hasTraversalSegment(p) {
+				continue
+			}
+			if _, dup := seen[p]; dup {
+				continue
+			}
+			seen[p] = struct{}{}
+			clean = append(clean, p)
+		}
+		if len(clean) > 0 {
+			out[k] = clean
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func hasTraversalSegment(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // DeletePermission deletes a permission by ID.
@@ -201,6 +262,66 @@ func (s *Service) resolveCapabilityKeysForUser(
 		return nil, false, PermissionSourceBuiltin, err
 	}
 	return dbKeys, false, PermissionSourceBuiltin, nil
+}
+
+// ResolveUserCapabilityPatterns returns, for each capability key the user
+// holds, the union of doublestar path patterns scoping that grant.
+//
+// Union semantics: if any one of the user's permissions grants a key with
+// no patterns, the grant is unrestricted across the union (and that key is
+// omitted from the returned map). Only keys whose every granting permission
+// declares patterns end up in the map; their values are the union of those
+// patterns.
+//
+// This means a "narrow" permission (e.g. `configs/team-a/**`) is widened
+// when combined with a "broad" permission (no patterns) — the broad one
+// wins. That matches the additive semantics permissions already use today
+// for capability keys.
+//
+// Returns an empty map (not nil) for users with no scoped grants.
+func (s *Service) ResolveUserCapabilityPatterns(ctx context.Context, userID string) (map[string][]string, error) {
+	if userID == "" {
+		return map[string][]string{}, nil
+	}
+	perms, err := s.store.Permissions().GetUserPermissions(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Pass 1: figure out which keys are unrestricted (some granting
+	// permission carries no patterns for that key).
+	unrestricted := make(map[string]bool)
+	for _, p := range perms {
+		for _, k := range p.Keys {
+			pats := p.KeyPatterns[k]
+			if len(pats) == 0 {
+				unrestricted[k] = true
+			}
+		}
+	}
+
+	// Pass 2: for keys that are *always* scoped, union the patterns.
+	out := make(map[string][]string)
+	for _, p := range perms {
+		for k, pats := range p.KeyPatterns {
+			if unrestricted[k] || len(pats) == 0 {
+				continue
+			}
+			seen := make(map[string]struct{}, len(out[k]))
+			for _, existing := range out[k] {
+				seen[existing] = struct{}{}
+			}
+			for _, pat := range pats {
+				if _, dup := seen[pat]; dup {
+					continue
+				}
+				seen[pat] = struct{}{}
+				out[k] = append(out[k], pat)
+			}
+		}
+	}
+
+	return out, nil
 }
 
 // CheckPermission checks if a user has a specific capability key.

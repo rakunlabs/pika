@@ -46,6 +46,11 @@ export interface PermissionInfo {
   name: string;
   description: string;
   keys: string[];
+  // Optional per-key path-glob restrictions. A key absent from this map (or
+  // mapped to an empty array) is unrestricted: matches any path. A non-empty
+  // array means the grant only applies to paths matching one of the
+  // doublestar globs.
+  key_patterns?: Record<string, string[]>;
   created_at: string;
 }
 
@@ -198,13 +203,26 @@ function createAppStore() {
     }
   }
 
-  async function createPermission(key: string, name: string, description: string, keys: string[]): Promise<PermissionInfo> {
-    const response = await axios.post('/api/v1/permissions', { key, name, description, keys });
+  async function createPermission(
+    key: string,
+    name: string,
+    description: string,
+    keys: string[],
+    keyPatterns?: Record<string, string[]>,
+  ): Promise<PermissionInfo> {
+    const body: Record<string, unknown> = { key, name, description, keys };
+    if (keyPatterns && Object.keys(keyPatterns).length > 0) {
+      body.key_patterns = keyPatterns;
+    }
+    const response = await axios.post('/api/v1/permissions', body);
     await loadPermissions();
     return response.data;
   }
 
-  async function updatePermission(id: string, data: { key?: string; name?: string; description?: string; keys?: string[] }): Promise<void> {
+  async function updatePermission(
+    id: string,
+    data: { key?: string; name?: string; description?: string; keys?: string[]; key_patterns?: Record<string, string[]> },
+  ): Promise<void> {
     await axios.patch(`/api/v1/permissions/${id}`, data);
     await loadPermissions();
   }

@@ -163,6 +163,31 @@ func (s *Service) GetUserIdentities(ctx context.Context, userID string) ([]UserI
 	return s.store.UserIdentities().ListByUserID(ctx, userID)
 }
 
+// ListIdentitiesByProvider returns every identity issued by a given provider
+// (typically a sync source ID). Used by the user-sync reconciliation pass.
+func (s *Service) ListIdentitiesByProvider(ctx context.Context, provider string) ([]UserIdentity, error) {
+	return s.store.UserIdentities().ListByProvider(ctx, provider)
+}
+
+// GetUserByID is the public-shaped (UserInfo) accessor for the typed user
+// row. Used by the sync engine and any other callers that need the
+// projection without having to call store.Users() directly.
+func (s *Service) GetUserByID(ctx context.Context, id string) (*UserInfo, error) {
+	user, err := s.store.Users().Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	info := user.toInfo()
+	return &info, nil
+}
+
+// SetUserPermissionsBySource replaces only the user_permissions rows
+// tagged with the given source. Used by the sync engine so a sync run
+// owns its own grants without trampling admin-curated 'local' rows.
+func (s *Service) SetUserPermissionsBySource(ctx context.Context, userID, source string, permissionIDs []string) error {
+	return s.store.Permissions().SetUserPermissionsBySource(ctx, userID, source, permissionIDs)
+}
+
 // GetUserByIdentity resolves a (provider, subject) pair to the pika user
 // it's linked to. Returns ErrNotFound when no link exists. Used by the
 // capability resolver on protected-request paths, which cannot afford

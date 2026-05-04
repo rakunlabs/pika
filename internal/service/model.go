@@ -78,6 +78,10 @@ type UserIdentityStorage interface {
 	FindByProviderSubject(ctx context.Context, provider, subject string) (*UserIdentity, error)
 	// ListByUserID returns every identity linked to a user, oldest first.
 	ListByUserID(ctx context.Context, userID string) ([]UserIdentity, error)
+	// ListByProvider returns every identity issued by a given provider,
+	// oldest first. Used by the user-sync reconciliation pass to find
+	// previously-synced users that the directory no longer returns.
+	ListByProvider(ctx context.Context, provider string) ([]UserIdentity, error)
 	// Delete removes a single (provider, subject) link. Used for admin
 	// "unlink" operations.
 	Delete(ctx context.Context, id string) error
@@ -111,13 +115,20 @@ type SessionStorage interface {
 // Permission represents a defined permission in the system.
 // A permission bundles one or more capability keys (e.g. "files.read", "files.write")
 // under a single assignable name.
+//
+// KeyPatterns optionally narrows each granted capability key to one or more
+// doublestar glob patterns. A capability key with no entry in KeyPatterns
+// (or with an empty slice) is unrestricted — matches any path. A non-empty
+// slice means: this grant only applies to paths matching one of the
+// listed patterns.
 type Permission struct {
-	ID          string    `json:"id"`
-	Key         string    `json:"key"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Keys        []string  `json:"keys"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string              `json:"id"`
+	Key         string              `json:"key"`
+	Name        string              `json:"name"`
+	Description string              `json:"description"`
+	Keys        []string            `json:"keys"`
+	KeyPatterns map[string][]string `json:"key_patterns,omitempty"`
+	CreatedAt   time.Time           `json:"created_at"`
 }
 
 // PermissionStorage manages permissions and user-permission assignments.
@@ -128,7 +139,20 @@ type PermissionStorage interface {
 	Update(ctx context.Context, perm *Permission) error
 	Delete(ctx context.Context, id string) error
 	SetPermissionKeys(ctx context.Context, permissionID string, keys []string) error
+	// SetPermissionKeyPatterns replaces the pattern list for a single
+	// (permission, key) grant. The (permission, key) pair must already
+	// exist in permission_keys. Passing an empty slice clears all
+	// patterns (grant becomes unrestricted again).
+	SetPermissionKeyPatterns(ctx context.Context, permissionID, key string, patterns []string) error
+	// SetUserPermissions replaces every assignment for a user, regardless
+	// of source. Use SetUserPermissionsBySource for sync-engine rewrites
+	// that must leave 'local' (admin-curated) rows alone.
 	SetUserPermissions(ctx context.Context, userID string, permissionIDs []string) error
+	// SetUserPermissionsBySource replaces only the rows whose source
+	// matches the given tag. Rows with other source values are preserved.
+	// Used by the user-sync engine: it owns rows tagged with its source
+	// ID, and must never delete rows tagged 'local'.
+	SetUserPermissionsBySource(ctx context.Context, userID, source string, permissionIDs []string) error
 	GetUserPermissions(ctx context.Context, userID string) ([]Permission, error)
 	// GetUserCapabilityKeys returns the deduplicated set of capability keys
 	// granted to a user through all their assigned permissions.

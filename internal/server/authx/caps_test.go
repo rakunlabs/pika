@@ -29,7 +29,7 @@ func TestCapResolver_SuperadminAllCaps(t *testing.T) {
 		svc:      nil,
 		settings: service.CapabilityMapping{Superadmins: []string{"alice"}},
 	}
-	got, _, _ := cr.resolve(context.Background(), &identity.Identity{Subject: "alice", Provider: "oauth2"})
+	got, _, _, _ := cr.resolve(context.Background(), &identity.Identity{Subject: "alice", Provider: "oauth2"})
 	if len(got) != len(service.KnownCapabilityKeys()) {
 		t.Errorf("superadmin: expected all caps, got %d", len(got))
 	}
@@ -42,7 +42,7 @@ func TestCapResolver_RoleMapping(t *testing.T) {
 			RoleMapping: map[string][]string{"editor": {"files.read", "files.write"}},
 		},
 	}
-	got, _, _ := cr.resolve(context.Background(), &identity.Identity{
+	got, _, _, _ := cr.resolve(context.Background(), &identity.Identity{
 		Subject:  "bob",
 		Provider: "header",
 		Roles:    []string{"editor"},
@@ -60,7 +60,7 @@ func TestCapResolver_LocalDelegates(t *testing.T) {
 	}
 
 	cr := &CapResolver{svc: svc, settings: service.CapabilityMapping{}}
-	got, _, _ := cr.resolve(context.Background(), &identity.Identity{Subject: "carol", Provider: "local"})
+	got, _, _, _ := cr.resolve(context.Background(), &identity.Identity{Subject: "carol", Provider: "local"})
 	// Superadmin by construction — expect all caps.
 	if len(got) == 0 {
 		t.Error("local superadmin should have caps")
@@ -110,7 +110,7 @@ func TestCapResolver_ExternalUsesDBPermissions(t *testing.T) {
 	}
 
 	cr := &CapResolver{svc: svc, settings: service.CapabilityMapping{}}
-	got, username, userID := cr.resolve(ctx, &identity.Identity{
+	got, username, userID, _ := cr.resolve(ctx, &identity.Identity{
 		Subject:  "sub-42",
 		Provider: "google",
 	})
@@ -152,7 +152,7 @@ func TestCapResolver_ExternalUnionsRoleMapping(t *testing.T) {
 	cr := &CapResolver{svc: svc, settings: service.CapabilityMapping{
 		RoleMapping: map[string][]string{"writer": {service.CapFilesWrite}},
 	}}
-	got, _, _ := cr.resolve(ctx, &identity.Identity{
+	got, _, _, _ := cr.resolve(ctx, &identity.Identity{
 		Subject:  "sub-99",
 		Provider: "google",
 		Roles:    []string{"writer"},

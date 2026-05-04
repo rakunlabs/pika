@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Key, Globe, FolderOpen, Share2, Server, Webhook, RotateCw, Lock, HardDrive, ShieldCheck, Info } from "lucide-svelte";
+  import { Key, Globe, FolderOpen, Share2, Server, Webhook, RotateCw, Lock, HardDrive, ShieldCheck, Info, Users } from "lucide-svelte";
 
   import TokensSection from "@/pages/settings/TokensSection.svelte";
   import ExternalResourcesSection from "@/pages/settings/ExternalResourcesSection.svelte";
@@ -9,12 +9,13 @@
   import PublicServerSection from "@/pages/settings/PublicServerSection.svelte";
   import HooksSection from "@/pages/settings/HooksSection.svelte";
   import AuthSection from "@/pages/settings/AuthSection.svelte";
+  import UserSyncSection from "@/pages/settings/UserSyncSection.svelte";
   import KeyRotationSection from "@/pages/settings/KeyRotationSection.svelte";
   import SecuritySection from "@/pages/settings/SecuritySection.svelte";
   import BackupSection from "@/pages/settings/BackupSection.svelte";
   import AboutSection from "@/pages/settings/AboutSection.svelte";
 
-  type Section = 'tokens' | 'external' | 'raw_mounts' | 'ftp_shares' | 'file_servers' | 'public_server' | 'hooks' | 'auth' | 'rotation' | 'security' | 'backup' | 'about';
+  type Section = 'tokens' | 'external' | 'raw_mounts' | 'ftp_shares' | 'file_servers' | 'public_server' | 'hooks' | 'auth' | 'user_sync' | 'rotation' | 'security' | 'backup' | 'about';
 
   let activeSection = $state<Section>('tokens');
 
@@ -27,6 +28,7 @@
     { key: 'public_server', label: 'Public Server',     icon: Globe },
     { key: 'hooks',         label: 'Hooks',             icon: Webhook },
     { key: 'auth',          label: 'Authentication',    icon: ShieldCheck },
+    { key: 'user_sync',     label: 'User Sync',         icon: Users },
     { key: 'rotation',      label: 'Key Rotation',      icon: RotateCw },
     { key: 'security',      label: 'Security',          icon: Lock },
     { key: 'backup',        label: 'Backup',            icon: HardDrive },
@@ -73,6 +75,8 @@
         <HooksSection />
       {:else if activeSection === 'auth'}
         <AuthSection />
+      {:else if activeSection === 'user_sync'}
+        <UserSyncSection />
       {:else if activeSection === 'rotation'}
         <KeyRotationSection />
       {:else if activeSection === 'security'}

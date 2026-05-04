@@ -217,6 +217,121 @@ type CapabilityMapping struct {
 	ScopeMapping map[string][]string `json:"scope_mapping,omitempty"`
 }
 
+// UserSyncSettings holds every configured user-sync source. Top-level on
+// purpose (not nested under a single LDAP strategy) so the same install
+// can pull from multiple LDAP servers, and so future sources (SCIM,
+// CSV upload, etc.) plug in at the same level.
+type UserSyncSettings struct {
+	Sources []SyncSource `json:"sources,omitempty"`
+}
+
+// SyncSource is one user provider that pika reconciles its local user
+// table against. Each source's (provider, subject) tuples form a
+// namespace inside user_identities — changing a source's ID after rows
+// exist will orphan those rows, which is intentional: it's how an admin
+// "removes" an LDAP source without losing audit history.
+type SyncSource struct {
+	// ID is the stable handle used as user_identities.provider for users
+	// provisioned by this source. Pattern: lowercase, no spaces.
+	// Example: "ldap-prod".
+	ID string `json:"id"`
+	// Name is the human label shown in the UI.
+	Name string `json:"name"`
+	// Type is the source kind. Currently only "ldap"; reserved for future
+	// drivers (e.g. "scim").
+	Type string `json:"type"`
+	// Enabled gates the periodic schedule and JIT path. When false, the
+	// source still exists in settings but neither the cron nor login
+	// auto-provisioning will use it.
+	Enabled bool `json:"enabled"`
+	// LDAP is the source-specific config when Type="ldap". Other Type
+	// values would carry their own pointer here in the future.
+	LDAP *LDAPSyncSpec `json:"ldap,omitempty"`
+	// Schedule controls the periodic batch sync. Manual ("Sync now") and
+	// JIT (first-login) paths run regardless of schedule.
+	Schedule SyncSchedule `json:"schedule"`
+	// OnMissing decides what happens to local users provisioned by this
+	// source who are no longer returned by the search filter.
+	//   "disable" — set users.disabled=true (default; reversible)
+	//   "ignore"  — leave the user row alone
+	OnMissing string `json:"on_missing,omitempty"`
+}
+
+// SyncSchedule controls when the periodic sync goroutine fires.
+type SyncSchedule struct {
+	// Mode: "manual" (no ticker) or "interval" (every IntervalMinutes).
+	Mode string `json:"mode"`
+	// IntervalMinutes is the cadence when Mode="interval". Minimum 1.
+	IntervalMinutes int `json:"interval_minutes,omitempty"`
+}
+
+// LDAPSyncSpec holds the LDAP-specific fields of a SyncSource: how to
+// connect, what to search for, and how to map LDAP attributes onto
+// pika's user fields.
+//
+// Keeping connection params here (rather than referencing the login-side
+// AuthSettings.LDAP) lets sync run against a different bind/base than
+// the login flow if an operator wants e.g. a service account with broader
+// search rights.
+type LDAPSyncSpec struct {
+	Address      string `json:"address"`
+	TLS          bool   `json:"tls,omitempty"`
+	InsecureSkip bool   `json:"insecure_skip,omitempty"`
+	BindDN       string `json:"bind_dn"`
+	BindPassword string `json:"bind_password,omitempty"`
+
+	// UserBaseDN is the search root, e.g. "ou=people,dc=example,dc=com".
+	UserBaseDN string `json:"user_base_dn"`
+	// UserFilter is an LDAP search filter, e.g. "(objectClass=person)".
+	// Defaults to "(objectClass=*)" when empty.
+	UserFilter string `json:"user_filter,omitempty"`
+	// PageSize controls paged search; 0 = library default (500).
+	PageSize uint32 `json:"page_size,omitempty"`
+
+	// Attributes maps LDAP attribute names onto pika user fields. Every
+	// field is optional; an empty value means "don't read this".
+	Attributes LDAPAttributeMap `json:"attributes"`
+
+	// GroupPermissions maps an LDAP group value (verbatim, as it appears
+	// in the user's Attributes.Groups attribute — typically a full DN for
+	// memberOf) onto a list of pika permission IDs to grant.
+	//
+	// At sync time, each user's groups are looked up here; the union of
+	// matched permission IDs is written to user_permissions with
+	// source=<SyncSource.ID>. Permissions assigned via the admin UI
+	// (source='local') are untouched.
+	GroupPermissions map[string][]string `json:"group_permissions,omitempty"`
+}
+
+// LDAPAttributeMap binds LDAP attribute names to pika user fields. Each
+// non-empty field tells the sync engine "read this LDAP attribute and
+// store its (first) value in the matching pika field". Multi-valued
+// attributes (groups) take the full list.
+type LDAPAttributeMap struct {
+	// Username is the LDAP attribute used as the pika username.
+	// Common: "uid" (OpenLDAP), "sAMAccountName" (AD), "cn".
+	Username string `json:"username"`
+	// Subject is the stable provider-side identifier stored in
+	// user_identities.subject. Defaults to the value of Username when
+	// empty. For directories that expose a stable opaque ID, prefer
+	// "entryUUID" (OpenLDAP) or "objectGUID" (AD).
+	Subject string `json:"subject,omitempty"`
+	// Email is the LDAP attribute used as users.email.
+	// Common: "mail".
+	Email string `json:"email,omitempty"`
+	// DisplayName is the LDAP attribute used as users.display_name.
+	// Common: "displayName", "cn", "gecos".
+	DisplayName string `json:"display_name,omitempty"`
+	// GivenName / Surname are read for use as fallbacks when DisplayName
+	// is missing — DisplayName takes precedence; if absent and these
+	// are set, sync uses "GivenName Surname".
+	GivenName string `json:"given_name,omitempty"`
+	Surname   string `json:"surname,omitempty"`
+	// Groups is a multi-valued attribute (typically "memberOf") whose
+	// values feed GroupPermissions.
+	Groups string `json:"groups,omitempty"`
+}
+
 // GetAuthSettings returns the current AuthSettings from DB settings, or nil
 // when nothing has been configured yet.
 func (s *Service) GetAuthSettings(ctx context.Context) *AuthSettings {

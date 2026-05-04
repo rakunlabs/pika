@@ -148,6 +148,7 @@ type Settings struct {
 	ExternalPermissions *ExternalPermissionsSettings `json:"external_permissions,omitempty"`
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 	Auth                *AuthSettings                `json:"auth,omitempty"`
+	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
 }
 
 // FTPServeSettings configures the built-in FTP server (stored in DB).
@@ -239,6 +240,7 @@ type PatchSettings struct {
 	ExternalPermissions *ExternalPermissionsSettings `json:"external_permissions,omitempty"`
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 	Auth                *AuthSettings                `json:"auth,omitempty"`
+	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
 }
 
 type ActionKey string
@@ -352,6 +354,11 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 	// Handle auth settings update (if provided)
 	if patch.Auth != nil {
 		settings.Auth = patch.Auth
+	}
+
+	// Handle user-sync settings update (if provided)
+	if patch.UserSync != nil {
+		settings.UserSync = patch.UserSync
 	}
 
 	return s.UpdateSettings(ctx, settings)

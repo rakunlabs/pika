@@ -26,6 +26,7 @@ import (
 	"github.com/rakunlabs/pika/internal/serve/webdavserve"
 	"github.com/rakunlabs/pika/internal/server/authx"
 	"github.com/rakunlabs/pika/internal/service"
+	"github.com/rakunlabs/pika/internal/usersync"
 )
 
 // Info holds server metadata returned by the info endpoint.
@@ -48,6 +49,7 @@ type api struct {
 	mgr               *authx.Manager      // auth manager (login/logout/cap resolution)
 	rawHandler        *RawHandler         // nil if no raw mounts configured
 	startPublicServer PublicServerStarter // set by server.go
+	syncScheduler     *usersync.Scheduler // nil until set by server.go
 }
 
 type response struct {
@@ -71,7 +73,12 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	hook.ServiceName = config.ServiceName
 	hook.Version = config.Version
 
-	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, rawHandler: rh, startPublicServer: publicStarter}
+	// User-sync scheduler runs LDAP sync sources on a per-source ticker.
+	// Constructed here so the api handlers and the postSettings reload
+	// path share one instance. Started below after the routes register.
+	syncSched := usersync.NewScheduler(svc)
+
+	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, rawHandler: rh, startPublicServer: publicStarter, syncScheduler: syncSched}
 
 	m.ErrorHandler(api.errorHandler)
 
@@ -104,24 +111,28 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.GET("/api/v1/user-permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.getUserPermissions)))
 	m.PUT("/api/v1/user-permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.setUserPermissions)))
 
-	m.GET("/api/v1/folder", m.Wrap(api.withPerm(service.CapFilesRead, api.getFolder)))
-	m.GET("/api/v1/folder/*", m.Wrap(api.withPerm(service.CapFilesRead, api.getFolder)))
-	m.POST("/api/v1/folder/*", m.Wrap(api.withPerm(service.CapFilesWrite, api.postFolder)))
-	m.DELETE("/api/v1/folder/*", m.Wrap(api.withPerm(service.CapFilesWrite, api.deleteFolder)))
+	// Folder routes — directory listing reads use the ancestor variant so
+	// users granted only a deep pattern (e.g. configs/team-a/**) can still
+	// navigate the root and intermediate directories. Writes require the
+	// path itself to match a pattern.
+	m.GET("/api/v1/folder", m.Wrap(api.withPermPath(service.CapFilesRead, pathFromWildcard, true, api.getFolder)))
+	m.GET("/api/v1/folder/*", m.Wrap(api.withPermPath(service.CapFilesRead, pathFromWildcard, true, api.getFolder)))
+	m.POST("/api/v1/folder/*", m.Wrap(api.withPermPath(service.CapFilesWrite, pathFromWildcard, false, api.postFolder)))
+	m.DELETE("/api/v1/folder/*", m.Wrap(api.withPermPath(service.CapFilesWrite, pathFromWildcard, false, api.deleteFolder)))
 
-	m.GET("/api/v1/file/*", m.Wrap(api.withPerm(service.CapFilesRead, api.getFile)))
-	m.POST("/api/v1/file/*", m.Wrap(api.withPerm(service.CapFilesWrite, api.postFile)))
-	m.DELETE("/api/v1/file/*", m.Wrap(api.withPerm(service.CapFilesWrite, api.deleteFile)))
+	m.GET("/api/v1/file/*", m.Wrap(api.withPermPath(service.CapFilesRead, pathFromWildcard, false, api.getFile)))
+	m.POST("/api/v1/file/*", m.Wrap(api.withPermPath(service.CapFilesWrite, pathFromWildcard, false, api.postFile)))
+	m.DELETE("/api/v1/file/*", m.Wrap(api.withPermPath(service.CapFilesWrite, pathFromWildcard, false, api.deleteFile)))
 
 	// File versions endpoint
-	m.GET("/api/v1/versions/*", m.Wrap(api.withPerm(service.CapFilesRead, api.getFileVersions)))
-	m.PATCH("/api/v1/versions/*", m.Wrap(api.withPerm(service.CapFilesWrite, api.patchFileVersion)))
+	m.GET("/api/v1/versions/*", m.Wrap(api.withPermPath(service.CapFilesRead, pathFromWildcard, false, api.getFileVersions)))
+	m.PATCH("/api/v1/versions/*", m.Wrap(api.withPermPath(service.CapFilesWrite, pathFromWildcard, false, api.patchFileVersion)))
 
 	// Variant endpoints
-	m.GET("/api/v1/variants/*", m.Wrap(api.withPerm(service.CapFilesRead, api.listVariants)))
+	m.GET("/api/v1/variants/*", m.Wrap(api.withPermPath(service.CapFilesRead, pathFromWildcard, false, api.listVariants)))
 
 	// Render endpoint — resolves inheritance and variations for preview
-	m.POST("/api/v1/render/*", m.Wrap(api.withPerm(service.CapFilesRead, api.renderFile)))
+	m.POST("/api/v1/render/*", m.Wrap(api.withPermPath(service.CapFilesRead, pathFromWildcard, false, api.renderFile)))
 
 	// Token management endpoints
 	m.GET("/api/v1/tokens", m.Wrap(api.withPerm(service.CapTokensManage, api.listTokens)))
@@ -167,12 +178,26 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// of configured secret backends, so it's gated on settings management.
 	m.GET("/api/v1/external/*/paths", m.Wrap(api.withPerm(service.CapSettingsManage, api.listExternalPaths)))
 
+	// User-sync endpoints (LDAP and future drivers). The endpoints
+	// inspect/run the scheduler that's owned by this api struct.
+	// Gated by settings management since they touch credentials and
+	// reshape user_permissions wholesale.
+	m.GET("/api/v1/user-sync/status", m.Wrap(api.withPerm(service.CapSettingsManage, api.listUserSyncStatus)))
+	m.POST("/api/v1/user-sync/run/*", m.Wrap(api.withPerm(service.CapSettingsManage, api.runUserSync)))
+	m.POST("/api/v1/user-sync/test/*", m.Wrap(api.withPerm(service.CapSettingsManage, api.testUserSync)))
+
 	// info and healthz are registered on the unprotected mux so the SPA
 	// can always boot (even when forward-auth would redirect API calls).
 	// The handler itself checks context for user identity and returns
 	// appropriate info — full details when authenticated, minimal when not.
 	mAuth.GET("/api/v1/info", mAuth.Wrap(api.infoHandler))
 	mAuth.GET("/healthz", mAuth.Wrap(api.healthzHandler))
+
+	// Boot the user-sync scheduler with current settings. Reload happens
+	// inside postSettings whenever PatchSettings.UserSync is set.
+	if curSettings, err := svc.Settings(rh.appCtx); err == nil {
+		syncSched.Start(rh.appCtx, curSettings.UserSync)
+	}
 
 	return nil
 }
@@ -347,6 +372,13 @@ func (a *api) postSettings(c *ada.Context) error {
 		if err := a.mgr.Reload(c.Request.Context(), patchSettings.Auth); err != nil {
 			return fmt.Errorf("auth reload failed: %w", err)
 		}
+	}
+
+	// If user-sync sources were updated, reload the scheduler so periodic
+	// jobs pick up the new config (or get stopped, or fire for the first
+	// time on a freshly-enabled source).
+	if patchSettings.UserSync != nil && a.syncScheduler != nil {
+		a.syncScheduler.Reload(patchSettings.UserSync)
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(patchSettings)
@@ -1265,6 +1297,7 @@ func (a *api) searchHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"message":"forbidden"}`, http.StatusForbidden)
 		return
 	}
+	patterns := service.CapabilityPatternsFromContext(r.Context())
 
 	query := r.URL.Query().Get("q")
 	if query == "" {
@@ -1296,12 +1329,18 @@ func (a *api) searchHandler(w http.ResponseWriter, r *http.Request) {
 		_ = a.svc.Search(ctx, query, results)
 	}()
 
-	// Stream results as SSE events
+	// Stream results as SSE events. When the user's files.read grant is
+	// path-scoped, each result's Path must match before being forwarded.
+	// Empty patterns (the common case) are a no-op: Allows returns true.
 	for result := range results {
 		select {
 		case <-ctx.Done():
 			return
 		default:
+		}
+
+		if !patterns.Allows(service.CapFilesRead, result.Path) {
+			continue
 		}
 
 		data, err := json.Marshal(result)

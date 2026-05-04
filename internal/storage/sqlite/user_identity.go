@@ -131,6 +131,33 @@ func (s *userIdentityStorage) ListByUserID(ctx context.Context, userID string) (
 	return out, nil
 }
 
+func (s *userIdentityStorage) ListByProvider(ctx context.Context, provider string) ([]service.UserIdentity, error) {
+	rows, err := s.q.QueryContext(ctx,
+		`SELECT `+userIdentitySelectCols+` FROM user_identities WHERE provider = ? ORDER BY created_at ASC`,
+		provider,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []service.UserIdentity
+	for rows.Next() {
+		ident, err := scanUserIdentityRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *ident)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []service.UserIdentity{}
+	}
+	return out, nil
+}
+
 func (s *userIdentityStorage) Delete(ctx context.Context, id string) error {
 	_, err := s.q.ExecContext(ctx, `DELETE FROM user_identities WHERE id = ?`, id)
 	return err

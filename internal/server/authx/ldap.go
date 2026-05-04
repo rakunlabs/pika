@@ -4,22 +4,25 @@ import (
 	"github.com/rakunlabs/ada/middleware/auth/strategy"
 	"github.com/rakunlabs/ada/middleware/auth/strategy/ldap"
 
+	"github.com/rakunlabs/pika/internal/ldapclient"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
-// BuildLDAP constructs an LDAP strategy from settings. Returns nil when
-// settings are absent or incomplete.
+// BuildLDAP constructs a working LDAP login strategy from settings.
+// Returns nil when settings are absent or incomplete.
 //
-// NOTE: BindPassword is treated as plaintext — TODO: re-encrypt via secret store (Task 20).
+// The strategy is plugged into ada's LDAP package, which calls into the
+// pika ldapclient connector for the actual LDAP wire protocol. The
+// connector is shared with the user-sync engine so creds and TLS settings
+// live in one place.
 //
-// NOTE: ada's ldap.Config only supports Address, BaseDN, BindDN, BindPassword, UserFilter.
-// LDAPStrategySettings fields GroupBaseDN, GroupFilter, TLS, InsecureSkip have no
-// corresponding fields in the ada LDAP Config at this time — they are stored but
-// not forwarded until ada adds support.
+// LDAP attribute mapping for login: defaults to (uid, mail, cn). The
+// user-sync layer carries a richer mapping that admins configure per
+// source; for the login leg we keep the historical defaults so plain
+// LDAP installs work with no extra setup.
 //
-// NOTE: ldap.New requires a non-nil Connector. Since pika ships no LDAP connector
-// implementation, BuildLDAP returns nil with a TODO if settings are present.
-// TODO: implement a go-ldap-based Connector and wire it here.
+// NOTE: BindPassword is currently plaintext, matching the rest of
+// AuthSettings. TODO: re-encrypt via secret store.
 func BuildLDAP(s *service.LDAPStrategySettings) (strategy.Authenticator, error) {
 	if s == nil || s.Addr == "" {
 		return nil, nil
@@ -28,26 +31,29 @@ func BuildLDAP(s *service.LDAPStrategySettings) (strategy.Authenticator, error) 
 	if name == "" {
 		name = "ldap"
 	}
-	// TODO: decrypt s.BindPassword via secret store when available.
-	pw := s.BindPassword
+
+	connector := ldapclient.New(ldapclient.Config{
+		Address:      s.Addr,
+		TLS:          s.TLS,
+		InsecureSkip: s.InsecureSkip,
+	})
 
 	cfg := ldap.Config{
 		Address:      s.Addr,
+		BaseDN:       s.UserBaseDN,
 		BindDN:       s.BindDN,
-		BindPassword: pw,
+		BindPassword: s.BindPassword, // TODO: decrypt via secret store
 		UserFilter:   s.UserFilter,
 	}
+	if cfg.UserFilter == "" {
+		cfg.UserFilter = "(uid=%s)"
+	}
+
 	attrs := ldap.AttributeMap{
 		Subject: "uid",
 		Email:   "mail",
 		Name:    "cn",
 	}
 
-	// TODO: supply a real Connector implementation (e.g. using go-ldap).
-	// Returning nil for now — LDAP strategy is not functional until a
-	// Connector is provided. This stub prevents build failures.
-	_ = name
-	_ = cfg
-	_ = attrs
-	return nil, nil
+	return ldap.New(name, connector, cfg, attrs), nil
 }

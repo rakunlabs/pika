@@ -758,6 +758,41 @@ function createConfigStore() {
     }
   }
 
+  async function saveUserSync(userSync: import('@/lib/types/config').UserSyncSettings): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', { action: 'set', user_sync: userSync });
+      if (settings) {
+        settings = { ...settings, user_sync: userSync };
+      } else {
+        settings = { user_sync: userSync };
+      }
+      addToast('User sync sources saved', 'success');
+    } catch (error: any) {
+      const msg = error.response?.data?.message || 'Failed to save user sync settings';
+      addToast(msg, 'alert');
+      throw error;
+    }
+  }
+
+  async function listUserSyncStatus(): Promise<import('@/lib/types/config').SyncSourceStatus[]> {
+    try {
+      const response = await axios.get('/api/v1/user-sync/status');
+      return response.data || [];
+    } catch {
+      return [];
+    }
+  }
+
+  async function runUserSync(sourceId: string): Promise<import('@/lib/types/config').SyncReport> {
+    const response = await axios.post(`/api/v1/user-sync/run/${encodeURIComponent(sourceId)}`);
+    return response.data;
+  }
+
+  async function testUserSync(sourceId: string): Promise<{ total_returned: number; entries: { dn: string; attributes: Record<string, string[]> }[] }> {
+    const response = await axios.post(`/api/v1/user-sync/test/${encodeURIComponent(sourceId)}`);
+    return response.data;
+  }
+
   async function saveRawMounts(mounts: import('@/lib/types/config').RawMountEntry[]): Promise<void> {
     try {
       await axios.post('/api/v1/settings', {
@@ -1129,6 +1164,10 @@ function createConfigStore() {
     saveServeSettings,
     savePublicServerSettings,
     saveHooks,
+    saveUserSync,
+    listUserSyncStatus,
+    runUserSync,
+    testUserSync,
     listExternalPaths,
 
     // Token operations

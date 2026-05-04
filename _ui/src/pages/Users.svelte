@@ -36,13 +36,17 @@
   let newPermName = $state('');
   let newPermDesc = $state('');
   let newPermKeys = $state<string[]>([]);
+  let newPermPatterns = $state<Record<string, string[]>>({});
   let creatingPerm = $state(false);
   let editingPerm = $state<PermissionInfo | null>(null);
   let editPermKey = $state('');
   let editPermName = $state('');
   let editPermDesc = $state('');
   let editPermKeys = $state<string[]>([]);
+  let editPermPatterns = $state<Record<string, string[]>>({});
   let confirmDeletePermId = $state<string | null>(null);
+  let showNewPatternHelp = $state(false);
+  let showEditPatternHelp = $state(false);
 
   // Canonical list of capability keys — sourced from the server via
   // /api/v1/info so this stays in sync with the Go constants in
@@ -209,6 +213,12 @@
   function toggleNewPermKey(key: string) {
     if (newPermKeys.includes(key)) {
       newPermKeys = newPermKeys.filter(k => k !== key);
+      // Drop any patterns staged for this key — they're meaningless without
+      // the cap selected, and re-adding the cap should start fresh.
+      if (newPermPatterns[key]) {
+        const { [key]: _, ...rest } = newPermPatterns;
+        newPermPatterns = rest;
+      }
     } else {
       newPermKeys = [...newPermKeys, key];
     }
@@ -217,9 +227,67 @@
   function toggleEditPermKey(key: string) {
     if (editPermKeys.includes(key)) {
       editPermKeys = editPermKeys.filter(k => k !== key);
+      if (editPermPatterns[key]) {
+        const { [key]: _, ...rest } = editPermPatterns;
+        editPermPatterns = rest;
+      }
     } else {
       editPermKeys = [...editPermKeys, key];
     }
+  }
+
+  // Pattern editors mutate a Record<string, string[]>. Reassigning the
+  // outer object on every change keeps Svelte 5 reactivity happy.
+  function addPattern(target: 'new' | 'edit', key: string) {
+    if (target === 'new') {
+      newPermPatterns = { ...newPermPatterns, [key]: [...(newPermPatterns[key] ?? []), ''] };
+    } else {
+      editPermPatterns = { ...editPermPatterns, [key]: [...(editPermPatterns[key] ?? []), ''] };
+    }
+  }
+
+  function updatePattern(target: 'new' | 'edit', key: string, idx: number, value: string) {
+    if (target === 'new') {
+      const arr = [...(newPermPatterns[key] ?? [])];
+      arr[idx] = value;
+      newPermPatterns = { ...newPermPatterns, [key]: arr };
+    } else {
+      const arr = [...(editPermPatterns[key] ?? [])];
+      arr[idx] = value;
+      editPermPatterns = { ...editPermPatterns, [key]: arr };
+    }
+  }
+
+  function removePattern(target: 'new' | 'edit', key: string, idx: number) {
+    if (target === 'new') {
+      const arr = (newPermPatterns[key] ?? []).filter((_, i) => i !== idx);
+      if (arr.length === 0) {
+        const { [key]: _drop, ...rest } = newPermPatterns;
+        newPermPatterns = rest;
+      } else {
+        newPermPatterns = { ...newPermPatterns, [key]: arr };
+      }
+    } else {
+      const arr = (editPermPatterns[key] ?? []).filter((_, i) => i !== idx);
+      if (arr.length === 0) {
+        const { [key]: _drop, ...rest } = editPermPatterns;
+        editPermPatterns = rest;
+      } else {
+        editPermPatterns = { ...editPermPatterns, [key]: arr };
+      }
+    }
+  }
+
+  // Strip empties + return undefined when no patterns remain, so we don't
+  // send `key_patterns: {}` in request bodies.
+  function cleanPatterns(map: Record<string, string[]>, allowedKeys: string[]): Record<string, string[]> | undefined {
+    const out: Record<string, string[]> = {};
+    for (const k of Object.keys(map)) {
+      if (!allowedKeys.includes(k)) continue;
+      const trimmed = (map[k] ?? []).map(s => s.trim()).filter(Boolean);
+      if (trimmed.length > 0) out[k] = trimmed;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
   }
 
   // Permission CRUD handlers
@@ -229,12 +297,14 @@
     // Auto-generate key from name if not provided
     const key = newPermKey || newPermName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9.-]/g, '');
     try {
-      await appStore.createPermission(key, newPermName, newPermDesc, newPermKeys);
+      const patterns = cleanPatterns(newPermPatterns, newPermKeys);
+      await appStore.createPermission(key, newPermName, newPermDesc, newPermKeys, patterns);
       addToast(`Permission "${newPermName}" created`, 'success');
       newPermKey = '';
       newPermName = '';
       newPermDesc = '';
       newPermKeys = [];
+      newPermPatterns = {};
       showCreatePermForm = false;
     } catch (err: any) {
       addToast(err?.response?.data?.message || 'Failed to create permission', 'alert');
@@ -249,12 +319,32 @@
     editPermName = perm.name;
     editPermDesc = perm.description;
     editPermKeys = [...(perm.keys || [])];
+    // Deep-copy patterns so edits don't mutate the cached PermissionInfo.
+    const src = perm.key_patterns ?? {};
+    const copy: Record<string, string[]> = {};
+    for (const k of Object.keys(src)) copy[k] = [...src[k]];
+    editPermPatterns = copy;
+  }
+
+  // Compares two pattern maps (after cleaning) for content equality.
+  function patternsEqual(a: Record<string, string[]> | undefined, b: Record<string, string[]> | undefined): boolean {
+    const ka = a ? Object.keys(a).sort() : [];
+    const kb = b ? Object.keys(b).sort() : [];
+    if (ka.length !== kb.length) return false;
+    for (let i = 0; i < ka.length; i++) {
+      if (ka[i] !== kb[i]) return false;
+      const av = [...(a?.[ka[i]] ?? [])].sort();
+      const bv = [...(b?.[kb[i]] ?? [])].sort();
+      if (av.length !== bv.length) return false;
+      for (let j = 0; j < av.length; j++) if (av[j] !== bv[j]) return false;
+    }
+    return true;
   }
 
   async function handleSaveEditPerm() {
     if (!editingPerm) return;
     try {
-      const updates: { key?: string; name?: string; description?: string; keys?: string[] } = {};
+      const updates: { key?: string; name?: string; description?: string; keys?: string[]; key_patterns?: Record<string, string[]> } = {};
       if (editPermKey !== editingPerm.key) updates.key = editPermKey;
       if (editPermName !== editingPerm.name) updates.name = editPermName;
       if (editPermDesc !== editingPerm.description) updates.description = editPermDesc;
@@ -262,6 +352,17 @@
       const origKeys = [...(editingPerm.keys || [])].sort().join(',');
       const newKeys = [...editPermKeys].sort().join(',');
       if (origKeys !== newKeys) updates.keys = editPermKeys;
+
+      // Send patterns whenever they changed (including transitions to empty —
+      // that's how the user clears all path scoping for a permission).
+      const cleaned = cleanPatterns(editPermPatterns, editPermKeys);
+      const original = editingPerm.key_patterns;
+      if (!patternsEqual(cleaned, original)) {
+        // Backend treats `key_patterns: {}` as "replace with empty",
+        // i.e. clear all patterns. Send an empty object explicitly so a
+        // user who removes all patterns gets that effect.
+        updates.key_patterns = cleaned ?? {};
+      }
 
       if (Object.keys(updates).length > 0) {
         await appStore.updatePermission(editingPerm.id, updates);
@@ -550,12 +651,99 @@
               {/each}
             </div>
           </div>
+
+          <!-- Path scoping (optional). Renders one block per selected cap.
+               Empty list = unrestricted, identical to the prior behavior. -->
+          {#if newPermKeys.length > 0}
+            <div class="mb-3 border-t border-slate-200 pt-3">
+              <div class="flex items-baseline justify-between mb-1">
+                <div class="text-xs font-medium text-slate-600">Path scoping <span class="text-slate-400 font-normal">(optional)</span></div>
+                <button type="button" onclick={() => { showNewPatternHelp = !showNewPatternHelp; }}
+                  class="text-[10px] text-blue-600 hover:underline">
+                  {showNewPatternHelp ? 'Hide help' : 'How do patterns work?'}
+                </button>
+              </div>
+
+              {#if showNewPatternHelp}
+                <div class="mb-2 p-2.5 bg-blue-50 border border-blue-200 rounded text-[11px] text-slate-700 space-y-1.5 leading-relaxed">
+                  <div>
+                    Patterns match the <strong>storage key</strong> — the part after <code>/api/v1/file/</code> or <code>/api/v1/folder/</code>.
+                    No leading slash. No implicit prefix: a file stored as <code>team-a/app.yaml</code> is matched as <code>team-a/app.yaml</code>.
+                    Restrictions only apply to the <code>files.*</code> capabilities; admin caps (users, tokens, settings) ignore patterns.
+                  </div>
+                  <div>
+                    <span class="font-medium">Glob syntax:</span>
+                    <code>*</code> = one path segment ·
+                    <code>**</code> = any number of segments (including zero) ·
+                    <code>?</code> = one character ·
+                    <code>[abc]</code> = character class.
+                  </div>
+                  <div>
+                    <span class="font-medium">Examples:</span>
+                    <ul class="ml-4 list-disc space-y-0.5 mt-1">
+                      <li><code>team-a/**</code> — anything under <code>team-a/</code> (any depth)</li>
+                      <li><code>**/*.yaml</code> — every yaml file at any depth</li>
+                      <li><code>apps/*/config.yaml</code> — <code>config.yaml</code> in any direct child of <code>apps/</code></li>
+                      <li><code>shared</code> — only the literal name <code>shared</code>, no descendants</li>
+                      <li><code>prod/**</code> + <code>staging/**</code> — multiple patterns are OR'd</li>
+                    </ul>
+                  </div>
+                  <div class="text-slate-500">
+                    Empty list = unrestricted (default). For folder listings, parent directories of a matched path are allowed automatically so users can navigate.
+                    <code>..</code> segments are rejected.
+                  </div>
+                </div>
+              {/if}
+
+              <div class="space-y-2">
+                {#each newPermKeys as k (k)}
+                  {@const patterns = newPermPatterns[k] ?? []}
+                  {@const scopable = k.startsWith('files.')}
+                  <div class="border border-slate-200 rounded-md p-2 bg-slate-50/50">
+                    <div class="flex items-center justify-between mb-1.5">
+                      <div class="flex items-center gap-2">
+                        <code class="text-[11px] font-medium text-slate-700">{k}</code>
+                        {#if !scopable}
+                          <span class="text-[9px] text-slate-400">(patterns ignored — not a path-bound capability)</span>
+                        {/if}
+                      </div>
+                      {#if scopable}
+                        <button type="button" onclick={() => addPattern('new', k)}
+                          class="text-[10px] text-blue-600 hover:text-blue-700 hover:underline">+ Add pattern</button>
+                      {/if}
+                    </div>
+                    {#if !scopable}
+                      <div class="text-[10px] text-slate-400 italic">applies globally</div>
+                    {:else if patterns.length === 0}
+                      <div class="text-[10px] text-slate-400 italic">all paths</div>
+                    {:else}
+                      <div class="space-y-1">
+                        {#each patterns as pat, i}
+                          <div class="flex gap-1 items-center">
+                            <input type="text" value={pat}
+                              oninput={(e) => updatePattern('new', k, i, e.currentTarget.value)}
+                              placeholder="e.g. team-a/**"
+                              class="flex-1 px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" />
+                            <button type="button" onclick={() => removePattern('new', k, i)}
+                              class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors" title="Remove pattern">
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
           <div class="flex items-center gap-2">
             <button onclick={handleCreatePerm} disabled={creatingPerm || !newPermName || newPermKeys.length === 0}
               class="px-4 py-1.5 bg-blue-500 text-white text-sm rounded-md hover:bg-blue-600 disabled:opacity-50 transition-colors">
               {creatingPerm ? 'Creating...' : `Create (${newPermKeys.length} capabilities)`}
             </button>
-            <button onclick={() => { showCreatePermForm = false; newPermKeys = []; }}
+            <button onclick={() => { showCreatePermForm = false; newPermKeys = []; newPermPatterns = {}; }}
               class="px-4 py-1.5 bg-white border border-slate-300 text-slate-600 text-sm rounded-md hover:bg-slate-50 transition-colors">
               Cancel
             </button>
@@ -585,7 +773,19 @@
                 <td class="px-4 py-3">
                   <div class="flex flex-wrap gap-1">
                     {#each (perm.keys || []) as k}
-                      <code class="text-[10px] font-medium text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">{k}</code>
+                      {@const pats = perm.key_patterns?.[k] ?? []}
+                      <span class="inline-flex items-center gap-1">
+                        <code class="text-[10px] font-medium text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">{k}</code>
+                        {#if pats.length > 0}
+                          <!-- Badge surfaces that this grant is path-scoped.
+                               Title attribute lists every pattern so admins
+                               can verify without opening the editor. -->
+                          <span class="text-[10px] font-medium text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded"
+                            title={pats.join('\n')}>
+                            {pats.length} {pats.length === 1 ? 'path' : 'paths'}
+                          </span>
+                        {/if}
+                      </span>
                     {:else}
                       <span class="text-xs text-slate-400">none</span>
                     {/each}
@@ -753,6 +953,91 @@
                 {/each}
               </div>
             </div>
+
+            <!-- Path scoping editor (mirrors the create form) -->
+            {#if editPermKeys.length > 0}
+              <div class="border-t border-slate-200 pt-3">
+                <div class="flex items-baseline justify-between mb-1">
+                  <div class="text-xs font-medium text-slate-600">Path scoping <span class="text-slate-400 font-normal">(optional)</span></div>
+                  <button type="button" onclick={() => { showEditPatternHelp = !showEditPatternHelp; }}
+                    class="text-[10px] text-blue-600 hover:underline">
+                    {showEditPatternHelp ? 'Hide help' : 'How do patterns work?'}
+                  </button>
+                </div>
+
+                {#if showEditPatternHelp}
+                  <div class="mb-2 p-2.5 bg-blue-50 border border-blue-200 rounded text-[11px] text-slate-700 space-y-1.5 leading-relaxed">
+                    <div>
+                      Patterns match the <strong>storage key</strong> — the part after <code>/api/v1/file/</code> or <code>/api/v1/folder/</code>.
+                      No leading slash. No implicit prefix: a file stored as <code>team-a/app.yaml</code> is matched as <code>team-a/app.yaml</code>.
+                      Restrictions only apply to the <code>files.*</code> capabilities; admin caps (users, tokens, settings) ignore patterns.
+                    </div>
+                    <div>
+                      <span class="font-medium">Glob syntax:</span>
+                      <code>*</code> = one path segment ·
+                      <code>**</code> = any number of segments (including zero) ·
+                      <code>?</code> = one character ·
+                      <code>[abc]</code> = character class.
+                    </div>
+                    <div>
+                      <span class="font-medium">Examples:</span>
+                      <ul class="ml-4 list-disc space-y-0.5 mt-1">
+                        <li><code>team-a/**</code> — anything under <code>team-a/</code> (any depth)</li>
+                        <li><code>**/*.yaml</code> — every yaml file at any depth</li>
+                        <li><code>apps/*/config.yaml</code> — <code>config.yaml</code> in any direct child of <code>apps/</code></li>
+                        <li><code>shared</code> — only the literal name <code>shared</code>, no descendants</li>
+                        <li><code>prod/**</code> + <code>staging/**</code> — multiple patterns are OR'd</li>
+                      </ul>
+                    </div>
+                    <div class="text-slate-500">
+                      Empty list = unrestricted (default). For folder listings, parent directories of a matched path are allowed automatically so users can navigate.
+                      <code>..</code> segments are rejected.
+                    </div>
+                  </div>
+                {/if}
+
+                <div class="space-y-2 max-h-56 overflow-y-auto">
+                  {#each editPermKeys as k (k)}
+                    {@const patterns = editPermPatterns[k] ?? []}
+                    {@const scopable = k.startsWith('files.')}
+                    <div class="border border-slate-200 rounded-md p-2 bg-slate-50/50">
+                      <div class="flex items-center justify-between mb-1.5">
+                        <div class="flex items-center gap-2">
+                          <code class="text-[11px] font-medium text-slate-700">{k}</code>
+                          {#if !scopable}
+                            <span class="text-[9px] text-slate-400">(patterns ignored — not a path-bound capability)</span>
+                          {/if}
+                        </div>
+                        {#if scopable}
+                          <button type="button" onclick={() => addPattern('edit', k)}
+                            class="text-[10px] text-blue-600 hover:text-blue-700 hover:underline">+ Add pattern</button>
+                        {/if}
+                      </div>
+                      {#if !scopable}
+                        <div class="text-[10px] text-slate-400 italic">applies globally</div>
+                      {:else if patterns.length === 0}
+                        <div class="text-[10px] text-slate-400 italic">all paths</div>
+                      {:else}
+                        <div class="space-y-1">
+                          {#each patterns as pat, i}
+                            <div class="flex gap-1 items-center">
+                              <input type="text" value={pat}
+                                oninput={(e) => updatePattern('edit', k, i, e.currentTarget.value)}
+                                placeholder="e.g. team-a/**"
+                                class="flex-1 px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" />
+                              <button type="button" onclick={() => removePattern('edit', k, i)}
+                                class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors" title="Remove pattern">
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
           </div>
           <div class="flex justify-end gap-2 mt-4">
             <button onclick={() => { editingPerm = null; }}
