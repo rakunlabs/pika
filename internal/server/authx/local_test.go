@@ -40,7 +40,7 @@ func TestLocalVerifier_Happy(t *testing.T) {
 
 func TestLocalRegistrar_FirstUser(t *testing.T) {
 	svc := newTestService(t)
-	reg := LocalRegistrar(svc)
+	reg := LocalRegistrar(svc, nil)
 
 	id, err := reg(context.Background(), local.RegisterRequest{Username: "root", Password: "hunter2"})
 	if err != nil {
@@ -60,17 +60,17 @@ func TestLocalRegistrar_FirstUser(t *testing.T) {
 func TestLocalBuild_EnabledAndDisabled(t *testing.T) {
 	svc := newTestService(t)
 
-	if s := BuildLocal(svc, nil); s != nil {
+	if s := BuildLocal(svc, nil, nil); s != nil {
 		t.Error("nil settings: expected nil strategy")
 	}
 
 	disabled := &service.LocalStrategySettings{Enabled: false}
-	if s := BuildLocal(svc, disabled); s != nil {
+	if s := BuildLocal(svc, disabled, nil); s != nil {
 		t.Error("disabled: expected nil strategy")
 	}
 
 	enabled := &service.LocalStrategySettings{Enabled: true}
-	if s := BuildLocal(svc, enabled); s == nil || s.Name() != "local" {
+	if s := BuildLocal(svc, enabled, nil); s == nil || s.Name() != "local" {
 		t.Errorf("enabled: expected local strategy, got %v", s)
 	}
 }

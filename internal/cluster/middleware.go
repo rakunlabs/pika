@@ -50,29 +50,36 @@ func (c *Cluster) Middleware() func(next http.Handler) http.Handler {
 				return
 			}
 
-			// Mark and forward.
-			r.Header.Set(internalForwardHeader, "1")
-			payload, err := SerializeRequest(r)
-			if err != nil {
-				slog.Error("cluster: failed to serialize forward request", "error", err, "path", r.URL.Path)
-				http.Error(w, "cluster: failed to serialize request", http.StatusInternalServerError)
+		// Mark and forward.
+		r.Header.Set(internalForwardHeader, "1")
+		payload, err := SerializeRequest(r)
+		if err != nil {
+			slog.Error("cluster: failed to serialize forward request", "error", err, "path", r.URL.Path)
+			http.Error(w, "cluster: failed to serialize request", http.StatusInternalServerError)
+			return
+		}
+
+		respBytes, err := c.Forward(r.Context(), payload)
+		if err != nil {
+			if errors.Is(err, ErrNoLeader) {
+				http.Error(w, "cluster: no leader available, retry shortly", http.StatusServiceUnavailable)
 				return
 			}
+			slog.Error("cluster: forward to leader failed", "error", err, "path", r.URL.Path)
+			http.Error(w, "cluster: leader forward failed: "+err.Error(), http.StatusBadGateway)
+			return
+		}
 
-			respBytes, err := c.Forward(r.Context(), payload)
-			if err != nil {
-				if errors.Is(err, ErrNoLeader) {
-					http.Error(w, "cluster: no leader available, retry shortly", http.StatusServiceUnavailable)
-					return
-				}
-				slog.Error("cluster: forward to leader failed", "error", err, "path", r.URL.Path)
-				http.Error(w, "cluster: leader forward failed: "+err.Error(), http.StatusBadGateway)
-				return
-			}
+		// Sync from leader before responding so the local DB has the
+		// data the leader just wrote (e.g. session rows). Without this
+		// the client's next read could hit stale local state.
+		if syncErr := c.Sync(r.Context()); syncErr != nil {
+			slog.Warn("cluster: post-forward sync failed", "error", syncErr, "path", r.URL.Path)
+		}
 
-			if err := WriteForwardedResponse(w, respBytes); err != nil {
-				slog.Warn("cluster: writing leader response back to client failed", "error", err)
-			}
+		if err := WriteForwardedResponse(w, respBytes); err != nil {
+			slog.Warn("cluster: writing leader response back to client failed", "error", err)
+		}
 		})
 	}
 }

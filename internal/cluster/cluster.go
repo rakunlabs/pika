@@ -227,6 +227,17 @@ func (c *Cluster) NotifySync() {
 	c.bw.NotifySync()
 }
 
+// Sync performs a synchronous pull from the leader. It blocks until the
+// incremental backup is applied or the context expires. No-op on the leader
+// and in single-node mode. Use this after forwarding a write to ensure the
+// local database reflects the leader's state before responding to the client.
+func (c *Cluster) Sync(ctx context.Context) error {
+	if c == nil || !c.enabled {
+		return nil
+	}
+	return c.bw.Sync(ctx)
+}
+
 // Start launches alan + bw cluster background goroutines. Returns once
 // alan is ready to send/receive. Bound to ctx — cancellation triggers a
 // graceful Stop.
