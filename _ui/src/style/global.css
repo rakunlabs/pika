@@ -33,3 +33,43 @@ body {
 *::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Flat black-tape mask widget for masked config values.
+   Used by _ui/src/lib/components/config/maskExtension.ts (CodeMirror).
+   Pure 2D: solid black rectangle, slight skew so it still reads as a strip
+   of tape, no border, no rounded corners, no depth.
+   ────────────────────────────────────────────────────────────────────────── */
+.cm-mask {
+  display: inline-block;
+  padding: 1px 8px;
+  vertical-align: baseline;
+  line-height: 1.2;
+  min-width: 3.5em;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  color: transparent; /* hide the bullets that give us width */
+  background: #000;
+  transform: skew(-3deg);
+  transition: transform 120ms ease;
+}
+
+.cm-mask::before {
+  content: '••••••';
+}
+
+.cm-mask:hover {
+  transform: skew(-3deg) scale(1.05);
+  z-index: 1;
+}
+
+.cm-mask:focus-visible {
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
+}
+
+/* Brief flash after Ctrl/⌘+click copies the underlying value. */
+.cm-mask--copied {
+  background: #facc15; /* yellow-400 */
+}

@@ -6,16 +6,18 @@
   import { toml } from '@codemirror/legacy-modes/mode/toml';
   import { linter, lintGutter, type Diagnostic } from '@codemirror/lint';
   import type { Extension } from '@codemirror/state';
+  import type { EditorView } from '@codemirror/view';
   import { oneDark } from '@codemirror/theme-one-dark';
   import { configStore } from '@/lib/store/config.svelte';
   import { addToast } from '@/lib/store/toast.svelte';
   import type { FileFormat, ViewMode } from '@/lib/types/config';
-  import { Save, Sparkles, ArrowRightLeft, Upload, Binary, Type } from 'lucide-svelte';
+  import { Save, Sparkles, ArrowRightLeft, Upload, Binary, Type, Eye, EyeOff } from 'lucide-svelte';
   import { AlertTriangle } from 'lucide-svelte';
   import axios from 'axios';
   import jsYaml from 'js-yaml';
   import { parse as parseToml, TomlError } from 'smol-toml';
   import HexViewer from './HexViewer.svelte';
+  import { createMaskExtension, createMaskWatcher, setMaskEnabled, type MaskInfo } from './maskExtension';
 
   const LINT_DELAY = 500; // ms debounce
 
@@ -146,12 +148,44 @@
 
   const activeTab = $derived(configStore.activeTab);
   const languageExtension = $derived(activeTab ? getLanguageExtension(activeTab.format) : undefined);
-  const lintExtensions = $derived(activeTab ? getLintExtensions(activeTab.format) : []);
+  const isHexMode = $derived(activeTab?.viewMode === 'hex');
+  const hexData = $derived(activeTab?.rawData || '');
+  const canMask = $derived(!!activeTab && activeTab.format !== 'raw' && !isHexMode);
+
+  // Mask state surfaced from the editor. The button reflects this directly:
+  // anything other than "fully masked, no reveals" flips the button to
+  // "Visible" so the next click re-masks everything.
+  let maskInfo: MaskInfo = $state({ enabled: true, hasReveals: false });
+  const fullyMasked = $derived(maskInfo.enabled && !maskInfo.hasReveals);
+  let cmView: EditorView | undefined = $state();
+
+  // Stable watcher — created once, included as a stable extension reference.
+  const maskWatcher = createMaskWatcher((info) => { maskInfo = info; });
+
+  // Switching tabs should re-tape, since the StateField is module-scoped and
+  // would otherwise carry reveals (with stale positions) over to the new file.
+  $effect(() => {
+    if (activeTab && cmView) setMaskEnabled(cmView, true);
+  });
+
+  function toggleMask() {
+    if (!cmView) return;
+    // If anything is revealed → click re-masks everything.
+    // If everything is masked → click reveals all.
+    setMaskEnabled(cmView, !fullyMasked);
+  }
+
+  // The mask extension joins lint extensions; a format change re-derives this
+  // array, which makes svelte-codemirror reconfigure. The mask state field is
+  // a module-level singleton so its value persists across reconfigures.
+  const lintExtensions = $derived(
+    activeTab
+      ? [...getLintExtensions(activeTab.format), createMaskExtension(activeTab.format), maskWatcher]
+      : []
+  );
   const convertTargets = $derived(
     activeTab ? allFormats.filter(f => f !== activeTab.format) : []
   );
-  const isHexMode = $derived(activeTab?.viewMode === 'hex');
-  const hexData = $derived(activeTab?.rawData || '');
 
   let isConverting = $state(false);
   let saveConstraint = $state('');
@@ -298,6 +332,12 @@
       e.preventDefault();
       handleBeautify();
     }
+    // Ctrl/Cmd + M to toggle the value mask
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'm' || e.key === 'M')) {
+      if (!canMask) return;
+      e.preventDefault();
+      toggleMask();
+    }
   }
 </script>
 
@@ -358,6 +398,27 @@
           </button>
         </div>
 
+        <!-- Mask toggle: hides scalar values behind black tape.
+             Reflects the actual editor state — if any value is revealed
+             (or all are), the button flips to "Visible" so the first click
+             re-masks everything. -->
+        {#if canMask}
+          <button
+            class="flex items-center gap-1 px-2 py-1 bg-transparent border border-[#3c3c3c] rounded text-[11px] cursor-pointer transition-colors
+              {fullyMasked ? 'text-amber-400 hover:bg-[#333] hover:text-amber-300' : 'text-gray-400 hover:bg-[#333] hover:text-gray-200'}"
+            onclick={toggleMask}
+            title={fullyMasked ? 'Reveal all values (Ctrl+M)' : 'Mask all values (Ctrl+M)'}
+          >
+            {#if fullyMasked}
+              <EyeOff size={12} />
+              <span>Masked</span>
+            {:else}
+              <Eye size={12} />
+              <span>Visible</span>
+            {/if}
+          </button>
+        {/if}
+
         <!-- Import button -->
         <button
           class="flex items-center gap-1 px-2 py-1 text-gray-400 bg-transparent border border-[#3c3c3c] rounded text-[11px] cursor-pointer transition-colors hover:bg-[#333] hover:text-gray-200"
@@ -413,6 +474,8 @@
         <CodeMirror
           value={activeTab.content}
           onchange={handleChange}
+          onready={(view) => { cmView = view; }}
+          onreconfigure={(view) => { cmView = view; }}
           lang={languageExtension}
           extensions={lintExtensions}
           theme={oneDark}
