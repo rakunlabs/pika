@@ -563,6 +563,42 @@ function createConfigStore() {
     }
   }
 
+  // Reload the active tab's content from the server, refetching the
+  // currently displayed version (0 = latest). Discards unsaved edits.
+  async function reloadTab(tabId: string): Promise<void> {
+    const tab = openTabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    try {
+      const fileData = await fetchFile(tab.path, tab.version, tab.variantKey);
+      const isRaw = tab.format === 'raw';
+
+      const content = isRaw ? '' : decodeContent(fileData.data);
+
+      tab.content = content;
+      tab.originalContent = content;
+      tab.versions = fileData.versions;
+      tab.latestVersion = fileData.versions.length > 0
+        ? Math.max(...fileData.versions.map(v => v.version))
+        : 0;
+      tab.meta = fileData.meta;
+      tab.rawData = fileData.data;
+      tab.originalRawData = fileData.data;
+      tab.isDirty = false;
+      if (isRaw) {
+        tab.viewMode = 'hex';
+        tab.size = fileData.data ? Math.floor(fileData.data.length * 3 / 4) : 0;
+      } else {
+        tab.size = new Blob([content]).size;
+      }
+      addToast('Reloaded from server', 'success');
+    } catch (error) {
+      console.error('Failed to reload:', error);
+      addToast('Failed to reload', 'alert');
+      throw error;
+    }
+  }
+
   // Search operations
   let searchAbortController: AbortController | null = null;
 
@@ -666,9 +702,9 @@ function createConfigStore() {
       } else {
         settings = { ftp_users: users };
       }
-      addToast('FTP users saved', 'success');
+      addToast('Users saved', 'success');
     } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to save FTP users';
+      const msg = error.response?.data?.message || 'Failed to save users';
       addToast(msg, 'alert');
       throw error;
     }
@@ -685,9 +721,9 @@ function createConfigStore() {
       } else {
         settings = { ftp_shares: shares };
       }
-      addToast('FTP shares saved', 'success');
+      addToast('Shares saved', 'success');
     } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to save FTP shares';
+      const msg = error.response?.data?.message || 'Failed to save shares';
       addToast(msg, 'alert');
       throw error;
     }
@@ -1139,6 +1175,7 @@ function createConfigStore() {
     updateTabMeta,
     saveTab,
     loadVersion,
+    reloadTab,
     updateVersionConstraint,
 
     // Variant operations

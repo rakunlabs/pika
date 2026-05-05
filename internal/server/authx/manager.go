@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/rakunlabs/ada"
 	"github.com/rakunlabs/ada/middleware/auth"
@@ -20,6 +21,13 @@ type Manager struct {
 	mu          sync.Mutex
 	authMW      *auth.Auth
 	capResolver *CapResolver
+
+	// bootstrapped is set to 1 once a successful registration is observed
+	// (even via cluster forward). This prevents a race in clustered mode
+	// where the follower's local DB hasn't synced yet but the leader has
+	// already created the first user — without this flag the follower
+	// would keep reporting signup_first=true until sync completes.
+	bootstrapped atomic.Int32
 }
 
 // New constructs a Manager from the given Deps.
@@ -40,7 +48,7 @@ func (m *Manager) Boot(ctx context.Context, s *service.AuthSettings) error {
 	a := auth.New(buildAuthConfig(s, m.deps.BasePath, m.deps.Version, m.signupFirstFn()))
 	a.WithSessionStore(m.deps.SessionStore)
 
-	strats, err := buildStrategies(m.deps, s)
+	strats, err := buildStrategies(m.deps, s, m.MarkBootstrapped)
 	if err != nil {
 		return fmt.Errorf("build strategies: %w", err)
 	}
@@ -69,7 +77,7 @@ func (m *Manager) Reload(ctx context.Context, s *service.AuthSettings) error {
 	// object still yields a working local strategy.
 	s = s.WithEffectiveDefaults()
 
-	strats, err := buildStrategies(m.deps, s)
+	strats, err := buildStrategies(m.deps, s, m.MarkBootstrapped)
 	if err != nil {
 		return fmt.Errorf("build strategies: %w", err)
 	}
@@ -113,7 +121,22 @@ func (m *Manager) Mount(mux auth.Mux) {
 
 func (m *Manager) signupFirstFn() func() bool {
 	return func() bool {
+		if m.bootstrapped.Load() != 0 {
+			return false
+		}
 		count, err := m.deps.Svc.UserCount(context.Background())
+		if err == nil && count > 0 {
+			m.bootstrapped.Store(1)
+			return false
+		}
 		return err == nil && count == 0
 	}
+}
+
+// MarkBootstrapped signals that at least one user has been created (e.g.
+// via a forwarded registration that succeeded on the leader). Subsequent
+// calls to signupFirstFn will immediately return false even before the
+// local DB sync catches up.
+func (m *Manager) MarkBootstrapped() {
+	m.bootstrapped.Store(1)
 }

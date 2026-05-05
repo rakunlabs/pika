@@ -127,7 +127,7 @@
 
   async function handleRemoveShare(index: number) {
     const share = ftpShares[index];
-    if (!confirm(`Remove FTP share "${share.name}"?`)) return;
+    if (!confirm(`Remove share "${share.name}"?`)) return;
 
     const updated = ftpShares.filter((_, i) => i !== index);
     isSavingShares = true;
@@ -226,7 +226,7 @@
 
   async function handleRemoveUser(index: number) {
     const user = ftpUsers[index];
-    if (!confirm(`Remove FTP/SFTP user "${user.username}"?`)) return;
+    if (!confirm(`Remove user "${user.username}"?`)) return;
 
     const updated = ftpUsers.filter((_, i) => i !== index);
     isSavingUsers = true;
@@ -329,8 +329,8 @@
 <div>
   <div class="flex items-center justify-between mb-4">
     <div>
-      <h2 class="text-lg font-semibold text-slate-800">FTP Shares</h2>
-      <p class="text-sm text-slate-500 mt-0.5">Share folders from your raw mounts via the built-in FTP server. External clients can connect and browse/download files.</p>
+      <h2 class="text-lg font-semibold text-slate-800">Shares</h2>
+      <p class="text-sm text-slate-500 mt-0.5">Share folders from your raw mounts via the built-in file servers (FTP, SFTP, TFTP, WebDAV). External clients can connect and browse/download files.</p>
     </div>
     <button
       class="flex items-center gap-1.5 px-3 py-2 bg-blue-500 text-white text-sm font-medium rounded-md hover:bg-blue-600 transition-colors"
@@ -343,7 +343,7 @@
 
   {#if availableMounts.length === 0}
     <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-md">
-      <p class="text-xs text-amber-800">No raw mounts configured. Add a raw mount first before creating FTP shares.</p>
+      <p class="text-xs text-amber-800">No raw mounts configured. Add a raw mount first before creating shares.</p>
     </div>
   {/if}
 
@@ -356,7 +356,7 @@
         <label for="share-name" class="block text-xs font-medium text-slate-500 mb-1.5">Share Name</label>
         <input id="share-name" type="text" bind:value={newShareName} placeholder="e.g., project-files"
           class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
-        <p class="mt-1 text-[11px] text-slate-400">This becomes the top-level folder name visible to FTP clients</p>
+        <p class="mt-1 text-[11px] text-slate-400">This becomes the top-level folder name visible to connecting clients</p>
       </div>
 
       <div class="mb-4">
@@ -435,8 +435,8 @@
   {#if ftpShares.length === 0 && !showAddShare}
     <div class="text-center py-12 bg-white border border-slate-200 rounded-lg">
       <Share2 size={32} class="mx-auto text-slate-300 mb-3" />
-      <p class="text-sm text-slate-500">No FTP shares configured</p>
-      <p class="text-xs text-slate-400 mt-1">Add a share to expose folders via the built-in FTP server</p>
+      <p class="text-sm text-slate-500">No shares configured</p>
+      <p class="text-xs text-slate-400 mt-1">Add a share to expose folders via the built-in file servers</p>
     </div>
   {:else}
     <div class="space-y-2">
@@ -459,7 +459,7 @@
                   Read+Write
                 </span>
               {/if}
-              <span class="text-[10px] text-slate-400">{share.root ? '→ ftp://.../' : `→ ftp://.../${share.name}/`}</span>
+              <span class="text-[10px] text-slate-400">{share.root ? '→ /' : `→ /${share.name}/`}</span>
             </div>
             <div class="mt-1 flex flex-wrap gap-1">
               {#each share.paths as p}
@@ -493,7 +493,7 @@
     <div class="flex items-center justify-between mb-4">
       <div>
         <h3 class="text-base font-semibold text-slate-800">Users</h3>
-        <p class="text-xs text-slate-500 mt-0.5">Manage FTP/SFTP user accounts. Users are shared between both servers.</p>
+        <p class="text-xs text-slate-500 mt-0.5">Manage user accounts for the built-in file servers (FTP, SFTP, WebDAV). The same users apply to all servers.</p>
       </div>
       <button
         class="flex items-center gap-1.5 px-3 py-2 bg-blue-500 text-white text-sm font-medium rounded-md hover:bg-blue-600 transition-colors"
@@ -622,7 +622,7 @@
     {#if ftpUsers.length === 0 && !showAddUser}
       <div class="text-center py-8 bg-white border border-slate-200 rounded-lg">
         <p class="text-sm text-slate-500">No users configured</p>
-        <p class="text-xs text-slate-400 mt-1">Add a user to enable FTP/SFTP access. Users can also be set in the config file.</p>
+        <p class="text-xs text-slate-400 mt-1">Add a user to enable file-server access. Users can also be set in the config file.</p>
       </div>
     {:else}
       <div class="space-y-2">

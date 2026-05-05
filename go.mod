@@ -15,7 +15,7 @@ require (
 	github.com/pkg/sftp v1.13.10
 	github.com/rakunlabs/ada v0.3.2
 	github.com/rakunlabs/ada/handler/folder v0.1.1
-	github.com/rakunlabs/ada/middleware/auth v0.1.4
+	github.com/rakunlabs/ada/middleware/auth v0.1.5
 	github.com/rakunlabs/ada/middleware/cors v0.1.3
 	github.com/rakunlabs/ada/middleware/log v0.1.7
 	github.com/rakunlabs/ada/middleware/ratelimit v0.1.0
@@ -23,8 +23,8 @@ require (
 	github.com/rakunlabs/ada/middleware/requestid v0.1.3
 	github.com/rakunlabs/ada/middleware/server v0.1.0
 	github.com/rakunlabs/ada/middleware/telemetry v0.1.0
-	github.com/rakunlabs/alan v0.3.3
-	github.com/rakunlabs/bw v0.1.3
+	github.com/rakunlabs/alan v0.4.1
+	github.com/rakunlabs/bw v0.1.4
 	github.com/rakunlabs/chu v0.4.4
 	github.com/rakunlabs/into v0.5.3
 	github.com/rakunlabs/logi v0.4.5

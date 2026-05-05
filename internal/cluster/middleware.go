@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -36,7 +37,24 @@ func (c *Cluster) Middleware() func(next http.Handler) http.Handler {
 
 			// Leader path — including requests that arrived via forward.
 			if c.IsLeader() {
-				wrapped := &writeNotifier{ResponseWriter: w, cluster: c}
+				forwarded := r.Header.Get(internalForwardHeader) == "1"
+				if forwarded {
+					slog.Debug("cluster: leader executing forwarded write",
+						"method", r.Method,
+						"path", r.URL.Path,
+						"remote_addr", r.RemoteAddr,
+						"version", c.localVersion(),
+					)
+				}
+				wrapped := &writeNotifier{
+					ResponseWriter: w,
+					cluster:        c,
+					ctx:            r.Context(),
+					method:         r.Method,
+					path:           r.URL.Path,
+					forwarded:      forwarded,
+					beforeVersion:  c.localVersion(),
+				}
 				next.ServeHTTP(wrapped, r)
 				wrapped.maybeNotify()
 				return
@@ -70,6 +88,12 @@ func (c *Cluster) Middleware() func(next http.Handler) http.Handler {
 				return
 			}
 
+			// Note: in bw v0.1.4 the leader's NotifySync (invoked inside the
+			// forward handler on the leader side) blocks until every behind
+			// follower has applied the diff, so by the time Forward returns
+			// this node's own DB is already caught up. No explicit follower
+			// pull is needed before responding to the client.
+
 			if err := WriteForwardedResponse(w, respBytes); err != nil {
 				slog.Warn("cluster: writing leader response back to client failed", "error", err)
 			}
@@ -81,9 +105,22 @@ func (c *Cluster) Middleware() func(next http.Handler) http.Handler {
 // on the leader after a successful (2xx) write. It also implements
 // http.Flusher / http.Hijacker pass-through where the underlying writer
 // supports them, so streaming endpoints (SSE) keep working.
+//
+// The captured ctx is the original request context. NotifySync needs a ctx
+// to bound how long it waits for followers to apply the diff (bw v0.1.4+
+// blocks until every behind follower acks). We reuse the request ctx so a
+// client disconnect cancels the waiting.
 type writeNotifier struct {
 	http.ResponseWriter
-	cluster       *Cluster
+	cluster *Cluster
+	ctx     context.Context
+
+	// Captured at request entry for the post-write log line.
+	method        string
+	path          string
+	forwarded     bool
+	beforeVersion uint64
+
 	statusCode    int
 	headerWritten bool
 }
@@ -115,8 +152,34 @@ func (n *writeNotifier) maybeNotify() {
 	if !n.headerWritten {
 		return
 	}
-	if n.statusCode >= 200 && n.statusCode < 300 {
-		n.cluster.NotifySync()
+	if n.statusCode < 200 || n.statusCode >= 300 {
+		return
+	}
+	afterVersion := n.cluster.localVersion()
+	if afterVersion != n.beforeVersion {
+		slog.Info("cluster: leader applied write",
+			"method", n.method,
+			"path", n.path,
+			"forwarded", n.forwarded,
+			"status", n.statusCode,
+			"from_version", n.beforeVersion,
+			"to_version", afterVersion,
+		)
+	}
+
+	ctx := n.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// NotifySync blocks until followers apply the diff. Errors are
+	// logged but not surfaced to the client — the write itself
+	// already succeeded locally on the leader.
+	if err := n.cluster.NotifySync(ctx); err != nil {
+		slog.Warn("cluster: notify sync after write failed",
+			"method", n.method,
+			"path", n.path,
+			"error", err,
+		)
 	}
 }
 

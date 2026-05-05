@@ -479,7 +479,7 @@
         </div>
       </div>
       <p class="mt-3 text-[11px] text-slate-400">
-        WebDAV clients authenticate using FTP/SFTP user credentials (HTTP Basic Auth). Shares and access control are shared with FTP/SFTP servers.
+        WebDAV clients authenticate using the same user credentials as the other built-in file servers (HTTP Basic Auth). Shares and access control are shared across all file servers.
         Connect with any WebDAV client (macOS Finder, Windows Explorer, Cyberduck, etc.).
       </p>
     {/if}

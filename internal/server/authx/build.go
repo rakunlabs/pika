@@ -58,10 +58,10 @@ func buildAuthConfig(s *service.AuthSettings, base, version string, signupFirstF
 }
 
 // buildStrategies translates AuthSettings → concrete strategies.
-func buildStrategies(d Deps, s *service.AuthSettings) ([]strategy.Authenticator, error) {
+func buildStrategies(d Deps, s *service.AuthSettings, onRegister func()) ([]strategy.Authenticator, error) {
 	var out []strategy.Authenticator
 
-	if local := BuildLocal(d.Svc, s.Local); local != nil {
+	if local := BuildLocal(d.Svc, s.Local, onRegister); local != nil {
 		out = append(out, local)
 	}
 	// API Key strategy is always on: tokens created under the Access

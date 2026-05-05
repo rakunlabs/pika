@@ -9,8 +9,9 @@
 //   - Writes are routed to the current leader. The follower serializes the
 //     incoming HTTP request, ships it to the leader over alan/QUIC, and
 //     returns the leader's response verbatim to the original client.
-//   - After a successful write the leader broadcasts a sync notification so
-//     followers pull the incremental backup.
+//   - After a successful write the leader pushes the incremental diff to all
+//     behind followers and blocks until each one has applied it
+//     (bw v0.1.4+ handshake — see [bwcluster.Cluster.NotifySync]).
 //
 // The wrapper is a no-op when [Config.Enabled] is false: [Cluster.IsLeader]
 // returns true, [Cluster.Forward] runs the local handler directly, and
@@ -150,10 +151,28 @@ func New(cfg Config, db *bw.DB) (*Cluster, error) {
 		bwcluster.WithPrefix(prefix),
 		bwcluster.WithSyncInterval(syncInterval),
 		bwcluster.WithOnLeaderChange(func(isLeader bool) {
+			// Log role transition with as much context as we have. The
+			// underlying bw cluster also emits its own "became leader"
+			// log line — this one is the pika-level summary that's
+			// useful in mixed-app deployments.
+			role := "follower"
 			if isLeader {
-				slog.Info("cluster: this node became leader")
+				role = "leader"
+			}
+			attrs := []any{
+				"role", role,
+				"version", c.localVersion(),
+				"peers", c.peerCount(),
+				"quorum", c.hasQuorum(),
+				"lock_key", lockKey,
+			}
+			if isLeader {
+				slog.Info("cluster: this node is now LEADER", attrs...)
 			} else {
-				slog.Info("cluster: this node stepped down")
+				if addr := c.bw.LeaderAddr(); addr != nil {
+					attrs = append(attrs, "leader_addr", addr.String())
+				}
+				slog.Info("cluster: this node is now FOLLOWER", attrs...)
 			}
 		}),
 		// The forward handler dispatches each forwarded request through the
@@ -161,9 +180,20 @@ func New(cfg Config, db *bw.DB) (*Cluster, error) {
 		bwcluster.WithForwardHandler(func(ctx context.Context, data []byte) []byte {
 			hp := c.rootHandler.Load()
 			if hp == nil {
+				slog.Warn("cluster: leader received forwarded request but handler is not ready")
 				return encodeForwardError(http.StatusServiceUnavailable, "leader: handler not ready")
 			}
-			return runForwardedRequest(ctx, *hp, data)
+			before := c.localVersion()
+			resp := runForwardedRequest(ctx, *hp, data)
+			after := c.localVersion()
+			if after != before {
+				slog.Info("cluster: leader applied forwarded write",
+					"from_version", before,
+					"to_version", after,
+					"bytes", len(data),
+				)
+			}
+			return resp
 		}),
 	}
 
@@ -179,6 +209,35 @@ func New(cfg Config, db *bw.DB) (*Cluster, error) {
 
 // Enabled reports whether clustering is on for this node.
 func (c *Cluster) Enabled() bool { return c != nil && c.enabled }
+
+// localVersion returns this node's bw database version, or 0 when the
+// cluster is disabled / not yet wired.
+func (c *Cluster) localVersion() uint64 {
+	if c == nil || !c.enabled || c.bw == nil {
+		return 0
+	}
+	db := c.bw.DB()
+	if db == nil {
+		return 0
+	}
+	return db.Version()
+}
+
+// peerCount returns the current alan peer count, or 0 when disabled.
+func (c *Cluster) peerCount() int {
+	if c == nil || !c.enabled || c.alan == nil {
+		return 0
+	}
+	return c.alan.PeerCount()
+}
+
+// hasQuorum reports whether this node currently sees a quorum of peers.
+func (c *Cluster) hasQuorum() bool {
+	if c == nil || !c.enabled || c.alan == nil {
+		return true // single-node "cluster" trivially has quorum
+	}
+	return c.alan.HasQuorum()
+}
 
 // IsLeader reports whether this node currently holds the leader lock. When
 // clustering is disabled this is always true (single-node mode).
@@ -208,23 +267,83 @@ func (c *Cluster) Forward(ctx context.Context, payload []byte) ([]byte, error) {
 	}
 	fctx, cancel := context.WithTimeout(ctx, c.forwardTimeout)
 	defer cancel()
+
+	leaderAddr := c.bw.LeaderAddr()
+	beforeVersion := c.localVersion()
+	slog.Debug("cluster: forwarding write to leader",
+		"leader_addr", leaderAddr,
+		"local_version", beforeVersion,
+		"payload_bytes", len(payload),
+	)
+
 	resp, err := c.bw.Forward(fctx, payload)
 	if err != nil {
 		if errors.Is(err, bwcluster.ErrNoLeader) {
+			slog.Warn("cluster: forward failed: no leader known")
 			return nil, ErrNoLeader
 		}
+		slog.Error("cluster: forward to leader failed",
+			"error", err,
+			"leader_addr", leaderAddr,
+		)
 		return nil, err
+	}
+
+	afterVersion := c.localVersion()
+	if afterVersion != beforeVersion {
+		// Follower DB advanced because the leader's NotifySync pushed
+		// the new diff back to us before Forward returned.
+		slog.Info("cluster: follower advanced after forwarded write",
+			"from_version", beforeVersion,
+			"to_version", afterVersion,
+			"leader_addr", leaderAddr,
+		)
 	}
 	return resp, nil
 }
 
-// NotifySync wakes followers to pull the latest backup. Call after every
-// successful write on the leader. No-op on followers and in single-node mode.
-func (c *Cluster) NotifySync() {
+// NotifySync pushes the latest diff to every behind follower and blocks
+// until each one has finished applying it (or ctx is cancelled). Call after
+// every successful write on the leader.
+//
+// In bw v0.1.4 this is the cluster's "write done" handshake: when it
+// returns nil, all reachable followers are caught up. Errors from
+// individual followers are reported but transient peer-disconnect errors
+// are dropped and recovered by the next periodic sync.
+//
+// No-op on followers and in single-node mode.
+func (c *Cluster) NotifySync(ctx context.Context) error {
 	if c == nil || !c.enabled {
-		return
+		return nil
 	}
-	c.bw.NotifySync()
+
+	version := c.localVersion()
+	peers := c.peerCount()
+	start := time.Now()
+	slog.Debug("cluster: leader notify sync starting",
+		"version", version,
+		"peers", peers,
+	)
+
+	err := c.bw.NotifySync(ctx)
+	dur := time.Since(start)
+
+	if err != nil {
+		slog.Warn("cluster: leader notify sync finished with errors",
+			"version", version,
+			"peers", peers,
+			"duration", dur,
+			"error", err,
+		)
+		return err
+	}
+
+	slog.Info("cluster: leader notify sync ok",
+		"version", version,
+		"peers", peers,
+		"duration", dur,
+	)
+	return nil
 }
 
 // Start launches alan + bw cluster background goroutines. Returns once
@@ -234,7 +353,24 @@ func (c *Cluster) Start(ctx context.Context) error {
 	if c == nil || !c.enabled {
 		return nil
 	}
-	return c.bw.Start(ctx)
+	slog.Info("cluster: starting",
+		"bind_addr", c.cfg.BindAddr,
+		"port", c.cfg.Port,
+		"dns_addr", c.cfg.DNSAddr,
+		"replicas", c.cfg.Replicas,
+		"prefix", firstNonEmpty(c.cfg.Prefix, "pika"),
+		"lock_key", firstNonEmpty(c.cfg.LockKey, "pika-leader"),
+		"local_version", c.localVersion(),
+	)
+	if err := c.bw.Start(ctx); err != nil {
+		slog.Error("cluster: start failed", "error", err)
+		return err
+	}
+	slog.Info("cluster: started",
+		"local_version", c.localVersion(),
+		"peers", c.peerCount(),
+	)
+	return nil
 }
 
 // Stop gracefully tears down the cluster.
@@ -242,5 +378,17 @@ func (c *Cluster) Stop() {
 	if c == nil || !c.enabled {
 		return
 	}
+	slog.Info("cluster: stopping",
+		"is_leader", c.IsLeader(),
+		"local_version", c.localVersion(),
+		"peers", c.peerCount(),
+	)
 	c.bw.Stop()
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

@@ -11,7 +11,7 @@
   import { configStore } from '@/lib/store/config.svelte';
   import { addToast } from '@/lib/store/toast.svelte';
   import type { FileFormat, ViewMode } from '@/lib/types/config';
-  import { Save, Sparkles, ArrowRightLeft, Upload, Binary, Type, Eye, EyeOff, Copy, Check } from 'lucide-svelte';
+  import { Save, Sparkles, ArrowRightLeft, Upload, Binary, Type, Eye, EyeOff, Copy, Check, RefreshCw } from 'lucide-svelte';
   import { AlertTriangle } from 'lucide-svelte';
   import axios from 'axios';
   import jsYaml from 'js-yaml';
@@ -312,6 +312,24 @@
     }
   }
 
+  let isReloading = $state(false);
+
+  async function handleReload() {
+    if (!activeTab || isReloading) return;
+    if (activeTab.isDirty) {
+      const ok = confirm('Unsaved changes will be discarded. Reload from server?');
+      if (!ok) return;
+    }
+    isReloading = true;
+    try {
+      await configStore.reloadTab(activeTab.id);
+    } catch (error) {
+      console.error('Failed to reload:', error);
+    } finally {
+      isReloading = false;
+    }
+  }
+
   function handleImportClick() {
     fileInput?.click();
   }
@@ -433,6 +451,17 @@
             {/if}
           </button>
         {/if}
+
+        <!-- Reload button: refetch the current version from the server -->
+        <button
+          class="flex items-center gap-1 px-2 py-1 text-gray-400 bg-transparent border border-[#3c3c3c] rounded text-[11px] cursor-pointer transition-colors hover:bg-[#333] hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
+          onclick={handleReload}
+          disabled={isReloading}
+          title={activeTab.isDirty ? 'Reload from server (discards unsaved changes)' : 'Reload from server'}
+        >
+          <RefreshCw size={12} class={isReloading ? 'animate-spin' : ''} />
+          <span>Reload</span>
+        </button>
 
         <!-- Import button -->
         <button
