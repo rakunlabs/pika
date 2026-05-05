@@ -23,6 +23,7 @@ require (
 	github.com/rakunlabs/ada/middleware/requestid v0.1.3
 	github.com/rakunlabs/ada/middleware/server v0.1.0
 	github.com/rakunlabs/ada/middleware/telemetry v0.1.0
+	github.com/rakunlabs/alan v0.3.3
 	github.com/rakunlabs/bw v0.1.3
 	github.com/rakunlabs/chu v0.4.4
 	github.com/rakunlabs/into v0.5.3
@@ -95,6 +96,7 @@ require (
 	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.25 // indirect
+	github.com/quic-go/quic-go v0.59.0 // indirect
 	github.com/rakunlabs/cache v0.3.2 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect

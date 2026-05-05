@@ -16,6 +16,7 @@ import (
 	mserver "github.com/rakunlabs/ada/middleware/server"
 	mtelemetry "github.com/rakunlabs/ada/middleware/telemetry"
 
+	"github.com/rakunlabs/pika/internal/cluster"
 	"github.com/rakunlabs/pika/internal/config"
 	"github.com/rakunlabs/pika/internal/secret"
 	"github.com/rakunlabs/pika/internal/serve/ftpserve"
@@ -40,7 +41,7 @@ func cookieName(s *service.AuthSettings, cfg *config.Config) string {
 	return "pika_session"
 }
 
-func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info api.Info, encStore *secret.Storage) error {
+func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info api.Info, encStore *secret.Storage, cl *cluster.Cluster) error {
 	// Build initial raw mount handler from DB settings (includes hook dispatcher)
 	rh := api.BuildInitialRawHandler(ctx, svc)
 
@@ -58,6 +59,14 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		mlog.Middleware(),
 		mtelemetry.Middleware(),
 	)
+
+	// Cluster routing wraps everything below: reads stay local on every
+	// node, writes are forwarded to the leader. This must be installed
+	// BEFORE the groups so it sits inside the top-level chain that they
+	// inherit. No-op when cluster is disabled.
+	if cl.Enabled() {
+		server.Use(cl.Middleware())
+	}
 
 	mData := server.Group(cfg.Server.BasePath)
 	m := server.Group(cfg.Server.BasePath)
@@ -114,7 +123,7 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	// It is passed into the api layer so it can dynamically start/stop the public server
 	// when settings change via the UI.
 	publicServerStarter := func(settings *service.Settings, rh2 *api.RawHandler) (context.CancelFunc, error) {
-		return startPublicServer(ctx, cfg, svc, settings, rh2)
+		return startPublicServer(ctx, cfg, svc, settings, rh2, cl)
 	}
 
 	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, rh, publicServerStarter); err != nil {
@@ -195,11 +204,21 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 
 	// Start public server if enabled in DB settings
 	if settings.PublicPort != nil && settings.PublicPort.Enabled && settings.PublicPort.Port != "" {
-		cancel, err := startPublicServer(ctx, cfg, svc, settings, rh)
+		cancel, err := startPublicServer(ctx, cfg, svc, settings, rh, cl)
 		if err != nil {
 			return fmt.Errorf("init public server: %w", err)
 		}
 		api.SetPublicServer(rh, cancel)
+	}
+
+	// All routes are now registered, so the leader's HTTP handler is
+	// known. Wire it into the cluster so forwarded requests can be
+	// re-executed locally, then bring alan + bw cluster online.
+	if cl.Enabled() {
+		cl.SetForwardHandler(server.Mux)
+		if err := cl.Start(ctx); err != nil {
+			return fmt.Errorf("start cluster: %w", err)
+		}
 	}
 
 	return server.StartWithContext(ctx, net.JoinHostPort(cfg.Server.Host, cfg.Server.Port))
@@ -207,7 +226,12 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 
 // startPublicServer creates and starts the public (unauthenticated) HTTP server.
 // Returns a cancel function to stop it.
-func startPublicServer(ctx context.Context, cfg *config.Config, svc *service.Service, settings *service.Settings, rh *api.RawHandler) (context.CancelFunc, error) {
+//
+// When clustering is enabled the same read-local / write-forward middleware
+// is attached, so write requests on the public port (e.g. Consul KV compat
+// PUT/DELETE) get routed to the leader while reads continue to serve from
+// this node's local replica.
+func startPublicServer(ctx context.Context, cfg *config.Config, svc *service.Service, settings *service.Settings, rh *api.RawHandler, cl *cluster.Cluster) (context.CancelFunc, error) {
 	pubServer := ada.New()
 	pubServer.Use(
 		mrecover.Middleware(),
@@ -217,6 +241,10 @@ func startPublicServer(ctx context.Context, cfg *config.Config, svc *service.Ser
 		mlog.Middleware(),
 		mtelemetry.Middleware(),
 	)
+
+	if cl.Enabled() {
+		pubServer.Use(cl.Middleware())
+	}
 
 	mPublic := pubServer.Group(cfg.Server.BasePath)
 	if err := api.HandlePublic(mPublic, svc, rh); err != nil {

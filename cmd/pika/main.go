@@ -10,6 +10,7 @@ import (
 	"github.com/rakunlabs/logi"
 	"github.com/rakunlabs/tell"
 
+	"github.com/rakunlabs/pika/internal/cluster"
 	"github.com/rakunlabs/pika/internal/config"
 	_ "github.com/rakunlabs/pika/internal/rawfs/ftpfs"     // register FTP backend
 	_ "github.com/rakunlabs/pika/internal/rawfs/s3fs"      // register S3 backend
@@ -65,6 +66,15 @@ func run(ctx context.Context) error {
 	defer store.Close()
 
 	// //////////////////////////////////////
+	// Initialize cluster (no-op when not enabled). Built here so it can
+	// be wrapped around storage and shared with the HTTP server.
+	cl, err := cluster.New(cfg.Cluster, store.DB())
+	if err != nil {
+		return fmt.Errorf("init cluster; %w", err)
+	}
+	defer cl.Stop()
+
+	// //////////////////////////////////////
 	// Initialize encryption if enabled
 	var storeWrap service.Storage = store
 	var encStore *secret.Storage
@@ -96,7 +106,7 @@ func run(ctx context.Context) error {
 		Date:    date,
 	}
 
-	if err := server.Start(ctx, cfg, svc, info, encStore); err != nil {
+	if err := server.Start(ctx, cfg, svc, info, encStore, cl); err != nil {
 		return fmt.Errorf("start server; %w", err)
 	}
 

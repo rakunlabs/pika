@@ -11,7 +11,7 @@
   import { configStore } from '@/lib/store/config.svelte';
   import { addToast } from '@/lib/store/toast.svelte';
   import type { FileFormat, ViewMode } from '@/lib/types/config';
-  import { Save, Sparkles, ArrowRightLeft, Upload, Binary, Type, Eye, EyeOff } from 'lucide-svelte';
+  import { Save, Sparkles, ArrowRightLeft, Upload, Binary, Type, Eye, EyeOff, Copy, Check } from 'lucide-svelte';
   import { AlertTriangle } from 'lucide-svelte';
   import axios from 'axios';
   import jsYaml from 'js-yaml';
@@ -192,6 +192,21 @@
   let fileInput: HTMLInputElement | undefined = $state();
   let pendingSaveConfirm = $state(false);
   let pendingSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  let copied = $state(false);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function handleCopy() {
+    if (!activeTab) return;
+    try {
+      await navigator.clipboard.writeText(activeTab.content);
+      copied = true;
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => { copied = false; }, 1500);
+    } catch (err) {
+      console.error('Failed to copy editor content:', err);
+      addToast('Failed to copy', 'alert');
+    }
+  }
 
   // Validate content against its format. Returns error message or null if valid.
   function validateContent(content: string, format: FileFormat): string | null {
@@ -467,34 +482,61 @@
       </div>
     </div>
 
-    <div class="flex-1 min-h-0 overflow-auto">
-      {#if isHexMode}
-        <HexViewer data={hexData} />
-      {:else}
-        <CodeMirror
-          value={activeTab.content}
-          onchange={handleChange}
-          onready={(view) => { cmView = view; }}
-          onreconfigure={(view) => { cmView = view; }}
-          lang={languageExtension}
-          extensions={lintExtensions}
-          theme={oneDark}
-          styles={{
-            '&': {
-              height: '100%',
-              fontSize: '13px',
-              overflow: 'auto'
-            },
-            '.cm-content': {
-              fontFamily: "'JetBrains Mono', 'Fira Code', 'Monaco', 'Menlo', monospace"
-            },
-            '.cm-gutters': {
-              backgroundColor: '#1e1e1e',
-              color: '#6e7681',
-              border: 'none'
-            }
-          }}
-        />
+    <div class="relative flex-1 min-h-0">
+      <!-- Inner scroller fills the relative parent. CodeMirror lives inside
+           it and handles its own scrolling. Splitting into two divs keeps
+           the button overlay (absolute to the relative parent) pinned at
+           the top-right of the visible area while content scrolls. -->
+      <div class="absolute inset-0 overflow-auto">
+        {#if isHexMode}
+          <HexViewer data={hexData} />
+        {:else}
+          <CodeMirror
+            value={activeTab.content}
+            onchange={handleChange}
+            onready={(view) => { cmView = view; }}
+            onreconfigure={(view) => { cmView = view; }}
+            lang={languageExtension}
+            extensions={lintExtensions}
+            theme={oneDark}
+            styles={{
+              '&': {
+                height: '100%',
+                fontSize: '13px',
+                overflow: 'auto'
+              },
+              '.cm-content': {
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'Monaco', 'Menlo', monospace"
+              },
+              '.cm-gutters': {
+                backgroundColor: '#1e1e1e',
+                color: '#6e7681',
+                border: 'none'
+              }
+            }}
+          />
+        {/if}
+      </div>
+
+      <!-- Floating copy button: stays at the same low opacity at all times
+           and only becomes fully visible when the mouse is directly over
+           the button itself. Sibling of the scroller, so it never moves
+           with scroll. z-index keeps it above CodeMirror's scrollbar. -->
+      {#if !isHexMode}
+        <button
+          class="absolute top-2 right-3 z-20 flex items-center gap-1 px-2 py-1 bg-[#252526]/70 border border-[#3c3c3c] rounded text-[11px] text-gray-300 cursor-pointer opacity-50 hover:opacity-100 hover:bg-[#333] hover:text-gray-100 transition-opacity duration-150"
+          onclick={handleCopy}
+          title="Copy editor content"
+          aria-label="Copy editor content"
+        >
+          {#if copied}
+            <Check size={12} class="text-green-400" />
+            <span>Copied</span>
+          {:else}
+            <Copy size={12} />
+            <span>Copy</span>
+          {/if}
+        </button>
       {/if}
     </div>
   {:else}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/rakunlabs/chu"
 	"github.com/rakunlabs/logi"
+	"github.com/rakunlabs/pika/internal/cluster"
 	"github.com/rakunlabs/pika/internal/storage"
 	"github.com/rakunlabs/tell"
 )
@@ -23,6 +24,7 @@ type Config struct {
 
 	Storage storage.Config `cfg:"storage"`
 	Server  Server         `cfg:"server"`
+	Cluster cluster.Config `cfg:"cluster"`
 
 	Secret Secret `cfg:"secret"`
 
