@@ -250,9 +250,9 @@ func readHeaderOnly(r io.Reader) (BackupHeader, [backupHeaderSize]byte, error) {
 	// Sanity bound — pika backups exceeding 4 GiB are not realistic and
 	// almost certainly indicate a corrupt header. Reject early instead
 	// of letting io.ReadFull allocate a giant slice.
-	const maxPayload = 4 << 30
+	const maxPayload uint64 = 4 << 30
 	if hdr.PayloadSize > maxPayload {
-		return BackupHeader{}, buf, fmt.Errorf("backup payload size %d exceeds %d byte limit: %w", hdr.PayloadSize, int(maxPayload), ErrBadRequest)
+		return BackupHeader{}, buf, fmt.Errorf("backup payload size %d exceeds %d byte limit: %w", hdr.PayloadSize, maxPayload, ErrBadRequest)
 	}
 	return hdr, buf, nil
 }
