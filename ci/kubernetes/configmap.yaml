@@ -15,3 +15,20 @@ data:
     storage:
       bw:
         path: /data/pika
+    cluster:
+      # 3-replica raft-style cluster. Followers forward writes to the
+      # leader; reads are served locally on every node from the replicated
+      # bw store. See internal/cluster/cluster.go for details.
+      enabled: true
+      # Headless service that resolves to all peer pod IPs. Must match the
+      # service name + namespace in service.yaml. RefreshInterval (default
+      # in alan) re-resolves this periodically as pods come and go.
+      dns_addr: pika-cluster.pika.svc.cluster.local
+      # Replicas MUST match StatefulSet.spec.replicas — alan uses this for
+      # quorum (with 3, the cluster tolerates losing 1 node).
+      replicas: 3
+      # UDP/QUIC port for peer traffic. Exposed via the headless service.
+      port: 5000
+      # security_key is injected via PIKA_CLUSTER_SECURITY_KEY from the
+      # pika-cluster Secret (see secret.yaml). Do NOT put it here — the
+      # ConfigMap is not encrypted at rest.

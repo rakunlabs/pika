@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rakunlabs/chu"
+	"github.com/rakunlabs/chu/loader/loaderenv"
 	"github.com/rakunlabs/logi"
 	"github.com/rakunlabs/pika/internal/cluster"
 	"github.com/rakunlabs/pika/internal/storage"
@@ -75,7 +76,11 @@ type CookieConfig struct {
 
 func Load(ctx context.Context) (*Config, error) {
 	var cfg Config
-	if err := chu.Load(ctx, ServiceName, &cfg); err != nil {
+	if err := chu.Load(ctx, ServiceName, &cfg,
+		chu.WithLoaderOption(loaderenv.New(
+			loaderenv.WithPrefix("PIKA_"),
+		)),
+	); err != nil {
 		return nil, err
 	}
 

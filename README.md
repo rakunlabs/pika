@@ -2,9 +2,7 @@
 
 # pika
 
-General configuration server.
-
-> Highly on development stage, expect breaking changes. Feedback and contributions are very welcome!
+General configuration server, secrets manager, and raw file server with a beautiful web UI and a powerful API.
 
 ## Quick Start
 
@@ -22,7 +20,7 @@ Open `http://localhost:8080` to access the web UI.
 - Config inheritance (internal files, Vault, HTTP, Kubernetes, Consul, etcd, AWS, GCP, Azure)
 - Token-based access control with glob scopes
 - Full-text search across all configs
-- Built-in encryption (ChaCha20) with key rotation
+- Built-in encryption (XChaCha20-Poly1305) with key rotation
 - Real-time preview of resolved configs
 - Event hooks (HTTP webhooks, Kafka, Redis Pub/Sub, NATS)
 - Raw file serving (local, S3, FTP, SFTP, WebDAV, Vercel Blob)
@@ -161,7 +159,7 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/data/myapp/config?
 
 ## Raw Filesystem Serving
 
-Pika can serve files directly from local filesystem directories over HTTP. This is useful for serving static assets, certificates, or any files that don't need versioning or the config management features.
+Pika can serve files directly from a variety of storage backends (local disk, S3-compatible object stores, FTP, SFTP, WebDAV, Vercel Blob) over HTTP. This is useful for serving static assets, certificates, or any files that don't need versioning or the config management features.
 
 ### Configuration
 
@@ -310,32 +308,32 @@ server:
       same_site: lax
 ```
 
-### Forward Auth
+### External Authentication Strategies
 
-Pika supports forward authentication (e.g., with Turna, Authelia, Authentik). Forward-auth is configured and toggled at runtime from **Settings > Forward Auth** in the UI — no server restart required. The middleware is hot-swapped via an [ada Slot](https://rakunlabs.github.io/ada/guide/runtime-reload.html).
+Beyond built-in local accounts, pika supports OAuth2/OIDC providers, LDAP, and header-based forward authentication (e.g., with Turna, Authelia, Authentik). All strategies are configured and toggled at runtime from **Settings > Authentication** in the UI — no server restart required. The middleware is hot-swapped via an [ada Slot](https://rakunlabs.github.io/ada/guide/runtime-reload.html).
 
-When enabled, pika uses a **session-first** strategy:
+When any external strategy is enabled, pika uses a **session-first** approach:
 
-1. If the request has a valid local session cookie, the user is authenticated immediately (forward-auth is skipped).
-2. If no session cookie is present and forward-auth is enabled, pika delegates authentication to the configured external auth service.
+1. If the request has a valid local session cookie, the user is authenticated immediately (external strategies are skipped).
+2. If no session cookie is present, pika delegates authentication to the configured strategy (OAuth2, LDAP, or forward-auth headers).
 3. If neither succeeds, the request gets a 401.
 
-This means local login always works — even when forward-auth is active. The `/api/v1/info` endpoint is always accessible so the SPA can boot and show the local login page regardless of forward-auth redirects.
+This means local login always works — even when external auth is active. The `/api/v1/info` endpoint is always accessible so the SPA can boot and show the local login page regardless of external auth redirects.
 
-#### Forward-Auth Permissions
+#### External Permissions
 
-Under forward auth, pika can translate external group names into its own capability keys. This is configured at runtime in **Settings > Forward Auth > Permissions** tab in the UI, and persisted in the database alongside other settings. The pika-native capability keys are:
+Under external authentication, pika can translate provider-supplied groups (or OAuth2 scopes) into its own capability keys. This is configured at runtime in **Settings > Authentication > Permissions** in the UI, and persisted in the database alongside other settings. The pika-native capability keys are:
 
-| Key                    | Grants                                                                          |
-| ---------------------- | ------------------------------------------------------------------------------- |
-| `files.read`           | View configurations, versions, variants, render, search, convert                |
-| `files.write`          | Create, update, delete configurations and variants                              |
-| `raw.read`             | Browse and download raw mount contents                                          |
-| `raw.write`            | Upload, delete, rename, copy, move raw mount contents                           |
-| `settings.manage`      | View and modify server settings, admin secret, backup/restore, key rotation    |
-| `tokens.manage`        | Create, edit, revoke API access tokens                                          |
-| `users.manage`         | Create, edit, delete, kick users (built-in auth only)                           |
-| `permissions.manage`   | Define permission bundles and assign them (built-in auth only)                  |
+| Key                  | Grants                                                                      |
+| -------------------- | --------------------------------------------------------------------------- |
+| `files.read`         | View configurations, versions, variants, render, search, convert            |
+| `files.write`        | Create, update, delete configurations and variants                          |
+| `raw.read`           | Browse and download raw mount contents                                      |
+| `raw.write`          | Upload, delete, rename, copy, move raw mount contents                       |
+| `settings.manage`    | View and modify server settings, admin secret, backup/restore, key rotation |
+| `tokens.manage`      | Create, edit, revoke API access tokens                                      |
+| `users.manage`       | Create, edit, delete, kick users (built-in auth only)                       |
+| `permissions.manage` | Define permission bundles and assign them (built-in auth only)              |
 
 Example mapping: if your gateway emits `X-Groups: pika-editor,auditors` for a user, a mapping like
 
@@ -346,15 +344,15 @@ auditors     →  files.read, raw.read, tokens.manage
 
 grants that user the union of both sets. A user in multiple groups gets the union; unknown groups are ignored. Users not in the Superadmins allowlist and without any matching group are **denied** any restricted action (403).
 
-When external permissions are **disabled** (the default), forward-auth users have no permission checks applied — pika trusts the gateway completely. Enable enforcement from the **Permissions** tab once the mapping is in place.
+When external permissions are **disabled** (the default), externally-authenticated users have no permission checks applied — pika trusts the gateway/IdP completely. Enable enforcement from the **Permissions** section once the mapping is in place.
 
-The groups header name and value separator are configurable. If your gateway uses `X-Pika-Roles` with `|` separators, set both fields in the Permissions form; pika also accepts repeated header lines as a single concatenated list.
+The groups header name and value separator are configurable. If your gateway uses `X-Pika-Roles` with `|` separators, set both fields in the Permissions form; pika also accepts repeated header lines as a single concatenated list. The same role/scope mapping applies to OAuth2 (token claims) and LDAP (group membership) strategies.
 
-Forward-auth users are identified purely by username — pika does not create rows in its `users` table for them. User and Permission bundle management in the UI remains available only under built-in auth.
+Externally-authenticated users are identified purely by username/subject — pika does not create rows in its `users` table for them. User and Permission bundle management in the UI remains available only under built-in auth.
 
 ## Kubernetes Deployment
 
-Kustomize manifests are provided in [`ci/kubernetes/`](ci/kubernetes/). They include a Deployment, Service, ConfigMap (with seed user and public port), PVC, ServiceAccount, and a Gateway API HTTPRoute for `pika.example.com`.
+Kustomize manifests are provided in [`ci/kubernetes/`](ci/kubernetes/). They include a Namespace, ServiceAccount, ConfigMap, Secret (cluster pre-shared key), StatefulSet (3 replicas with per-pod PVC via `volumeClaimTemplates`), a ClusterIP Service for HTTP traffic, and a headless Service for cluster peer discovery. Ingress is intentionally not included — bring your own (Ingress, Gateway API HTTPRoute, etc.) and point it at the `pika` Service on port 8080.
 
 ### Quick Deploy
 
@@ -370,6 +368,16 @@ Pin to a specific version:
 kubectl apply -k "https://github.com/rakunlabs/pika/ci/kubernetes?ref=v0.1.0"
 ```
 
+> **Before deploying**, change the placeholder `security_key` in [`secret.yaml`](ci/kubernetes/secret.yaml) to a real random value (e.g. `openssl rand -base64 48`). All replicas must share the same key.
+
+### Clustering Notes
+
+The default manifests deploy a 3-replica cluster (see [Clustering](#clustering)). If you change `spec.replicas` on the StatefulSet, also update `cluster.replicas` in the ConfigMap — both must match for the quorum math.
+
+### External Secrets Operator
+
+If you use [External Secrets Operator](https://external-secrets.io), [`ci/kubernetes/examples/`](ci/kubernetes/examples/) contains examples for pulling Pika-stored configs and TLS material into Kubernetes Secrets via a `SecretStore` / `ExternalSecret` pair.
+
 ### Customizing with a Remote Base
 
 Create your own `kustomization.yaml` that references the upstream manifests and overrides what you need:
@@ -383,7 +391,7 @@ resources:
 
 images:
   - name: ghcr.io/rakunlabs/pika
-    newTag: v0.1.0
+    newTag: v0.3.0
 
 patches:
   - target:
@@ -403,13 +411,18 @@ patches:
           storage:
             bw:
               path: /data/pika
+          cluster:
+            enabled: true
+            dns_addr: pika-cluster.pika.svc.cluster.local
+            replicas: 3
+            port: 5000
   - target:
-      kind: HTTPRoute
-      name: pika
+      kind: Secret
+      name: pika-cluster
     patch: |
       - op: replace
-        path: /spec/hostnames/0
-        value: pika.mydomain.com
+        path: /stringData/security_key
+        value: "your-long-random-string-here"
 ```
 
 Then apply:
@@ -418,4 +431,21 @@ Then apply:
 kubectl apply -k .
 ```
 
-The public port (9090) is only exposed as a ClusterIP service — accessible within the cluster at `pika.pika.svc.cluster.local:9090`, not through the gateway.
+The public port (9090) is exposed on the `pika` Service alongside the admin port — accessible within the cluster at `pika.pika.svc.cluster.local:9090`. By default it has no external Ingress, so traffic is cluster-internal only; route it externally with your own Ingress/HTTPRoute if you want to expose `/data/*` to consumers outside the cluster.
+
+## Clustering
+
+Pika supports a 3+ node cluster for high availability. Reads are served locally on every node from the replicated [bw](https://github.com/rakunlabs/bw) store; writes are routed to the elected leader and the diff is pushed to every follower before the leader replies. Peer discovery and leader election use [alan](https://github.com/rakunlabs/alan) over QUIC.
+
+Enable clustering in the config file:
+
+```yaml
+cluster:
+  enabled: true
+  dns_addr: pika-cluster.pika.svc.cluster.local  # resolves to all peer IPs
+  replicas: 3                                    # quorum size; tolerates losing 1
+  port: 5000                                     # UDP/QUIC peer port
+  security_key: "long-random-string"             # pre-shared key
+```
+
+For a local 3-node demo, see [`example/cluster/`](example/cluster/). For Kubernetes, the manifests in [`ci/kubernetes/`](ci/kubernetes/) ship with a 3-replica StatefulSet + headless Service preconfigured for clustering.

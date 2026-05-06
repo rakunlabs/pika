@@ -7,10 +7,9 @@ resources:
   - namespace.yaml
   - serviceaccount.yaml
   - configmap.yaml
-  - pvc.yaml
-  - deployment.yaml
+  - secret.yaml
+  - statefulset.yaml
   - service.yaml
-  - gateway.yaml
 
 images:
   - name: ghcr.io/rakunlabs/pika

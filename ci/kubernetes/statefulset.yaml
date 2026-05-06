@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pika
+  labels:
+    app.kubernetes.io/name: pika
+spec:
+  # 3 replicas form a quorum: any 2 alive can serve writes via the leader.
+  # See cluster.replicas in the ConfigMap — it MUST match this value.
+  replicas: 3
+  # Headless service used for stable per-pod DNS (pika-0.pika-cluster, etc.)
+  # and for the alan/QUIC peer discovery the cluster relies on.
+  serviceName: pika-cluster
+  # OrderedReady ensures pod-0 is up and ready before pod-1 starts. With a
+  # 3-node quorum this avoids split-brain during the very first bring-up.
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pika
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Roll one pod at a time; quorum is preserved (2/3 stay up).
+      partition: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pika
+    spec:
+      serviceAccountName: pika
+      # Give the cluster a moment to drain forwarded requests and step
+      # down leadership before SIGKILL on a rolling update.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: pika
+          image: ghcr.io/rakunlabs/pika:latest
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: public
+              containerPort: 9090
+              protocol: TCP
+            - name: cluster
+              containerPort: 5000
+              protocol: UDP
+          env:
+            # Pre-shared key for cluster membership. Sourced from a Secret so
+            # it isn't stored in the ConfigMap. Loaded by chu via the PIKA_
+            # env prefix; field path is cluster.security_key.
+            - name: PIKA_CLUSTER_SECURITY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pika-cluster
+                  key: security_key
+          volumeMounts:
+            - name: config
+              mountPath: /pika.yaml
+              subPath: pika.yaml
+              readOnly: true
+            - name: data
+              mountPath: /data
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: public
+            # Bring-up of the BadgerDB store + cluster join can take a few
+            # seconds; the original Deployment used 5s but a StatefulSet
+            # rolls one pod at a time so we can be a touch more lenient.
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: public
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1
+              memory: 1Gi
+      volumes:
+        - name: config
+          configMap:
+            name: pika
+  # Per-pod PersistentVolumeClaim. Each replica gets its own /data volume
+  # since clustering replicates state at the application layer (bw cluster
+  # diffs streamed from the leader) — pods must NOT share storage.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi

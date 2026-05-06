@@ -1,3 +1,7 @@
+---
+# Client-facing ClusterIP service. Routes to whichever replica gets picked
+# by kube-proxy; followers transparently forward writes to the leader, so
+# clients don't need to know which pod is the leader.
 apiVersion: v1
 kind: Service
 metadata:
@@ -16,3 +20,28 @@ spec:
       port: 9090
       targetPort: public
       protocol: TCP
+---
+# Headless service used by the cluster for peer discovery. Pods resolve
+# `pika-cluster.<namespace>.svc.cluster.local` to the A records of all
+# ready peers; this is the value of cluster.dns_addr in the ConfigMap.
+# clusterIP: None makes DNS return per-pod IPs instead of a virtual IP,
+# which is required for QUIC peer-to-peer.
+apiVersion: v1
+kind: Service
+metadata:
+  name: pika-cluster
+  labels:
+    app.kubernetes.io/name: pika
+spec:
+  clusterIP: None
+  # Surface peers in DNS even before they pass readiness — cluster join
+  # happens before the HTTP healthz probe is ready, so we can't gate
+  # discovery on readiness without deadlocking startup.
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: pika
+  ports:
+    - name: cluster
+      port: 5000
+      targetPort: cluster
+      protocol: UDP
