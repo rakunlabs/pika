@@ -105,6 +105,7 @@
   let newInheritInject = $state('');
   let externalPathSuggestions = $state<string[]>([]);
   let loadingPaths = $state(false);
+  let editingInheritIndex = $state<number | null>(null);
 
   const inheritEntries = $derived(activeTab?.meta?.inherits || []);
 
@@ -166,8 +167,14 @@
       entry.inject = newInheritInject.trim();
     }
 
-    const current = activeTab.meta.inherits || [];
-    configStore.updateTabMeta(activeTab.id, { inherits: [...current, entry] });
+    const current = [...(activeTab.meta.inherits || [])];
+    const isEdit = editingInheritIndex !== null;
+    if (isEdit) {
+      current[editingInheritIndex!] = entry;
+    } else {
+      current.push(entry);
+    }
+    configStore.updateTabMeta(activeTab.id, { inherits: current });
 
     // Reset form
     newInheritSource = '';
@@ -178,7 +185,43 @@
     newInheritInject = '';
     externalPathSuggestions = [];
     showAddInherit = false;
-    addToast('Inheritance added', 'success');
+    editingInheritIndex = null;
+    addToast(isEdit ? 'Inheritance updated' : 'Inheritance added', 'success');
+  }
+
+  function startEditInherit(index: number) {
+    if (!activeTab) return;
+    const entry = activeTab.meta.inherits?.[index];
+    if (!entry) return;
+
+    if (entry.mount) {
+      newInheritType = 'mount';
+    } else if (entry.resource) {
+      newInheritType = 'external';
+    } else {
+      newInheritType = 'internal';
+    }
+    newInheritSource = entry.source || '';
+    newInheritResource = entry.resource || '';
+    newInheritMount = entry.mount || '';
+    newInheritPath = entry.path || '';
+    newInheritPaths = entry.paths ? entry.paths.join(', ') : '';
+    newInheritInject = entry.inject || '';
+    externalPathSuggestions = [];
+    editingInheritIndex = index;
+    showAddInherit = true;
+  }
+
+  function cancelInheritForm() {
+    showAddInherit = false;
+    editingInheritIndex = null;
+    newInheritSource = '';
+    newInheritResource = '';
+    newInheritMount = '';
+    newInheritPath = '';
+    newInheritPaths = '';
+    newInheritInject = '';
+    externalPathSuggestions = [];
   }
 
   async function loadExternalPaths(resourceName: string, prefix: string = '') {
@@ -201,6 +244,11 @@
     const current = [...(activeTab.meta.inherits || [])];
     current.splice(index, 1);
     configStore.updateTabMeta(activeTab.id, { inherits: current.length > 0 ? current : undefined });
+    if (editingInheritIndex === index) {
+      cancelInheritForm();
+    } else if (editingInheritIndex !== null && editingInheritIndex > index) {
+      editingInheritIndex = editingInheritIndex - 1;
+    }
     addToast('Inheritance removed', 'success');
   }
 
@@ -287,8 +335,8 @@
                       title="Load version {ver.version}"
                     >v{ver.version}</button>
                     {#if isEditing}
-                      <!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
-                      <span class="flex items-center gap-1.5" onclick={(e) => e.stopPropagation()}>
+                      <!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_element_interactions -->
+                      <span class="flex items-center gap-1.5" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
                         <input
                           type="text"
                           data-constraint-input
@@ -419,7 +467,7 @@
           {#if showInheritance}
             <button
               class="flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] text-blue-600 bg-blue-50 rounded cursor-pointer hover:bg-blue-100 transition-colors"
-              onclick={() => showAddInherit = true}
+              onclick={() => { editingInheritIndex = null; showAddInherit = true; }}
             >
               <Plus size={10} /> Add
             </button>
@@ -569,11 +617,11 @@
                   class="flex-1 py-1 text-[11px] text-white bg-blue-500 rounded cursor-pointer hover:bg-blue-600 transition-colors"
                   onclick={addInheritEntry}
                 >
-                  Add
+                  {editingInheritIndex !== null ? 'Save' : 'Add'}
                 </button>
                 <button
                   class="flex-1 py-1 text-[11px] text-slate-500 bg-slate-100 rounded cursor-pointer hover:bg-slate-200 transition-colors"
-                  onclick={() => { showAddInherit = false; newInheritSource = ''; newInheritResource = ''; newInheritMount = ''; newInheritPath = ''; newInheritPaths = ''; newInheritInject = ''; externalPathSuggestions = []; }}
+                  onclick={cancelInheritForm}
                 >
                   Cancel
                 </button>
@@ -626,13 +674,22 @@
                         </div>
                       {/if}
                     </div>
-                    <button
-                      class="p-0.5 text-slate-400 hover:text-red-500 cursor-pointer transition-colors shrink-0"
-                      onclick={() => removeInheritEntry(i)}
-                      title="Remove"
-                    >
-                      <Trash2 size={12} />
-                    </button>
+                    <div class="flex items-center gap-1 shrink-0">
+                      <button
+                        class="p-0.5 text-slate-400 hover:text-blue-500 cursor-pointer transition-colors"
+                        onclick={() => startEditInherit(i)}
+                        title="Edit"
+                      >
+                        <Pencil size={12} />
+                      </button>
+                      <button
+                        class="p-0.5 text-slate-400 hover:text-red-500 cursor-pointer transition-colors"
+                        onclick={() => removeInheritEntry(i)}
+                        title="Remove"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               {/each}

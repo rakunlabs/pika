@@ -536,19 +536,23 @@
       <div class="px-5 pb-5 pt-1 space-y-3 border-t border-slate-100">
         <div class="grid grid-cols-2 gap-3">
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Title</label>
             <input type="text" bind:value={uiTitle} placeholder="pika" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Subtitle</label>
             <input type="text" bind:value={uiSubtitle} placeholder="optional" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
         </div>
         <div>
+          <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-xs font-medium text-slate-500 mb-1">Icon URL / data URI</label>
           <input type="text" bind:value={uiIcon} placeholder="https://example.com/logo.png" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
         </div>
         <div>
+          <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-xs font-medium text-slate-500 mb-1">Custom CSS URL</label>
           <input type="text" bind:value={uiCustomCSSUrl} placeholder="https://example.com/login.css" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
         </div>
@@ -570,20 +574,24 @@
       <div class="px-5 pb-5 pt-1 space-y-3 border-t border-slate-100">
         <div class="grid grid-cols-3 gap-3">
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Cookie Name</label>
             <input type="text" bind:value={cookieName} placeholder="pika_session" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Domain</label>
             <input type="text" bind:value={cookieDomain} placeholder=".example.com" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Path</label>
             <input type="text" bind:value={cookiePath} placeholder="/" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">SameSite</label>
             <select bind:value={cookieSameSite} class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10">
               <option value="">Default</option>
@@ -629,6 +637,7 @@
         </p>
         <div class="grid grid-cols-2 gap-3">
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Access TTL (seconds)</label>
             <p class="text-[11px] text-slate-400 mb-2 leading-relaxed">
               How often the access token is refreshed under the hood.
@@ -638,6 +647,7 @@
             <input type="number" bind:value={issuerAccessTTL} placeholder="900" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Refresh TTL (seconds)</label>
             <p class="text-[11px] text-slate-400 mb-2 leading-relaxed">
               How long the refresh token lasts. When it expires the user
@@ -688,6 +698,7 @@
           Enable local username/password authentication
         </label>
         <div>
+          <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-xs font-medium text-slate-500 mb-1">Strategy label</label>
           <input type="text" bind:value={localName} placeholder="Local" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
         </div>
@@ -717,24 +728,29 @@
             </div>
             <div class="grid grid-cols-2 gap-3">
               <div>
+                <!-- svelte-ignore a11y_label_has_associated_control -->
                 <label class="block text-xs font-medium text-slate-500 mb-1">Name (URL key)</label>
                 <input type="text" bind:value={entry.name} placeholder="google" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
               </div>
               <div>
+                <!-- svelte-ignore a11y_label_has_associated_control -->
                 <label class="block text-xs font-medium text-slate-500 mb-1">Display Name</label>
                 <input type="text" bind:value={entry.display_name} placeholder="Google" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
               </div>
             </div>
             <div>
+              <!-- svelte-ignore a11y_label_has_associated_control -->
               <label class="block text-xs font-medium text-slate-500 mb-1">Issuer URL</label>
               <input type="text" bind:value={entry.issuer_url} placeholder="https://accounts.google.com" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
             </div>
             <div class="grid grid-cols-2 gap-3">
               <div>
+                <!-- svelte-ignore a11y_label_has_associated_control -->
                 <label class="block text-xs font-medium text-slate-500 mb-1">Client ID</label>
                 <input type="text" bind:value={entry.client_id} class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
               </div>
               <div>
+                <!-- svelte-ignore a11y_label_has_associated_control -->
                 <label class="block text-xs font-medium text-slate-500 mb-1">Client Secret</label>
                 <input type="password" bind:value={entry.client_secret} placeholder="(leave blank to keep)" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
                 <p class="mt-0.5 text-[10px] text-slate-400">Leave blank to keep existing secret.</p>
@@ -742,6 +758,7 @@
             </div>
             <!-- Scopes -->
             <div>
+              <!-- svelte-ignore a11y_label_has_associated_control -->
               <label class="block text-xs font-medium text-slate-500 mb-1">Scopes</label>
               <div class="flex gap-2">
                 <input type="text" bind:value={oauth2ScopeInputs[i]} placeholder="openid"
@@ -797,19 +814,23 @@
       <div class="px-5 pb-5 pt-1 space-y-3 border-t border-slate-100">
         <div class="grid grid-cols-2 gap-3">
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Strategy label</label>
             <input type="text" bind:value={ldapName} placeholder="LDAP" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Server Address</label>
             <input type="text" bind:value={ldapAddr} placeholder="ldap://ldap.example.com:389" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
         </div>
         <div>
+          <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-xs font-medium text-slate-500 mb-1">Bind DN</label>
           <input type="text" bind:value={ldapBindDN} placeholder="cn=admin,dc=example,dc=com" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
         </div>
         <div>
+          <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-xs font-medium text-slate-500 mb-1">Bind Password</label>
           <input type="password" bind:value={ldapBindPassword}
             oninput={() => ldapBindPasswordChanged = true}
@@ -835,36 +856,43 @@
       <div class="px-5 pb-5 pt-1 space-y-3 border-t border-slate-100">
         <div class="grid grid-cols-2 gap-3">
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Strategy label</label>
             <input type="text" bind:value={headerName} placeholder="Header" class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">User Header</label>
             <input type="text" bind:value={headerUser} placeholder="X-Remote-User" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Email Header</label>
             <input type="text" bind:value={headerEmail} placeholder="X-Remote-Email" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Display Name Header</label>
             <input type="text" bind:value={headerDisplayName} placeholder="X-Remote-Name" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Roles Header</label>
             <input type="text" bind:value={headerRoles} placeholder="X-Remote-Roles" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Groups Header</label>
             <input type="text" bind:value={headerGroups} placeholder="X-Remote-Groups" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
         </div>
         <!-- Trusted Proxies -->
         <div>
+          <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-xs font-medium text-slate-500 mb-1">Trusted Proxies (CIDR / IP)</label>
           <div class="flex gap-2">
             <input type="text" bind:value={headerTrustedProxyInput} placeholder="10.0.0.0/8"
@@ -914,10 +942,12 @@
 
         <div class="grid grid-cols-2 gap-3">
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Window (seconds)</label>
             <input type="number" min="1" bind:value={rlWindowSec} placeholder="900" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">Backoff Base (seconds)</label>
             <input type="number" min="0" bind:value={rlBackoffBaseSec} placeholder="1" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
@@ -925,10 +955,12 @@
 
         <div class="grid grid-cols-2 gap-3">
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">IP Soft Threshold</label>
             <input type="number" min="1" bind:value={rlIPSoft} placeholder="3" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">IP Hard Threshold</label>
             <input type="number" min="1" bind:value={rlIPHard} placeholder="30" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
@@ -936,21 +968,25 @@
 
         <div class="grid grid-cols-2 gap-3">
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">User Soft Threshold</label>
             <input type="number" min="1" bind:value={rlUserSoft} placeholder="3" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs font-medium text-slate-500 mb-1">User Hard Threshold</label>
             <input type="number" min="1" bind:value={rlUserHard} placeholder="15" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
           </div>
         </div>
 
         <div>
+          <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-xs font-medium text-slate-500 mb-1">Backoff Max (seconds)</label>
           <input type="number" min="1" bind:value={rlBackoffMaxSec} placeholder="15" class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10" />
         </div>
 
         <div>
+          <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-xs font-medium text-slate-500 mb-1">Trusted Proxy CIDRs</label>
           <p class="text-xs text-slate-500 mb-2">
             CIDR blocks whose X-Forwarded-For / X-Real-IP / True-Client-IP
@@ -1001,6 +1037,7 @@
       <div class="px-5 pb-5 pt-1 border-t border-slate-100 space-y-5">
         <!-- Superadmins -->
         <div class="mt-3">
+          <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-xs font-medium text-slate-500 mb-1">Superadmins</label>
           <p class="text-[11px] text-slate-400 mb-2">
             Identity subjects that bypass every permission check. For the
@@ -1028,6 +1065,7 @@
 
         <!-- Role → capability mapping -->
         <div class="pt-4 border-t border-slate-100">
+          <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-xs font-medium text-slate-500 mb-1">Role → Capabilities</label>
           <p class="text-[11px] text-slate-400 mb-2">
             Maps a role name (from the identity's
@@ -1090,6 +1128,7 @@
 
         <!-- Scope → capability mapping -->
         <div class="pt-4 border-t border-slate-100">
+          <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-xs font-medium text-slate-500 mb-1">Scope → Capabilities</label>
           <p class="text-[11px] text-slate-400 mb-2">
             Maps an OAuth2 scope (from the token response or the

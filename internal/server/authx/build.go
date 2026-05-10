@@ -40,6 +40,13 @@ func buildAuthConfig(s *service.AuthSettings, base, version string, signupFirstF
 			Theme:         s.UI.Theme,
 			CustomCSSURL:  s.UI.CustomCSSURL,
 			SignupFirstFn: signupFirstFn,
+			// Pika ships its own login UI in _ui (Login.svelte) served by
+			// the SPA folder handler at /*. Setting ExternalFolder=true
+			// tells ada to register only the JSON endpoints under /login/*
+			// and skip mounting its embedded static UI, so the SPA owns
+			// the /login route and the experience stays consistent with
+			// the rest of the app.
+			ExternalFolder: true,
 		},
 		CookieName: cookieName,
 		Cookie: session.CookieOptions{

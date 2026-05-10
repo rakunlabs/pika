@@ -1,5 +1,5 @@
-BINARY    := pika
-MAIN_FILE := cmd/$(BINARY)/main.go
+PROJECT    := pika
+MAIN_FILE := cmd/$(PROJECT)/main.go
 
 BUILD_DATE := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 BUILD_COMMIT := $(shell git rev-parse --short HEAD)
@@ -7,6 +7,10 @@ VERSION := $(or $(IMAGE_TAG),$(shell git describe --tags --first-parent --match 
 PKG := $(shell go list -m | head -n 1)
 
 .DEFAULT_GOAL := help
+
+.PHONY: docs
+docs: ## Serve docs locally
+	cd _docs && pnpm run docs:dev
 
 .PHONY: build
 build: build-ui ## Build the Go binary
@@ -26,7 +30,7 @@ build-ui: install-ui ## Build the frontend assets
 
 .PHONY: build-container
 build-container: build ## Build the container image with test tag
-	docker build -t $(PROJECT):test -f ci/Dockerfile dist/$(BINARY)_linux_amd64_v1/
+	docker build -t $(PROJECT):test -f ci/Dockerfile dist/$(PROJECT)_linux_amd64_v1/
 
 .PHONY: run
 run: export LOG_LEVEL := debug

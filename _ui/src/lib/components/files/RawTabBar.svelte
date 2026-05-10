@@ -118,11 +118,14 @@
 
 <!-- Context Menu -->
 {#if contextMenu}
-  <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
+    role="menu"
+    tabindex="-1"
     class="fixed z-50 min-w-44 py-1 bg-white border border-slate-200 rounded-lg shadow-xl text-[13px]"
     style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
     onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => e.stopPropagation()}
   >
     <button
       class="flex items-center w-full px-3 py-1.5 text-left text-slate-700 bg-transparent border-none cursor-pointer hover:bg-slate-100 transition-colors"

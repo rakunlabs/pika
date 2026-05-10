@@ -38,10 +38,24 @@ type KubeClient struct {
 }
 
 // NewKubeClient creates a KubeClient from a Kubernetes config.
-// If kubeconfig is empty, in-cluster config is used.
-func NewKubeClient(kubeconfig string) (*KubeClient, error) {
-	if kubeconfig != "" {
-		return newKubeClientFromKubeconfig(kubeconfig)
+//
+// Selection rules (in priority order):
+//  1. cfg.KubeconfigContent — parse the kubeconfig YAML directly.
+//  2. cfg.Kubeconfig        — read kubeconfig YAML from this filesystem path.
+//  3. otherwise             — use in-cluster config (service account token).
+func NewKubeClient(cfg *Kubernetes) (*KubeClient, error) {
+	if cfg == nil {
+		return newKubeClientInCluster()
+	}
+	if cfg.KubeconfigContent != "" {
+		return newKubeClientFromKubeconfigBytes([]byte(cfg.KubeconfigContent))
+	}
+	if cfg.Kubeconfig != "" {
+		data, err := os.ReadFile(cfg.Kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("kubernetes: reading kubeconfig %q: %w", cfg.Kubeconfig, err)
+		}
+		return newKubeClientFromKubeconfigBytes(data)
 	}
 	return newKubeClientInCluster()
 }
@@ -113,13 +127,9 @@ type kubeConfigContext struct {
 	} `yaml:"context"`
 }
 
-// newKubeClientFromKubeconfig creates a client by parsing a kubeconfig file.
-func newKubeClientFromKubeconfig(path string) (*KubeClient, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("kubernetes: reading kubeconfig %q: %w", path, err)
-	}
-
+// newKubeClientFromKubeconfigBytes creates a client by parsing a kubeconfig YAML
+// document supplied directly as bytes (read from a file, pasted in the UI, etc.).
+func newKubeClientFromKubeconfigBytes(data []byte) (*KubeClient, error) {
 	var cfg kubeConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("kubernetes: parsing kubeconfig: %w", err)

@@ -80,6 +80,7 @@
     {#if publicPortEnabled}
       <div class="grid grid-cols-1 gap-3">
         <div>
+          <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-xs font-medium text-slate-600 mb-1">Port</label>
           <input type="text" bind:value={publicPortPort} placeholder="9090"
             class="w-full px-3 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500" />
@@ -103,6 +104,7 @@
     {#if compatConsulEnabled}
       <div class="grid grid-cols-1 gap-3">
         <div>
+          <!-- svelte-ignore a11y_label_has_associated_control -->
           <label class="block text-xs font-medium text-slate-600 mb-1">Base Path</label>
           <input type="text" bind:value={compatConsulBasePath} placeholder="/consul"
             class="w-full px-3 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500" />

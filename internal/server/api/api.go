@@ -1127,6 +1127,7 @@ func (a *api) listVariants(c *ada.Context) error {
 
 func (a *api) renderFile(c *ada.Context) error {
 	key := c.Request.PathValue("*")
+	variant := c.Request.URL.Query().Get("variant")
 
 	var req struct {
 		Content string           `json:"content"`
@@ -1136,7 +1137,7 @@ func (a *api) renderFile(c *ada.Context) error {
 		return errors.Join(err, service.ErrBadRequest)
 	}
 
-	result, err := a.svc.RenderFile(c.Request.Context(), key, req.Content, &req.Meta)
+	result, err := a.svc.RenderFile(c.Request.Context(), key, variant, req.Content, &req.Meta)
 	if err != nil {
 		return err
 	}

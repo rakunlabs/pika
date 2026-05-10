@@ -126,7 +126,16 @@ function createAppStore() {
 
   async function loadLoginInfo(): Promise<void> {
     const response = await axios.get('/login/info');
-    loginInfo = response.data;
+    // Same SPA-fallback guard as loadIdentity: if /login/info isn't
+    // routed to ada (e.g. it falls through to the folder handler and
+    // axios receives the index.html string), don't propagate the bogus
+    // shape — it would cause downstream `.strategies.find(...)` to
+    // throw synchronously inside Login.svelte's $derived block.
+    const data = response.data;
+    if (!data || typeof data !== 'object' || !Array.isArray((data as any).strategies)) {
+      throw new Error('Invalid /login/info response (expected JSON with strategies array)');
+    }
+    loginInfo = data as LoginInfo;
   }
 
   async function loginWith(url: string, body: Record<string, string>): Promise<void> {

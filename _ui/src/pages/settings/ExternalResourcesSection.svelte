@@ -2,7 +2,7 @@
   import { configStore } from "@/lib/store/config.svelte";
   import { addToast } from "@/lib/store/toast.svelte";
   import { onMount } from "svelte";
-  import { Plus, Trash2, Globe } from "lucide-svelte";
+  import { Plus, Trash2, Globe, X } from "lucide-svelte";
   import type { ExternalResource } from "@/lib/types/config";
 
   // ── External resource state ──
@@ -10,12 +10,40 @@
   let newExtName = $state('');
   let newExtType = $state<'http' | 'vault' | 'kubernetes' | 'consul' | 'etcd' | 'aws' | 'gcp' | 'azure'>('http');
   let newExtHttpUrl = $state('');
+  // Header pairs for the HTTP external. Stored as a flat list because a
+  // single header name (e.g., "Accept") can legitimately carry multiple
+  // values, which we collapse into Record<string, string[]> on submit.
+  let newExtHttpHeaders = $state<Array<{ name: string; value: string }>>([]);
+
+  function addHttpHeaderRow() {
+    newExtHttpHeaders = [...newExtHttpHeaders, { name: '', value: '' }];
+  }
+
+  function removeHttpHeaderRow(index: number) {
+    newExtHttpHeaders = newExtHttpHeaders.filter((_, i) => i !== index);
+  }
+
+  // Build the wire-format header map from the pair list. Empty names are
+  // dropped; duplicate names accumulate into the same array so users can
+  // express multi-valued headers (e.g., two "Set-Cookie" entries).
+  function buildHeaderMap(): Record<string, string[]> | undefined {
+    const out: Record<string, string[]> = {};
+    for (const pair of newExtHttpHeaders) {
+      const name = pair.name.trim();
+      if (!name) continue;
+      if (!out[name]) out[name] = [];
+      out[name].push(pair.value);
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }
   let newExtVaultAddr = $state('');
   let newExtVaultMount = $state('secret');
   let newExtVaultRoleId = $state('');
   let newExtVaultSecretId = $state('');
   let newExtVaultAppRolePath = $state('approle');
+  let newExtK8sAuthMode = $state<'in-cluster' | 'path' | 'inline'>('in-cluster');
   let newExtK8sKubeconfig = $state('');
+  let newExtK8sKubeconfigContent = $state('');
   // Consul fields
   let newExtConsulAddr = $state('');
   let newExtConsulToken = $state('');
@@ -58,7 +86,11 @@
         addToast('HTTP URL is required', 'alert');
         return;
       }
-      resource.http = { base_url: newExtHttpUrl.trim() };
+      const headerMap = buildHeaderMap();
+      resource.http = {
+        base_url: newExtHttpUrl.trim(),
+        ...(headerMap ? { header: headerMap } : {}),
+      };
     } else if (newExtType === 'vault') {
       if (!newExtVaultAddr.trim() || !newExtVaultMount.trim()) {
         addToast('Vault address and mount are required', 'alert');
@@ -78,9 +110,21 @@
         }
       };
     } else if (newExtType === 'kubernetes') {
-      resource.kubernetes = {
-        kubeconfig: newExtK8sKubeconfig.trim() || undefined
-      };
+      const k8s: { kubeconfig?: string; kubeconfig_content?: string } = {};
+      if (newExtK8sAuthMode === 'path') {
+        if (!newExtK8sKubeconfig.trim()) {
+          addToast('Kubeconfig path is required', 'alert');
+          return;
+        }
+        k8s.kubeconfig = newExtK8sKubeconfig.trim();
+      } else if (newExtK8sAuthMode === 'inline') {
+        if (!newExtK8sKubeconfigContent.trim()) {
+          addToast('Kubeconfig content is required', 'alert');
+          return;
+        }
+        k8s.kubeconfig_content = newExtK8sKubeconfigContent;
+      }
+      resource.kubernetes = k8s;
     } else if (newExtType === 'consul') {
       if (!newExtConsulAddr.trim()) {
         addToast('Consul address is required', 'alert');
@@ -140,12 +184,15 @@
       showAddExternal = false;
       newExtName = '';
       newExtHttpUrl = '';
+      newExtHttpHeaders = [];
       newExtVaultAddr = '';
       newExtVaultMount = 'secret';
       newExtVaultRoleId = '';
       newExtVaultSecretId = '';
       newExtVaultAppRolePath = 'approle';
+      newExtK8sAuthMode = 'in-cluster';
       newExtK8sKubeconfig = '';
+      newExtK8sKubeconfigContent = '';
       newExtConsulAddr = '';
       newExtConsulToken = '';
       newExtEtcdAddr = '';
@@ -257,6 +304,50 @@
             class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
           />
         </div>
+
+        <div class="mb-4">
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-xs font-medium text-slate-500">Headers (optional)</span>
+            <button
+              type="button"
+              class="flex items-center gap-1 px-2 py-1 text-[11px] text-blue-600 bg-blue-50 rounded hover:bg-blue-100 transition-colors cursor-pointer"
+              onclick={addHttpHeaderRow}
+            >
+              <Plus size={10} /> Add header
+            </button>
+          </div>
+          {#if newExtHttpHeaders.length === 0}
+            <p class="text-[11px] text-slate-400 italic">No custom headers. Headers added here are sent on every request.</p>
+          {:else}
+            <div class="space-y-1.5">
+              {#each newExtHttpHeaders as pair, i (i)}
+                <div class="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    bind:value={pair.name}
+                    placeholder="Header name (e.g., Authorization)"
+                    class="flex-1 px-2.5 py-1.5 text-xs font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+                  />
+                  <input
+                    type="text"
+                    bind:value={pair.value}
+                    placeholder="Value"
+                    class="flex-1 px-2.5 py-1.5 text-xs font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+                  />
+                  <button
+                    type="button"
+                    class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors cursor-pointer shrink-0"
+                    onclick={() => removeHttpHeaderRow(i)}
+                    title="Remove header"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              {/each}
+            </div>
+            <p class="mt-1 text-[11px] text-slate-400">Tip: repeat the same name to send multi-valued headers.</p>
+          {/if}
+        </div>
       {:else if newExtType === 'vault'}
         <div class="mb-4">
           <label for="ext-vault-addr" class="block text-xs font-medium text-slate-500 mb-1.5">Vault Address</label>
@@ -317,15 +408,69 @@
         </div>
       {:else if newExtType === 'kubernetes'}
         <div class="mb-4">
-          <label for="ext-k8s-kubeconfig" class="block text-xs font-medium text-slate-500 mb-1.5">Kubeconfig Path (optional)</label>
-          <input
-            id="ext-k8s-kubeconfig"
-            type="text"
-            bind:value={newExtK8sKubeconfig}
-            placeholder="/path/to/kubeconfig"
-            class="w-full px-3 py-2 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
-          />
-          <p class="mt-1 text-[11px] text-slate-400">Leave empty to use in-cluster config (service account token). Path format: <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px]">namespace/secret/name</code> or <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px]">namespace/configmap/name</code></p>
+          <span class="block text-xs font-medium text-slate-500 mb-1.5">Authentication</span>
+          <div class="flex flex-wrap gap-3">
+            <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+              <input type="radio" bind:group={newExtK8sAuthMode} value="in-cluster" class="text-blue-500" />
+              In-cluster (service account)
+            </label>
+            <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+              <input type="radio" bind:group={newExtK8sAuthMode} value="path" class="text-blue-500" />
+              Kubeconfig file path
+            </label>
+            <label class="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
+              <input type="radio" bind:group={newExtK8sAuthMode} value="inline" class="text-blue-500" />
+              Paste kubeconfig
+            </label>
+          </div>
+        </div>
+
+        {#if newExtK8sAuthMode === 'in-cluster'}
+          <div class="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-md">
+            <p class="text-xs text-slate-600">
+              Pika will use the service account token mounted at
+              <code class="px-1 py-0.5 bg-white border border-slate-200 rounded text-[10px]">/var/run/secrets/kubernetes.io/serviceaccount/</code>.
+            </p>
+            <p class="mt-1 text-[11px] text-slate-400">
+              Make sure pika's ServiceAccount has RBAC permission to <code class="px-1 py-0.5 bg-white border border-slate-200 rounded text-[10px]">get</code> / <code class="px-1 py-0.5 bg-white border border-slate-200 rounded text-[10px]">list</code> on <code class="px-1 py-0.5 bg-white border border-slate-200 rounded text-[10px]">secrets</code> and <code class="px-1 py-0.5 bg-white border border-slate-200 rounded text-[10px]">configmaps</code> in the target namespaces.
+            </p>
+          </div>
+        {:else if newExtK8sAuthMode === 'path'}
+          <div class="mb-4">
+            <label for="ext-k8s-kubeconfig" class="block text-xs font-medium text-slate-500 mb-1.5">Kubeconfig Path</label>
+            <input
+              id="ext-k8s-kubeconfig"
+              type="text"
+              bind:value={newExtK8sKubeconfig}
+              placeholder="/path/to/kubeconfig"
+              class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+            />
+            <p class="mt-1 text-[11px] text-slate-400">
+              Path on the pika server filesystem. Pika reads the file on every client (re-)build.
+            </p>
+          </div>
+        {:else}
+          <div class="mb-4">
+            <label for="ext-k8s-kubeconfig-content" class="block text-xs font-medium text-slate-500 mb-1.5">Kubeconfig YAML</label>
+            <textarea
+              id="ext-k8s-kubeconfig-content"
+              bind:value={newExtK8sKubeconfigContent}
+              placeholder={'apiVersion: v1\nkind: Config\nclusters:\n  - name: my-cluster\n    cluster:\n      server: https://kubernetes.example.com\n      certificate-authority-data: <base64>\nusers:\n  - name: my-user\n    user:\n      token: <bearer-token>\ncontexts:\n  - name: my-context\n    context:\n      cluster: my-cluster\n      user: my-user\ncurrent-context: my-context'}
+              rows="10"
+              spellcheck="false"
+              class="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-md focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 resize-y"
+            ></textarea>
+            <p class="mt-1 text-[11px] text-slate-400">
+              Paste a full kubeconfig YAML. Stored encrypted at rest when the encryption key is set.
+              Supports <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px]">token</code> auth and mTLS (<code class="px-1 py-0.5 bg-slate-100 rounded text-[10px]">client-certificate-data</code> + <code class="px-1 py-0.5 bg-slate-100 rounded text-[10px]">client-key-data</code>).
+            </p>
+          </div>
+        {/if}
+
+        <div class="mb-4 p-3 bg-blue-50 border border-blue-100 rounded-md">
+          <p class="text-[11px] text-blue-700">
+            Inheritance path format: <code class="px-1 py-0.5 bg-white border border-blue-200 rounded">namespace/secret/name</code> or <code class="px-1 py-0.5 bg-white border border-blue-200 rounded">namespace/configmap/name</code>.
+          </p>
         </div>
       {:else if newExtType === 'consul'}
         <div class="mb-4">
@@ -457,6 +602,11 @@
             <div class="mt-1 space-y-0.5">
               {#if resource.http}
                 <span class="text-xs font-mono text-slate-400">{resource.http.base_url}</span>
+                {#if resource.http.header && Object.keys(resource.http.header).length > 0}
+                  <div class="text-[10px] text-slate-400">
+                    {Object.keys(resource.http.header).length} custom header{Object.keys(resource.http.header).length === 1 ? '' : 's'}
+                  </div>
+                {/if}
               {:else if resource.vault}
                 <div class="text-xs font-mono text-slate-400">{resource.vault.address}</div>
                 <div class="text-xs text-slate-400">
@@ -472,9 +622,13 @@
                 {/if}
               {:else if resource.kubernetes}
                 <div class="text-xs text-slate-400">
-                  {resource.kubernetes.kubeconfig
-                    ? `Kubeconfig: ${resource.kubernetes.kubeconfig}`
-                    : 'In-cluster (service account)'}
+                  {#if resource.kubernetes.kubeconfig_content}
+                    Inline kubeconfig ({resource.kubernetes.kubeconfig_content.length} chars)
+                  {:else if resource.kubernetes.kubeconfig}
+                    Kubeconfig: {resource.kubernetes.kubeconfig}
+                  {:else}
+                    In-cluster (service account)
+                  {/if}
                 </div>
                 <div class="text-[10px] text-slate-400">
                   Path format: <code class="px-1 py-0.5 bg-slate-100 rounded">namespace/secret/name</code> or <code class="px-1 py-0.5 bg-slate-100 rounded">namespace/configmap/name</code>

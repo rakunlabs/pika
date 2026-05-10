@@ -670,6 +670,7 @@
 
             <!-- Target type -->
             <div class="mb-3">
+              <!-- svelte-ignore a11y_label_has_associated_control -->
               <label class="block text-xs font-medium text-slate-500 mb-1.5">Type</label>
               <div class="flex gap-2">
                 <button
@@ -727,6 +728,7 @@
               <!-- HTTP Headers -->
               <div class="mb-3">
                 <div class="flex items-center justify-between mb-1">
+                  <!-- svelte-ignore a11y_label_has_associated_control -->
                   <label class="block text-xs font-medium text-slate-500">Headers</label>
                   <button class="text-[10px] text-blue-500 hover:text-blue-700" onclick={addTargetHeader}>+ Add Header</button>
                 </div>
@@ -939,6 +941,7 @@
 
               {#if targetRedisCluster}
                 <div class="mb-3">
+                  <!-- svelte-ignore a11y_label_has_associated_control -->
                   <label class="block text-xs font-medium text-slate-500 mb-1">Cluster Addresses</label>
                   <div class="flex flex-wrap gap-1.5 mb-2">
                     {#each targetRedisAddresses as addr, i}
@@ -1040,6 +1043,7 @@
               <!-- Log Fields -->
               <div class="mb-3">
                 <div class="flex items-center justify-between mb-1">
+                  <!-- svelte-ignore a11y_label_has_associated_control -->
                   <label class="block text-xs font-medium text-slate-500">Fields</label>
                   <button class="text-[10px] text-blue-500 hover:text-blue-700" onclick={addTargetLogField}>+ Add Field</button>
                 </div>

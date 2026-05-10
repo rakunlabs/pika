@@ -77,10 +77,15 @@
     error = null;
 
     try {
-      // Call the render endpoint
+      // Call the render endpoint. For variant tabs we pass `variant`
+      // so the backend can disambiguate the file identity when seeding
+      // the inheritance cycle guard — without it, a variant that
+      // (auto-)inherits its parent would be mis-detected as a cycle.
       const response = await axios.post(`/api/v1/render/${activeTab.path}`, {
         content: activeTab.content,
         meta: activeTab.meta
+      }, {
+        params: activeTab.variantKey ? { variant: activeTab.variantKey } : {}
       });
       
       // Check for parse/conversion errors from backend

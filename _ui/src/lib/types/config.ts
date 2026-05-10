@@ -107,9 +107,11 @@ export interface VaultConfig {
   app_role?: VaultAppRole;
 }
 
-// Kubernetes external resource configuration
+// Kubernetes external resource configuration.
+// Auth selection (priority order): kubeconfig_content > kubeconfig (path) > in-cluster.
 export interface KubernetesConfig {
-  kubeconfig?: string;  // path to kubeconfig file (empty = in-cluster)
+  kubeconfig?: string;          // path to kubeconfig file on the pika server
+  kubeconfig_content?: string;  // full kubeconfig YAML, pasted directly
 }
 
 // Consul external resource configuration
@@ -150,6 +152,9 @@ export interface AzureConfig {
 export interface ExternalResource {
   http?: {
     base_url?: string;
+    // Custom headers applied to every request. Backed by ok.Config.Header
+    // (map[string][]string) so a single key can have multiple values.
+    header?: Record<string, string[]>;
   };
   vault?: VaultConfig;
   kubernetes?: KubernetesConfig;

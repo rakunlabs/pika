@@ -20,10 +20,18 @@ type GCP struct {
 }
 
 // Kubernetes configures a Kubernetes API external resource.
+//
+// Authentication selection (in priority order):
+//  1. KubeconfigContent — full kubeconfig YAML pasted as a string.
+//  2. Kubeconfig        — filesystem path to a kubeconfig file.
+//  3. (neither set)     — in-cluster config: service account token mounted
+//     at /var/run/secrets/kubernetes.io/serviceaccount/.
 type Kubernetes struct {
-	// Kubeconfig is the path to a kubeconfig file.
-	// If empty, in-cluster config is used (service account token at /var/run/secrets/kubernetes.io/serviceaccount/).
+	// Kubeconfig is the path to a kubeconfig file on the pika server filesystem.
 	Kubeconfig string `json:"kubeconfig,omitempty"`
+	// KubeconfigContent is the full YAML content of a kubeconfig, pasted directly.
+	// Useful for managing the credentials entirely from the UI without writing a file.
+	KubeconfigContent string `json:"kubeconfig_content,omitempty"`
 }
 
 type Vault struct {

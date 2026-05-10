@@ -52,10 +52,14 @@ func (s *Service) getDataForFile(ctx context.Context, filePath string, versionSt
 		}
 	}
 
-	// Resolve all inheritance entries (skip if conversion failed)
+	// Resolve all inheritance entries (skip if conversion failed).
+	// The visiting set tracks the in-flight ancestor chain to detect cycles
+	// (e.g., A inherits B inherits A) while still allowing diamond
+	// inheritance (A inherits B and C, both inherit D).
 	if len(file.Meta.Inherits) > 0 && convError == "" {
+		visiting := map[string]bool{filePath: true}
 		var err error
-		resolved, err = s.resolveInherits(ctx, resolved, file.Meta.Inherits)
+		resolved, err = s.resolveInherits(ctx, resolved, file.Meta.Inherits, visiting)
 		if err != nil {
 			return nil, err
 		}
@@ -79,7 +83,13 @@ func (s *Service) getDataForFile(ctx context.Context, filePath string, versionSt
 // RenderFile resolves a file's configuration for preview purposes.
 // Unlike GetData, this accepts raw content and meta from the UI editor
 // (which may not be saved yet) and performs resolution.
-func (s *Service) RenderFile(ctx context.Context, filePath string, content string, meta *FileMeta) (*RenderResult, error) {
+//
+// variationKey, when non-empty, identifies this render as a variant of
+// filePath — the cycle guard is then seeded with the variant's storage
+// key (filePath@variationKey) instead of the bare parent path, so a
+// variant that inherits from its parent file isn't mis-flagged as a
+// self-cycle.
+func (s *Service) RenderFile(ctx context.Context, filePath string, variationKey string, content string, meta *FileMeta) (*RenderResult, error) {
 	currentData := []byte(content)
 	format := "json"
 	if meta != nil && meta.Format != "" {
@@ -98,10 +108,22 @@ func (s *Service) RenderFile(ctx context.Context, filePath string, content strin
 		currentData = jsonData
 	}
 
-	// Step 1: Resolve all inheritance entries
+	// Step 1: Resolve all inheritance entries. Seed the cycle guard with
+	// this file's storage identity so it can't transitively inherit
+	// from itself — but use the variant storage key when rendering a
+	// variant (so a variant inheriting from its parent file is not
+	// mis-detected as a self-cycle).
 	if meta != nil && len(meta.Inherits) > 0 {
+		visiting := map[string]bool{}
+		if filePath != "" {
+			seed := filePath
+			if variationKey != "" {
+				seed = variantKey(filePath, variationKey)
+			}
+			visiting[seed] = true
+		}
 		var err error
-		currentData, err = s.resolveInherits(ctx, currentData, meta.Inherits)
+		currentData, err = s.resolveInherits(ctx, currentData, meta.Inherits, visiting)
 		if err != nil {
 			return nil, err
 		}
@@ -123,7 +145,16 @@ func (s *Service) RenderFile(ctx context.Context, filePath string, content strin
 // resolveInherits processes multiple inheritance entries and merges them into currentData.
 // Each entry is processed in order: fetch source -> filter paths -> inject at target -> merge.
 // The current config data always takes precedence over inherited values.
-func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entries []InheritEntry) ([]byte, error) {
+//
+// visiting tracks the set of internal file paths currently on the resolution
+// stack so we can detect cycles (e.g., A inherits B and B inherits A). It is
+// safe to pass nil — a fresh set is allocated. The same path may appear
+// multiple times across sibling branches (diamond inheritance) as long as it
+// isn't already on the ancestor chain.
+func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entries []InheritEntry, visiting map[string]bool) ([]byte, error) {
+	if visiting == nil {
+		visiting = map[string]bool{}
+	}
 	for _, entry := range entries {
 		if entry.Source == "" && entry.Resource == "" && entry.Mount == "" {
 			continue
@@ -131,6 +162,7 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 
 		var sourceData []byte
 		var sourceName string
+		var sourceMeta *FileMeta // populated for internal sources so we can recurse
 		var err error
 
 		if entry.Mount != "" {
@@ -142,9 +174,20 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 			sourceName = entry.Resource + ":" + entry.Path
 			sourceData, err = s.fetchExternalConfig(ctx, entry.Resource, entry.Path)
 		} else {
-			// Internal file or legacy external (backward compat)
+			// Internal file or legacy external (backward compat).
+			// Cycle guard: if this path is already on the current ancestor
+			// chain we'd recurse forever — fail fast with a clear error.
+			if visiting[entry.Source] {
+				return nil, fmt.Errorf("inheritance cycle detected at %q", entry.Source)
+			}
 			sourceName = entry.Source
-			sourceData, err = s.fetchSource(ctx, entry.Source)
+			var srcFile *File
+			srcFile, err = s.File(ctx, entry.Source, 0)
+			if err == nil {
+				sourceData = srcFile.Data
+				meta := srcFile.Meta
+				sourceMeta = &meta
+			}
 		}
 
 		if err != nil {
@@ -155,12 +198,25 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 		sourceJSON := sourceData
 		if entry.Resource == "" && entry.Mount == "" {
 			// For internal sources, try to detect format and convert
-			file, fileErr := s.File(ctx, entry.Source, 0)
-			if fileErr == nil && file.Meta.Format != "" && file.Meta.Format != "json" && file.Meta.Format != "raw" {
-				converted, convErr := ConvertFormat(sourceData, file.Meta.Format, "json")
+			if sourceMeta != nil && sourceMeta.Format != "" && sourceMeta.Format != "json" && sourceMeta.Format != "raw" {
+				converted, convErr := ConvertFormat(sourceData, sourceMeta.Format, "json")
 				if convErr == nil {
 					sourceJSON = converted
 				}
+			}
+
+			// Transitively resolve the source's own inherits before
+			// applying paths/inject/merge so e.g. A -> B -> C composes
+			// correctly: B's view of itself includes everything inherited
+			// from C, which is then what A sees.
+			if sourceMeta != nil && len(sourceMeta.Inherits) > 0 {
+				visiting[entry.Source] = true
+				resolved, recErr := s.resolveInherits(ctx, sourceJSON, sourceMeta.Inherits, visiting)
+				delete(visiting, entry.Source)
+				if recErr != nil {
+					return nil, fmt.Errorf("resolving nested inheritance from %q: %w", sourceName, recErr)
+				}
+				sourceJSON = resolved
 			}
 		} else if entry.Mount != "" {
 			// For raw mount sources, try to detect format from file extension
@@ -170,6 +226,16 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 				if convErr == nil {
 					sourceJSON = converted
 				}
+			}
+		}
+
+		// Rename the hardcoded "value" wrapper key used by non-JSON
+		// secret backends (GCP/Etcd/Consul) so the user's "Include paths"
+		// selection can pick it up under a meaningful key.
+		if len(entry.Paths) > 0 && (entry.Resource != "" || entry.Mount != "") {
+			renamed, ok := renameValueWrapperKey(sourceJSON, entry.Paths[0])
+			if ok {
+				sourceJSON = renamed
 			}
 		}
 
@@ -200,15 +266,6 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 	}
 
 	return currentData, nil
-}
-
-// fetchSource fetches config data from an internal file.
-func (s *Service) fetchSource(ctx context.Context, source string) ([]byte, error) {
-	file, err := s.File(ctx, source, 0)
-	if err != nil {
-		return nil, err
-	}
-	return file.Data, nil
 }
 
 // fetchExternalConfig fetches configuration data from an external resource.

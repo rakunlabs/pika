@@ -428,7 +428,10 @@ function createConfigStore() {
   async function createVariant(filePath: string, variantKey: string): Promise<void> {
     try {
       const format: FileFormat = 'yaml';
-      await createFile(filePath, '', { format }, variantKey);
+      // A new variant auto-inherits from its parent file so values defined
+      // on the base config are visible through the variant by default. The
+      // user can remove or edit this entry from the inherits panel.
+      await createFile(filePath, '', { format, inherits: [{ source: filePath }] }, variantKey);
       addToast(`Created variant: @${variantKey}`, 'success');
 
       // Refresh parent folder to show the new variant

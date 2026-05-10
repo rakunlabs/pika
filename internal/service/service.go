@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"sync"
 
 	"github.com/rakunlabs/pika/internal/external"
@@ -61,9 +63,25 @@ func (s *Service) emitHook(event hook.Event) {
 	}
 }
 
+// kubeClientCacheKey derives a stable cache key for a Kubernetes external resource.
+// Inline kubeconfig content is hashed (not stored verbatim) so the key stays bounded.
+func kubeClientCacheKey(k8s *external.Kubernetes) string {
+	if k8s == nil {
+		return "in-cluster"
+	}
+	if k8s.KubeconfigContent != "" {
+		sum := sha256.Sum256([]byte(k8s.KubeconfigContent))
+		return "inline:" + hex.EncodeToString(sum[:])
+	}
+	if k8s.Kubeconfig != "" {
+		return "path:" + k8s.Kubeconfig
+	}
+	return "in-cluster"
+}
+
 // getKubeClient returns a cached or new KubeClient for the given Kubernetes config.
 func (s *Service) getKubeClient(k8s *external.Kubernetes) (*external.KubeClient, error) {
-	key := k8s.Kubeconfig // "" for in-cluster
+	key := kubeClientCacheKey(k8s)
 
 	s.kubeMu.RLock()
 	client, exists := s.kubeClients[key]
@@ -81,7 +99,7 @@ func (s *Service) getKubeClient(k8s *external.Kubernetes) (*external.KubeClient,
 		return client, nil
 	}
 
-	client, err := external.NewKubeClient(k8s.Kubeconfig)
+	client, err := external.NewKubeClient(k8s)
 	if err != nil {
 		return nil, err
 	}

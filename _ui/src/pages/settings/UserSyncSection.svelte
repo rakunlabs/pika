@@ -461,36 +461,43 @@
         <p class="text-[11px] text-slate-500 -mt-1">Each field is the LDAP attribute name to read for that pika user field. Leave blank to skip.</p>
         <div class="grid grid-cols-2 gap-2">
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs text-slate-500 mb-1">Username</label>
             <input type="text" bind:value={attrUsername} placeholder="required · e.g. uid, sAMAccountName"
               class="w-full px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs text-slate-500 mb-1">Subject</label>
             <input type="text" bind:value={attrSubject} placeholder="stable ID; defaults to Username · e.g. entryUUID, objectGUID"
               class="w-full px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs text-slate-500 mb-1">Email</label>
             <input type="text" bind:value={attrEmail} placeholder="e.g. mail"
               class="w-full px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs text-slate-500 mb-1">Display name</label>
             <input type="text" bind:value={attrDisplayName} placeholder="e.g. displayName, gecos, cn"
               class="w-full px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs text-slate-500 mb-1">Given name</label>
             <input type="text" bind:value={attrGivenName} placeholder="optional · e.g. givenName"
               class="w-full px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" />
           </div>
           <div>
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs text-slate-500 mb-1">Surname</label>
             <input type="text" bind:value={attrSurname} placeholder="optional · e.g. sn"
               class="w-full px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" />
           </div>
           <div class="col-span-2">
+            <!-- svelte-ignore a11y_label_has_associated_control -->
             <label class="block text-xs text-slate-500 mb-1">Groups</label>
             <input type="text" bind:value={attrGroups} placeholder="multi-valued · e.g. memberOf — used by Group → Permission map below"
               class="w-full px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-500" />

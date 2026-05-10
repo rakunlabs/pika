@@ -18,14 +18,25 @@
 
   const loginInfo = $derived(appStore.loginInfo);
 
-  // The first password strategy (if any)
+  // The first password strategy (if any).
+  // Defensive: when /login/info isn't reachable (e.g. the SPA fallback
+  // returned index.html as a 200, or a misconfigured backend returned
+  // an object without `strategies`), `loginInfo.strategies` is
+  // undefined. Calling `.find` on undefined throws synchronously inside
+  // the $derived, which freezes the whole reactive graph and leaves the
+  // app stuck on the App.svelte loading state. Treat any non-array as
+  // an empty list.
+  const strategies = $derived(
+    Array.isArray(loginInfo?.strategies) ? loginInfo!.strategies : []
+  );
+
   const passwordStrategy = $derived(
-    loginInfo?.strategies.find((s) => s.kind === 'password') ?? null
+    strategies.find((s) => s.kind === 'password') ?? null
   );
 
   // All oauth2 strategies
   const oauthStrategies = $derived(
-    loginInfo?.strategies.filter((s) => s.kind === 'oauth2') ?? []
+    strategies.filter((s) => s.kind === 'oauth2')
   );
 
   // Signup is only exposed in the UI during initial bootstrap (no users
