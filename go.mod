@@ -13,16 +13,16 @@ require (
 	github.com/nats-io/nats.go v1.50.0
 	github.com/pin/tftp/v3 v3.2.0
 	github.com/pkg/sftp v1.13.10
-	github.com/rakunlabs/ada v0.3.3
-	github.com/rakunlabs/ada/handler/folder v0.1.1
-	github.com/rakunlabs/ada/middleware/auth v0.1.5
-	github.com/rakunlabs/ada/middleware/cors v0.1.3
-	github.com/rakunlabs/ada/middleware/log v0.1.8
-	github.com/rakunlabs/ada/middleware/ratelimit v0.1.1
-	github.com/rakunlabs/ada/middleware/recover v0.1.3
-	github.com/rakunlabs/ada/middleware/requestid v0.1.3
-	github.com/rakunlabs/ada/middleware/server v0.1.0
-	github.com/rakunlabs/ada/middleware/telemetry v0.1.1
+	github.com/rakunlabs/ada v0.4.0
+	github.com/rakunlabs/ada/handler/folder v0.4.0
+	github.com/rakunlabs/ada/middleware/auth v0.4.0
+	github.com/rakunlabs/ada/middleware/cors v0.4.0
+	github.com/rakunlabs/ada/middleware/log v0.4.0
+	github.com/rakunlabs/ada/middleware/ratelimit v0.4.0
+	github.com/rakunlabs/ada/middleware/recover v0.4.0
+	github.com/rakunlabs/ada/middleware/requestid v0.4.0
+	github.com/rakunlabs/ada/middleware/server v0.4.0
+	github.com/rakunlabs/ada/middleware/telemetry v0.4.0
 	github.com/rakunlabs/alan v0.5.0
 	github.com/rakunlabs/bw v0.2.0
 	github.com/rakunlabs/chu v0.4.4

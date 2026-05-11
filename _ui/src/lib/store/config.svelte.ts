@@ -254,8 +254,8 @@ function createConfigStore() {
 
   // Tab operations
   async function openFile(path: string): Promise<void> {
-    // Check if already open
-    const existingTab = openTabs.find(t => t.path === path);
+    // Check if already open (exclude variant tabs — they share path with parent)
+    const existingTab = openTabs.find(t => t.path === path && !t.variantKey);
     if (existingTab) {
       activeTabId = existingTab.id;
       updateURL();
@@ -986,9 +986,9 @@ function createConfigStore() {
         params: { version: 0 } // Delete all versions
       });
 
-      // Close the tab if it's open
-      const tab = openTabs.find(t => t.path === path);
-      if (tab) {
+      // Close the parent tab and any variant tabs for this path
+      const tabsToClose = openTabs.filter(t => t.path === path);
+      for (const tab of tabsToClose) {
         closeTab(tab.id);
       }
 

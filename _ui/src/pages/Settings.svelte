@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Key, Globe, FolderOpen, Share2, Server, Webhook, RotateCw, Lock, HardDrive, ShieldCheck, Info, Users } from "lucide-svelte";
+  import { appStore } from '@/lib/store/store.svelte';
 
   import TokensSection from "@/pages/settings/TokensSection.svelte";
   import ExternalResourcesSection from "@/pages/settings/ExternalResourcesSection.svelte";
@@ -17,9 +18,25 @@
 
   type Section = 'tokens' | 'external' | 'raw_mounts' | 'ftp_shares' | 'file_servers' | 'public_server' | 'hooks' | 'auth' | 'user_sync' | 'rotation' | 'security' | 'backup' | 'about';
 
-  let activeSection = $state<Section>('tokens');
+  // Section → required capability. `null` means always visible (e.g. About).
+  // Most admin-only sections share the `settings.manage` umbrella cap.
+  const sectionCaps: Record<Section, string | null> = {
+    tokens: 'tokens.manage',
+    external: 'settings.manage',
+    raw_mounts: 'settings.manage',
+    ftp_shares: 'settings.manage',
+    file_servers: 'settings.manage',
+    public_server: 'settings.manage',
+    hooks: 'settings.manage',
+    auth: 'settings.manage',
+    user_sync: 'settings.manage',
+    rotation: 'settings.manage',
+    security: 'settings.manage',
+    backup: 'settings.manage',
+    about: null,
+  };
 
-  const sections: { key: Section; label: string; icon: typeof Key }[] = [
+  const allSections: { key: Section; label: string; icon: typeof Key }[] = [
     { key: 'tokens',        label: 'Access Tokens',     icon: Key },
     { key: 'external',      label: 'External Resources', icon: Globe },
     { key: 'raw_mounts',    label: 'Raw Mounts',        icon: FolderOpen },
@@ -34,6 +51,26 @@
     { key: 'backup',        label: 'Backup',            icon: HardDrive },
     { key: 'about',         label: 'About',             icon: Info },
   ];
+
+  // Filter the section list by the current user's capabilities. About is
+  // always shown so users without any setting permission still land on
+  // something useful instead of an empty page.
+  const sections = $derived(
+    allSections.filter(s => {
+      const cap = sectionCaps[s.key];
+      return cap === null || appStore.hasPermission(cap);
+    })
+  );
+
+  // Default to 'about' (always present). The effect below snaps to the
+  // first visible section once permissions are resolved, and re-snaps if
+  // the current active section becomes inaccessible.
+  let activeSection = $state<Section>('about');
+  $effect(() => {
+    if (!sections.some(s => s.key === activeSection)) {
+      activeSection = sections[0]?.key ?? 'about';
+    }
+  });
 </script>
 
 <div class="flex h-full overflow-hidden">

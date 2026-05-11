@@ -189,6 +189,11 @@ type PermissionStorage interface {
 	// ID, and must never delete rows tagged 'local'.
 	SetUserPermissionsBySource(ctx context.Context, userID, source string, permissionIDs []string) error
 	GetUserPermissions(ctx context.Context, userID string) ([]Permission, error)
+	// ListUserIDsByPermission returns the IDs of every user that has been
+	// granted the given permission bundle (regardless of grant source).
+	// Used by the admin UI to filter the user list by permission. Returns
+	// an empty slice (not nil) when no users hold the permission.
+	ListUserIDsByPermission(ctx context.Context, permissionID string) ([]string, error)
 	// GetUserCapabilityKeys returns the deduplicated set of capability keys
 	// granted to a user through all their assigned permissions.
 	GetUserCapabilityKeys(ctx context.Context, userID string) ([]string, error)

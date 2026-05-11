@@ -184,6 +184,13 @@ func (s *Service) GetUserPermissions(ctx context.Context, userID string) ([]Perm
 	return s.store.Permissions().GetUserPermissions(ctx, userID)
 }
 
+// ListUserIDsByPermission returns the IDs of every user that has been granted
+// the given permission bundle. Returns an empty slice (not nil) when no users
+// hold the permission. Used by the admin UI to filter the user list.
+func (s *Service) ListUserIDsByPermission(ctx context.Context, permissionID string) ([]string, error) {
+	return s.store.Permissions().ListUserIDsByPermission(ctx, permissionID)
+}
+
 // GetUserPermissionKeysByUsername returns permission keys for a user by username.
 //
 // Deprecated: use ResolveUserCapabilityKeys instead. This method remains for

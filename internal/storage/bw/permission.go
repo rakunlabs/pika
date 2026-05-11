@@ -288,6 +288,33 @@ func (s *permissionStorage) GetUserPermissions(ctx context.Context, userID strin
 	return out, nil
 }
 
+// ListUserIDsByPermission scans every user row and returns the IDs of
+// those whose Grants slice contains permissionID. This is an O(N) walk
+// over users; acceptable for admin filtering and matches the existing
+// cascade-delete walk style. The returned slice is sorted for stable
+// downstream behavior (so query.Cache-style fingerprints don't churn).
+func (s *permissionStorage) ListUserIDsByPermission(ctx context.Context, permissionID string) ([]string, error) {
+	if permissionID == "" {
+		return []string{}, nil
+	}
+	users := s.store.usersAt(s.scope)
+	rows, err := users.listRowsAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0)
+	for _, r := range rows {
+		for _, g := range r.Grants {
+			if g.PermissionID == permissionID {
+				out = append(out, r.ID)
+				break
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 func (s *permissionStorage) GetUserCapabilityKeys(ctx context.Context, userID string) ([]string, error) {
 	perms, err := s.GetUserPermissions(ctx, userID)
 	if err != nil {

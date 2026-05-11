@@ -9,6 +9,7 @@ import (
 
 	"github.com/rakunlabs/ada"
 	"github.com/rakunlabs/ada/middleware/auth"
+	"github.com/rakunlabs/ada/middleware/auth/identity"
 
 	"github.com/rakunlabs/pika/internal/service"
 )
@@ -110,6 +111,45 @@ func (m *Manager) CapMiddleware() ada.MiddlewareFunc {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.capResolver.Middleware()
+}
+
+// ResolveRequest attempts to identify the caller without requiring the
+// Require()/CapMiddleware() chain. Returns the identity (or nil), the
+// capability keys, the resolved pika username, the pika user ID, and any
+// per-key path patterns. Used by unprotected endpoints (e.g. /api/v1/info)
+// that still need to know who the caller is.
+//
+// Returns nil identity (and zero-valued fields) when the request carries no
+// valid session — callers should treat that as "anonymous".
+func (m *Manager) ResolveRequest(r *http.Request) (*identity.Identity, []string, string, string, map[string][]string) {
+	m.mu.Lock()
+	authMW := m.authMW
+	resolver := m.capResolver
+	m.mu.Unlock()
+
+	if authMW == nil || resolver == nil {
+		return nil, nil, "", "", nil
+	}
+
+	// Prefer an identity already attached to the context (set by the
+	// CapMiddleware on the protected mux).
+	id := identity.FromContext(r.Context())
+	if id == nil {
+		// Fall back to manual session resolution — same path /login/me uses
+		// when Require() isn't in the chain (see ada auth.go:629).
+		sid := authMW.Session().CurrentSessionID(r)
+		if sid == "" {
+			return nil, nil, "", "", nil
+		}
+		pair, err := authMW.Issuer().Resolve(r.Context(), sid)
+		if err != nil || pair == nil || pair.Identity == nil {
+			return nil, nil, "", "", nil
+		}
+		id = pair.Identity
+	}
+
+	caps, username, userID, patterns := resolver.resolve(r.Context(), id)
+	return id, []string(caps), username, userID, patterns
 }
 
 // Mount registers /login/* and /logout on the given mux.

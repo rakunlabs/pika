@@ -54,14 +54,17 @@ func (s *userStorage) Get(ctx context.Context, id string) (*service.User, error)
 // findByField issues an indexed query on a single string field. The
 // "username" lookup hits the unique index and the "email" lookup hits
 // the secondary index; both return at most one row.
+//
+// We construct the Query directly instead of going through query.Parse
+// — the value can contain characters that are special in query strings
+// (=, &, +, %), and parsing "field=value" would either escape them
+// incorrectly or, worse, split the value at the first reserved char.
+// Building the expression by hand is also cheaper.
 func (s *userStorage) findByField(ctx context.Context, field, value string) (*userRow, error) {
 	if value == "" {
 		return nil, service.ErrNotFound
 	}
-	q, err := query.Parse(field + "=" + value)
-	if err != nil {
-		return nil, err
-	}
+	q := query.New().AddWhere(query.NewExpressionCmp(query.OperatorEq, field, value))
 	rows, err := bucketFind(ctx, s.scope, s.bucket, q)
 	if err != nil {
 		return nil, err

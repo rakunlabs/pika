@@ -2,10 +2,25 @@
   import { appStore, type UserInfo, type UserQuery, type PermissionInfo } from '@/lib/store/store.svelte';
   import { addToast } from '@/lib/store/toast.svelte';
   import { onMount } from 'svelte';
-  import { Plus, Trash2, UserCheck, UserX, KeyRound, LogOut, Search, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, Shield, ShieldCheck, Check } from 'lucide-svelte';
+  import { Plus, Trash2, UserCheck, UserX, KeyRound, LogOut, Search, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, Shield, ShieldCheck, Check, Users as UsersIcon } from 'lucide-svelte';
 
-  // Tab state
-  let activeTab = $state<'users' | 'permissions'>('users');
+  // Tab state — initial tab depends on what the user is allowed to see.
+  // Falls back to 'users' if neither capability is held (the page will
+  // render an empty access notice in that case).
+  const canManageUsers = $derived(appStore.hasPermission('users.manage'));
+  const canManagePermissions = $derived(appStore.hasPermission('permissions.manage'));
+  let activeTab = $state<'users' | 'permissions'>(
+    appStore.hasPermission('users.manage') ? 'users' : 'permissions'
+  );
+
+  // If the active tab becomes inaccessible (e.g. permissions reload), flip to the allowed one.
+  $effect(() => {
+    if (activeTab === 'users' && !canManageUsers && canManagePermissions) {
+      activeTab = 'permissions';
+    } else if (activeTab === 'permissions' && !canManagePermissions && canManageUsers) {
+      activeTab = 'users';
+    }
+  });
 
   // User state
   let showCreateForm = $state(false);
@@ -29,6 +44,10 @@
   let pageSize = $state(20);
   let currentPage = $state(1);
   let searchTimeout = $state<ReturnType<typeof setTimeout> | null>(null);
+  // Permission filter — when set, only users granted this permission bundle
+  // are returned. Server resolves the matching user IDs and applies an
+  // id IN (...) filter so pagination/sort still work.
+  let filterPermissionId = $state<string>('');
 
   // Permission state
   let showCreatePermForm = $state(false);
@@ -69,7 +88,27 @@
       offset: (currentPage - 1) * pageSize,
       sort: sortDir === 'desc' ? `-${sortField}` : sortField,
       search: searchText || undefined,
+      permissionId: filterPermissionId || undefined,
     };
+  }
+
+  // Reset to page 1 whenever the permission filter changes — keeps the
+  // pagination state consistent with the new (typically smaller) result set.
+  function handlePermissionFilterChange(value: string) {
+    filterPermissionId = value;
+    currentPage = 1;
+    reload();
+  }
+
+  // Cross-tab shortcut from the Permissions table: jump to the Users tab
+  // with the permission filter pre-applied, so the admin sees exactly who
+  // holds the bundle they just inspected.
+  function viewUsersWithPermission(permissionId: string) {
+    filterPermissionId = permissionId;
+    searchText = '';
+    currentPage = 1;
+    activeTab = 'users';
+    reload();
   }
 
   function reload() {
@@ -77,8 +116,12 @@
   }
 
   onMount(() => {
-    reload();
-    appStore.loadPermissions();
+    if (canManageUsers) {
+      reload();
+    }
+    if (canManagePermissions) {
+      appStore.loadPermissions();
+    }
   });
 
   function handleSearch(value: string) {
@@ -387,21 +430,33 @@
 
 <div class="h-full overflow-auto p-6">
   <div class="max-w-3xl mx-auto">
+    {#if !canManageUsers && !canManagePermissions}
+      <!-- No access to either tab — show a stub instead of empty UI. -->
+      <div class="bg-white border border-slate-200 rounded-lg p-8 text-center">
+        <Shield class="mx-auto text-slate-400" size={32} />
+        <p class="mt-3 text-sm font-medium text-slate-700">No access</p>
+        <p class="mt-1 text-xs text-slate-500">You do not have permission to manage users or permissions.</p>
+      </div>
+    {:else}
     <!-- Header with tabs -->
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-1">
-        <button
-          onclick={() => { activeTab = 'users'; }}
-          class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors {activeTab === 'users' ? 'bg-slate-800 text-white' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'}"
-        >
-          Users
-        </button>
-        <button
-          onclick={() => { activeTab = 'permissions'; }}
-          class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors {activeTab === 'permissions' ? 'bg-slate-800 text-white' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'}"
-        >
-          Permissions
-        </button>
+        {#if canManageUsers}
+          <button
+            onclick={() => { activeTab = 'users'; }}
+            class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors {activeTab === 'users' ? 'bg-slate-800 text-white' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'}"
+          >
+            Users
+          </button>
+        {/if}
+        {#if canManagePermissions}
+          <button
+            onclick={() => { activeTab = 'permissions'; }}
+            class="px-3 py-1.5 text-sm font-medium rounded-md transition-colors {activeTab === 'permissions' ? 'bg-slate-800 text-white' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'}"
+          >
+            Permissions
+          </button>
+        {/if}
       </div>
       {#if activeTab === 'users'}
         <button
@@ -453,12 +508,32 @@
         </div>
       {/if}
 
-      <!-- Search Bar -->
-      <div class="relative mb-3">
-        <Search size={14} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <input type="text" value={searchText} oninput={(e) => handleSearch(e.currentTarget.value)}
-          class="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-slate-400"
-          placeholder="Search users..." />
+      <!-- Search + Permission filter -->
+      <div class="flex items-center gap-2 mb-3">
+        <div class="relative flex-1">
+          <Search size={14} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input type="text" value={searchText} oninput={(e) => handleSearch(e.currentTarget.value)}
+            class="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-slate-400"
+            placeholder="Search users..." />
+        </div>
+        {#if canManagePermissions && allPermissions.length > 0}
+          <!-- Filter by permission bundle. Empty value = no filter (all users). -->
+          <div class="relative">
+            <Shield size={14} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <select
+              value={filterPermissionId}
+              onchange={(e) => handlePermissionFilterChange(e.currentTarget.value)}
+              class="appearance-none pl-9 pr-8 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-slate-700 cursor-pointer min-w-[180px]"
+              title="Filter users by permission"
+            >
+              <option value="">All permissions</option>
+              {#each allPermissions as p (p.id)}
+                <option value={p.id}>{p.name}</option>
+              {/each}
+            </select>
+            <ChevronDown size={14} class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          </div>
+        {/if}
       </div>
 
       <!-- Users Table -->
@@ -564,7 +639,7 @@
             {:else}
               <tr>
                 <td colspan="5" class="px-4 py-8 text-center text-slate-400 text-sm">
-                  {searchText ? 'No users matching your search' : 'No users found'}
+                  {searchText || filterPermissionId ? 'No users matching your filters' : 'No users found'}
                 </td>
               </tr>
             {/each}
@@ -793,6 +868,15 @@
                 </td>
                 <td class="px-4 py-3 text-right">
                   <div class="flex items-center justify-end gap-1">
+                    {#if canManageUsers}
+                      <!-- Jump to the Users tab pre-filtered to users that
+                           hold this permission. Saves a manual dropdown trip. -->
+                      <button onclick={() => viewUsersWithPermission(perm.id)}
+                        class="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded transition-colors"
+                        title="View users with this permission">
+                        <UsersIcon size={14} />
+                      </button>
+                    {/if}
                     <button onclick={() => startEditPerm(perm)} class="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded transition-colors" title="Edit permission">
                       <KeyRound size={14} />
                     </button>
@@ -1047,6 +1131,7 @@
           </div>
         </div>
       </div>
+    {/if}
     {/if}
   </div>
 </div>

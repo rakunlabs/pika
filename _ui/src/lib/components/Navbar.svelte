@@ -19,11 +19,14 @@
       items.push({ path: '/files', label: 'Files', icon: HardDrive });
     }
 
-    if (appStore.hasPermission('settings.manage')) {
-      items.push({ path: '/settings', label: 'Settings', icon: Settings });
-    }
+    // Settings is always visible: even users without settings.manage can
+    // reach the About section. Individual sections gate themselves inside
+    // the Settings page based on their own capability.
+    items.push({ path: '/settings', label: 'Settings', icon: Settings });
 
-    if (appStore.hasPermission('users.manage')) {
+    // Users page hosts both the Users tab (users.manage) and Permissions
+    // tab (permissions.manage). Show the nav entry if the user has either.
+    if (appStore.hasAnyPermission('users.manage', 'permissions.manage')) {
       items.push({ path: '/users', label: 'Users', icon: Users });
     }
 

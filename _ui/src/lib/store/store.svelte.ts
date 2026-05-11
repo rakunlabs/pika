@@ -9,6 +9,13 @@ export interface AppInfo {
   date?: string;
   capabilities?: Capability[];
   raw_mounts?: RawMount[];
+  // Effective capability keys for the current user (e.g. ["files.read", "users.manage"]).
+  // Set by the backend's /api/v1/info endpoint. Empty/undefined means no capabilities.
+  permissions?: string[];
+  // Superadmin shortcut: when true, the user implicitly has every known capability.
+  is_superadmin?: boolean;
+  // Username of the current authenticated user (server-side identity).
+  user?: string;
 }
 
 export interface Identity {
@@ -38,6 +45,10 @@ export interface UserQuery {
   offset?: number;
   sort?: string;
   search?: string;
+  // Filter to only users granted this permission bundle ID. Server resolves
+  // the matching user IDs and applies an id IN (...) filter, so pagination
+  // and sorting still work correctly.
+  permissionId?: string;
 }
 
 export interface PermissionInfo {
@@ -82,10 +93,18 @@ function createAppStore() {
   let permissions = $state<PermissionInfo[]>([]);
   let loginInfo = $state<LoginInfo | null>(null);
 
-  function hasPermission(_key: string): boolean {
-    // With the new model, the backend authorizes every request; the UI
-    // optimistically shows admin nav and relies on 403 feedback.
-    return !!identity;
+  function hasPermission(key: string): boolean {
+    // Must be authenticated to have any capability.
+    if (!identity) return false;
+    // Superadmin shortcut — implicit grant of every known capability.
+    if (info?.is_superadmin) return true;
+    // Otherwise check the effective capability set the backend returned on /api/v1/info.
+    return info?.permissions?.includes(key) ?? false;
+  }
+
+  // Convenience: returns true if the user has ANY of the supplied capability keys.
+  function hasAnyPermission(...keys: string[]): boolean {
+    return keys.some(k => hasPermission(k));
   }
 
   async function loadInfo(): Promise<void> {
@@ -162,7 +181,13 @@ function createAppStore() {
     if (q.limit) params.set('_limit', String(q.limit));
     if (q.offset) params.set('_offset', String(q.offset));
     if (q.sort) params.set('_sort', q.sort);
-    if (q.search) params.set('username[like]', `%${q.search}%`);
+    // Plain string — server applies ILIKE + %wildcard% wrap. UI no longer
+    // encodes any SQL pattern syntax, so "%" or "_" in the search term
+    // are no longer interpreted as wildcards (server-side transform skips
+    // wrapping when the value already contains "%", preserving the
+    // backward-compatible escape hatch for direct API callers).
+    if (q.search) params.set('username', q.search);
+    if (q.permissionId) params.set('permission_id', q.permissionId);
     return params;
   }
 
@@ -275,6 +300,7 @@ function createAppStore() {
     get usersTotal() { return usersTotal; },
     get permissions() { return permissions; },
     hasPermission,
+    hasAnyPermission,
     loadInfo,
     loadIdentity,
     loadLoginInfo,

@@ -13,7 +13,6 @@ import (
 	"log/slog"
 
 	"github.com/rakunlabs/ada"
-	"github.com/rakunlabs/ada/middleware/auth/identity"
 	"github.com/rakunlabs/pika/internal/config"
 	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/rawfs"
@@ -230,10 +229,51 @@ func (a *api) infoHandler(c *ada.Context) error {
 	ctx := c.Request.Context()
 
 	// This endpoint lives on the unprotected mux (mAuth) so the SPA can
-	// always boot. Identify the caller from the context (set by the auth
-	// middleware on the protected mux) or fall back to any identity already
-	// in context if the request arrived on the unprotected mux.
-	username := service.UserFromContext(ctx)
+	// always boot. Identify the caller via the auth manager which knows
+	// how to resolve a session even when Require()/CapMiddleware() are
+	// not in the chain (i.e. on the unprotected mux). This is the only
+	// reliable way for the SPA to discover the current user's effective
+	// capabilities before any protected route is hit.
+	username := ""
+	var caps []string
+	isSuperadmin := false
+
+	if a.mgr != nil {
+		id, capKeys, resolvedUser, _, _ := a.mgr.ResolveRequest(c.Request)
+		if id != nil {
+			username = resolvedUser
+			if username == "" {
+				username = id.Subject
+			}
+			caps = capKeys
+			// Superadmin equivalence: the cap resolver returns the full
+			// known-key set for both local is_superadmin users and members
+			// of the Superadmins allowlist — both should set is_superadmin
+			// in the response so the UI can grant unconditional access.
+			if len(caps) == len(service.KnownCapabilityKeys()) {
+				isSuperadmin = true
+			}
+		}
+	}
+
+	// Fallback: protected-mux requests still have caps/user planted in
+	// context by CapMiddleware. Honor those if ResolveRequest didn't
+	// produce anything (defensive — shouldn't normally happen).
+	if username == "" {
+		username = service.UserFromContext(ctx)
+	}
+	if len(caps) == 0 {
+		if c := service.CapabilitiesFromContext(ctx); len(c) > 0 {
+			caps = []string(c)
+			if len(caps) == len(service.KnownCapabilityKeys()) {
+				isSuperadmin = true
+			}
+		}
+	}
+
+	if caps == nil {
+		caps = []string{}
+	}
 
 	resp := struct {
 		Info
@@ -250,31 +290,10 @@ func (a *api) infoHandler(c *ada.Context) error {
 		User:         username,
 		AuthEnabled:  true,
 		BuiltinAuth:  true,
-		Permissions:  []string{},
+		IsSuperadmin: isSuperadmin,
+		Permissions:  caps,
 		Capabilities: service.KnownCapabilities,
 		RawMounts:    a.rawHandler.MountsInfo(),
-	}
-
-	// Resolve capabilities from context (set by CapMiddleware on protected routes).
-	// On unprotected mux (infoHandler), also try via ResolveLocalCapabilityKeys.
-	caps := service.CapabilitiesFromContext(ctx)
-	if len(caps) > 0 {
-		resp.Permissions = []string(caps)
-	} else if username != "" {
-		keys, isSuperadmin, _, err := a.svc.ResolveLocalCapabilityKeys(ctx, username)
-		if err == nil {
-			resp.IsSuperadmin = isSuperadmin
-			if keys != nil {
-				resp.Permissions = keys
-			}
-		}
-	}
-
-	// Check identity from ada's identity package for superadmin status.
-	if id := identity.FromContext(ctx); id != nil {
-		if len(caps) == len(service.KnownCapabilityKeys()) {
-			resp.IsSuperadmin = true
-		}
 	}
 
 	// Fresh-install detection: no users exist yet.
