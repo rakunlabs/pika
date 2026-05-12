@@ -92,6 +92,26 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 
 	mAuth.ErrorHandler(api.errorHandler)
 
+	// Per-user (self) endpoints. These live on the authenticated mux but
+	// require no capability — every logged-in user owns their own
+	// preference document. The /me/* namespace is reserved for additional
+	// user-self resources (password change, personal vault, ...).
+	m.GET("/api/v1/me/preferences", m.Wrap(api.getMyPreferences))
+	m.PUT("/api/v1/me/preferences", m.Wrap(api.updateMyPreferences))
+	m.DELETE("/api/v1/me/preferences", m.Wrap(api.resetMyPreferences))
+
+	// Passkey self-service: enroll, list, rename, delete. All scoped to
+	// the calling user — the service layer verifies ownership on every
+	// rename/delete so an attacker who guesses another user's credential
+	// id can't act on it. Begin/finish enrollment lives on the same /me
+	// namespace because it's a per-user action; the actual login
+	// ceremony goes through ada's strategy mux instead (see authx).
+	m.POST("/api/v1/me/passkeys/begin", m.Wrap(api.beginPasskeyEnroll))
+	m.POST("/api/v1/me/passkeys/finish", m.Wrap(api.finishPasskeyEnroll))
+	m.GET("/api/v1/me/passkeys", m.Wrap(api.listMyPasskeys))
+	m.PATCH("/api/v1/me/passkeys/*", m.Wrap(api.renameMyPasskey))
+	m.DELETE("/api/v1/me/passkeys/*", m.Wrap(api.deleteMyPasskey))
+
 	// User management endpoints.
 	m.GET("/api/v1/users", m.Wrap(api.withPerm(service.CapUsersManage, api.listUsers)))
 	m.POST("/api/v1/users", m.Wrap(api.withPerm(service.CapUsersManage, api.createUser)))

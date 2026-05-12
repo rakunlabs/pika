@@ -154,3 +154,58 @@ func writeJSONError(w http.ResponseWriter, status int, code, message string) {
 	w.WriteHeader(status)
 	fmt.Fprintf(w, `{"code":%q,"message":%q}`, code, message)
 }
+
+// authBearerOrSession authenticates a request to one of the public data
+// endpoints (/data/*, /raw/*) which live on the unprotected mux (mData) and
+// therefore have no middleware in the chain.
+//
+// Two equivalent credentials are accepted:
+//
+//  1. An `Authorization: Bearer <api-token>` header — validated against the
+//     tokens table with scope+operation. This is the contract documented for
+//     external callers and copy-paste URLs from the UI's SettingsPanel.
+//
+//  2. The browser session cookie issued by /login/* — resolved through the
+//     auth manager, then checked against the user's capability set and the
+//     per-key path-pattern restrictions. This lets a logged-in UI user open
+//     the same URL they copied without needing to mint an API token first.
+//
+// `tokenScope` is the path passed to ValidateToken (e.g. the file key, or
+// "raw/<key>" for raw mounts). `patternPath` is the path used for session
+// capability-pattern matching (use "" to skip path-pattern enforcement,
+// mirroring withPerm vs withPermPath semantics on the protected mux).
+func (a *api) authBearerOrSession(c *ada.Context, tokenScope, op, capKey, patternPath string) error {
+	tokenRaw := c.Request.Header.Get("Authorization")
+	if len(tokenRaw) > 7 && tokenRaw[:7] == "Bearer " {
+		tokenRaw = tokenRaw[7:]
+	}
+
+	if tokenRaw != "" {
+		// Bearer path: external API tokens — unchanged behavior.
+		return a.svc.ValidateToken(c.Request.Context(), tokenRaw, tokenScope, op)
+	}
+
+	// No Bearer header: try to resolve a UI session cookie.
+	if a.mgr == nil {
+		return errors.Join(errors.New("missing authentication token"), service.ErrUnauthorized)
+	}
+	id, capKeys, _, _, patternMap := a.mgr.ResolveRequest(c.Request)
+	if id == nil {
+		// Truly anonymous — surface the original error so external clients
+		// keep seeing the familiar message.
+		return errors.Join(errors.New("missing authentication token"), service.ErrUnauthorized)
+	}
+
+	caps := service.Capabilities(capKeys)
+	if !caps.Has(capKey) {
+		return fmt.Errorf("capability %q required: %w", capKey, service.ErrForbidden)
+	}
+
+	if patternPath != "" {
+		if !service.CapabilityPatterns(patternMap).Allows(capKey, patternPath) {
+			return fmt.Errorf("path %q not permitted for %q: %w", patternPath, capKey, service.ErrForbidden)
+		}
+	}
+
+	return nil
+}

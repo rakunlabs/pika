@@ -30,6 +30,8 @@ type Storage interface {
 	Files() FileStorage
 	FileVersions() FileVersionStorage
 	Settings() SettingsStorage
+	UserPreferences() UserPreferencesStorage
+	Passkeys() PasskeyStorage
 
 	// Tx executes a function within a transaction.
 	// If the function returns an error, the transaction is rolled back.
@@ -268,6 +270,106 @@ type FileVersionStorage interface {
 type SettingsStorage interface {
 	Get(ctx context.Context) (*Settings, error)
 	Set(ctx context.Context, settings *Settings) error
+}
+
+// EditorPreferences captures the user-facing CodeMirror configuration that
+// is persisted server-side so the same look-and-feel follows the user
+// across devices.
+type EditorPreferences struct {
+	Theme      string `json:"theme"`
+	FontSize   int    `json:"font_size"`
+	FontFamily string `json:"font_family"`
+	LineWrap   bool   `json:"line_wrap"`
+}
+
+// AppPreferences captures application-wide UI preferences (independent
+// from the editor theme).
+type AppPreferences struct {
+	// Theme is one of "light", "dark", or "system".
+	Theme string `json:"theme"`
+}
+
+// PanelPreferences captures persisted layout sizes for resizable panels.
+type PanelPreferences struct {
+	LeftWidth  int `json:"left_width"`
+	RightWidth int `json:"right_width"`
+}
+
+// UserPreferences is the per-user UI preference record. It is intentionally
+// modeled as a single JSON-blob style document keyed by user ID so future
+// additions (e.g. a personal password vault) are purely additive without
+// schema churn.
+type UserPreferences struct {
+	UserID    string            `json:"user_id"`
+	App       AppPreferences    `json:"app"`
+	Editor    EditorPreferences `json:"editor"`
+	Panels    PanelPreferences  `json:"panels"`
+	UpdatedAt time.Time         `json:"updated_at"`
+}
+
+// UserPreferencesStorage manages per-user preference documents. Get
+// returns ErrNotFound when no document exists for the given user — the
+// service layer is responsible for substituting defaults.
+type UserPreferencesStorage interface {
+	Get(ctx context.Context, userID string) (*UserPreferences, error)
+	Set(ctx context.Context, prefs *UserPreferences) error
+	Delete(ctx context.Context, userID string) error
+}
+
+// PasskeyCredential is one WebAuthn credential bound to a pika user.
+//
+// Why we persist every field:
+//   - CredentialID is the lookup key at login (the authenticator
+//     returns it as rawId in the assertion response). Indexed and
+//     unique so a passkey-login assertion can find its owning row in
+//     O(1) without scanning every user's enrollments.
+//   - PublicKey is the raw CBOR COSE_Key; we re-parse it on every
+//     verification (cheap) instead of caching a decoded form, so a
+//     future algorithm addition can re-decode without schema churn.
+//   - AAGUID identifies the authenticator model (useful for showing
+//     "YubiKey 5" or "iCloud Keychain" in the security UI; mostly
+//     informational because pika does not enforce attestation policy).
+//   - SignCount is updated after every successful login. A counter
+//     that goes backwards across logins indicates a possibly-cloned
+//     authenticator and the next login is rejected — see
+//     ada/passkey/ceremony.go FinishLogin.
+//   - BackupEligible/BackupState track whether the credential can be
+//     synced across devices (set on syncable passkeys like iCloud
+//     Keychain). Surfaced in the UI so users understand which
+//     credentials follow them.
+//   - Name is a user-supplied label ("Phone", "YubiKey 5"). Pika
+//     auto-generates a placeholder ("Passkey 1", "Passkey 2") on
+//     enroll if missing — better than blank rows.
+type PasskeyCredential struct {
+	ID              string    `json:"id"`
+	UserID          string    `json:"user_id"`
+	CredentialID    []byte    `json:"credential_id"`
+	PublicKey       []byte    `json:"-"` // never expose raw key over API
+	AAGUID          []byte    `json:"aaguid,omitempty"`
+	SignCount       uint32    `json:"sign_count"`
+	Transports      []string  `json:"transports,omitempty"`
+	UserVerified    bool      `json:"user_verified"`
+	BackupEligible  bool      `json:"backup_eligible"`
+	BackupState     bool      `json:"backup_state"`
+	AttestationType string    `json:"attestation_type,omitempty"`
+	Name            string    `json:"name"`
+	CreatedAt       time.Time `json:"created_at"`
+	LastUsedAt      time.Time `json:"last_used_at,omitempty"`
+}
+
+// PasskeyStorage manages WebAuthn credential records. Per-user
+// enumeration (security page listing) goes through ListByUserID;
+// per-credential lookup at login goes through FindByCredentialID
+// (the authenticator only returns the credential id — the owning
+// user is discovered from the row).
+type PasskeyStorage interface {
+	Create(ctx context.Context, c *PasskeyCredential) error
+	Get(ctx context.Context, id string) (*PasskeyCredential, error)
+	FindByCredentialID(ctx context.Context, credentialID []byte) (*PasskeyCredential, error)
+	ListByUserID(ctx context.Context, userID string) ([]PasskeyCredential, error)
+	Update(ctx context.Context, c *PasskeyCredential) error
+	Delete(ctx context.Context, id string) error
+	DeleteByUserID(ctx context.Context, userID string) error
 }
 
 // Folder represents a directory containing folders and files.

@@ -1,6 +1,6 @@
-# Kubernetes external resource
+# Kubernetes
 
-Pika can read `Secret` and `ConfigMap` objects directly from the Kubernetes API and merge their contents into a config via [inheritance](./inheritance). It talks to the Kubernetes API over HTTPS using a small built-in client — no `kubectl`, no Helm, no extra dependencies.
+Pika can read `Secret` and `ConfigMap` objects directly from the Kubernetes API and merge their contents into a config via [inheritance](./). It talks to the Kubernetes API over HTTPS using a small built-in client — no `kubectl`, no Helm, no extra dependencies.
 
 This page covers:
 
@@ -164,7 +164,7 @@ Authentication: Paste kubeconfig
 Kubeconfig YAML: <textarea>
 ```
 
-Pika stores the content in its database alongside the rest of the resource. With the encryption key set ([Encryption](./encryption)), it's encrypted at rest. The same supported features apply — bearer tokens and mTLS via `client-certificate-data` / `client-key-data`.
+Pika stores the content in its database alongside the rest of the resource. With the encryption key set ([Encryption](../encryption)), it's encrypted at rest. The same supported features apply — bearer tokens and mTLS via `client-certificate-data` / `client-key-data`.
 
 Use this mode when:
 
@@ -213,7 +213,7 @@ Once the resource is saved, reference it from any config file's **Inherits** sec
 | Secret      | `default/secret/db-credentials`           |
 | ConfigMap   | `default/configmap/feature-flags`         |
 
-`paths` and `inject` work the same as for any other inheritance source — see [Inheritance](./inheritance).
+`paths` and `inject` work the same as for any other inheritance source — see [Inheritance](./).
 
 ### Examples
 

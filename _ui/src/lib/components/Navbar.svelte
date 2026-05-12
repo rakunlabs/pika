@@ -1,91 +1,98 @@
 <script lang="ts">
-  import { link, router } from 'svelte-spa-router';
-  import { appStore } from '@/lib/store/store.svelte';
-  import { Blocks, Settings, User, Users, LogOut, HardDrive, FileSliders } from 'lucide-svelte';
+ import { link, router } from 'svelte-spa-router';
+ import { appStore } from '@/lib/store/store.svelte';
+ import { Blocks, Settings, User, Users, LogOut, HardDrive, FileSliders } from 'lucide-svelte';
+ import ThemeSwitcher from '@/lib/components/ThemeSwitcher.svelte';
 
-  const info = $derived(appStore.info);
-  const identity = $derived(appStore.identity);
+ const info = $derived(appStore.info);
+ const identity = $derived(appStore.identity);
 
-  const hasRawMounts = $derived((info?.raw_mounts?.length ?? 0) > 0);
+ const hasRawMounts = $derived((info?.raw_mounts?.length ?? 0) > 0);
 
-  const navItems = $derived.by(() => {
-    const items: { path: string; label: string; icon: typeof Settings }[] = [];
+ const navItems = $derived.by(() => {
+ const items: { path: string; label: string; icon: typeof Settings }[] = [];
 
-    if (appStore.hasPermission('files.read')) {
-      items.push({ path: '/configurations', label: 'Configurations', icon: FileSliders });
-    }
+ if (appStore.hasPermission('files.read')) {
+ items.push({ path: '/configurations', label: 'Configurations', icon: FileSliders });
+ }
 
-    if (hasRawMounts && appStore.hasPermission('raw.read')) {
-      items.push({ path: '/files', label: 'Files', icon: HardDrive });
-    }
+ if (hasRawMounts && appStore.hasPermission('raw.read')) {
+ items.push({ path: '/files', label: 'Files', icon: HardDrive });
+ }
 
-    // Settings is always visible: even users without settings.manage can
-    // reach the About section. Individual sections gate themselves inside
-    // the Settings page based on their own capability.
-    items.push({ path: '/settings', label: 'Settings', icon: Settings });
+ // Settings is always visible: even users without settings.manage can
+ // reach the About section. Individual sections gate themselves inside
+ // the Settings page based on their own capability.
+ items.push({ path: '/settings', label: 'Settings', icon: Settings });
 
-    // Users page hosts both the Users tab (users.manage) and Permissions
-    // tab (permissions.manage). Show the nav entry if the user has either.
-    if (appStore.hasAnyPermission('users.manage', 'permissions.manage')) {
-      items.push({ path: '/users', label: 'Users', icon: Users });
-    }
+ // Users page hosts both the Users tab (users.manage) and Permissions
+ // tab (permissions.manage). Show the nav entry if the user has either.
+ if (appStore.hasAnyPermission('users.manage', 'permissions.manage')) {
+ items.push({ path: '/users', label: 'Users', icon: Users });
+ }
 
-    return items;
-  });
+ return items;
+ });
 
-  async function handleLogout() {
-    await appStore.logout();
-  }
+ async function handleLogout() {
+ await appStore.logout();
+ }
 </script>
 
-<nav class="flex items-center h-10 bg-slate-900 text-white border-b border-slate-700 px-4 shrink-0">
-  <!-- Logo / Brand -->
-  <div class="flex items-center gap-2 mr-6 text-white">
-    <Blocks size={18} color="#EF233C" />
-    <div class="flex flex-col leading-none">
-      <span class="text-sm font-bold tracking-wide">pika</span>
-      {#if info}
-        <span class="text-[9px] font-mono text-slate-500">{info.version}</span>
-      {/if}
-    </div>
-  </div>
+<nav class="flex items-center h-10 bg-warm-900 text-white border-b border-warm-700 px-4 shrink-0">
+ <!-- Logo / Brand -->
+ <div class="flex items-center gap-2 mr-6 text-white">
+ <Blocks size={18} color="#EF233C" />
+ <div class="flex flex-col leading-none">
+ <span class="text-sm font-bold tracking-wide">pika</span>
+ {#if info}
+  <span class="text-[9px] font-mono text-warm-300">{info.version}</span>
+ {/if}
+ </div>
+ </div>
 
-  <!-- Nav Links -->
-  <div class="flex items-center gap-1">
-    {#each navItems as item (item.path)}
-      {@const isActive = router.location === item.path || (router.location === '/' && item.path === '/configurations')}
-      <a
-        href={item.path}
-        use:link
-        class="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium no-underline transition-colors
-          {isActive
-            ? 'bg-slate-700 text-white'
-            : 'text-slate-400 hover:text-white hover:bg-slate-800'}"
-      >
-        <item.icon size={14} />
-        {item.label}
-      </a>
-    {/each}
-  </div>
+ <!-- Nav Links -->
+ <div class="flex items-center gap-1">
+ {#each navItems as item (item.path)}
+ {@const isActive = router.location === item.path || (router.location === '/' && item.path === '/configurations')}
+ <a
+ href={item.path}
+ use:link
+    class="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium no-underline transition-colors
+    {isActive
+    ? 'bg-accent-600 text-white'
+    : 'text-warm-200 hover:text-white hover:bg-warm-700'}"
+ >
+ <item.icon size={14} />
+ {item.label}
+ </a>
+ {/each}
+ </div>
 
-  <!-- Spacer -->
-  <div class="flex-1"></div>
+ <!-- Spacer -->
+ <div class="flex-1"></div>
 
-  <!-- User + Version Info -->
-  <div class="flex items-center gap-2 text-[11px] text-slate-500">
-    {#if identity}
-      <span class="flex items-center gap-1 px-1.5 py-0.5 bg-slate-800 rounded text-slate-300">
-        <User size={11} />
-        {identity.name ?? identity.subject}
-      </span>
-      <button
-        onclick={handleLogout}
-        class="flex items-center gap-1 px-1.5 py-0.5 bg-slate-800 rounded text-slate-400 hover:text-white hover:bg-slate-700 transition-colors cursor-pointer border-none"
-        title="Sign out"
-      >
-        <LogOut size={11} />
-        <span>Logout</span>
-      </button>
-    {/if}
+ <!-- User + Logout: sized to match the nav links on the left
+ (text-xs / size=14 / px-3 py-1.5) so the entire navbar reads as
+ one consistent row instead of having a slightly smaller cluster
+ on the right. -->
+ <div class="flex items-center gap-1 text-warm-300">
+  {#if identity}
+  <span class="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-warm-700 text-warm-100">
+  <User size={14} />
+  {identity.name ?? identity.subject}
+  </span>
+  <button
+  onclick={handleLogout}
+  class="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-warm-700 text-warm-200 hover:text-white hover:bg-warm-600 transition-colors cursor-pointer border-none"
+  title="Sign out"
+  >
+  <LogOut size={14} />
+  <span>Logout</span>
+  </button>
+  {/if}
+  <!-- Theme switcher: same local-only toggle exposed inside the app.
+  The dark variant blends into the navbar's warm-900 background. -->
+  <ThemeSwitcher variant="dark" class="ml-1" />
   </div>
 </nav>

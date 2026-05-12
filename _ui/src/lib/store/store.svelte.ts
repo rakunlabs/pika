@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 import type { RawMount, Capability } from '@/lib/types/config';
+import { prefsStore } from '@/lib/store/prefs.svelte';
 
 export interface AppInfo {
   name: string;
@@ -159,12 +160,23 @@ function createAppStore() {
 
   async function loginWith(url: string, body: Record<string, string>): Promise<void> {
     await axios.post(url, body, { headers: { Accept: 'application/json' } });
-    await loadIdentity();
+    // Refresh identity (/login/me), app info (/api/v1/info) and the
+    // user's UI preferences in parallel.
+    //
+    // allSettled (not all): we don't want a single side-channel failure
+    // (e.g. /api/v1/me/preferences returning 401 because the backend
+    // hasn't been redeployed yet) to surface as a thrown error to the
+    // Login.svelte caller and leave the UI on the login screen even
+    // though the cookie was set. loadIdentity is the source of truth
+    // for "are we authenticated"; the other two are best-effort.
+    await Promise.allSettled([loadIdentity(), loadInfo(), prefsStore.loadPreferences()]);
   }
 
   async function registerWith(url: string, body: Record<string, string>): Promise<void> {
     await axios.post(url, body, { headers: { Accept: 'application/json' } });
-    await loadIdentity();
+    // On first signup the backend auto-logs the user in. Mirror loginWith
+    // — see loginWith for the rationale behind allSettled.
+    await Promise.allSettled([loadIdentity(), loadInfo(), prefsStore.loadPreferences()]);
   }
 
   async function logout(): Promise<void> {
@@ -173,6 +185,11 @@ function createAppStore() {
     } finally {
       identity = null;
       authenticated = false;
+      // Reset info back to the anonymous capability set and drop the
+      // previous user's preferences so a shared device doesn't leak
+      // either across logins.
+      prefsStore.resetLocal();
+      await loadInfo();
     }
   }
 
@@ -276,14 +293,33 @@ function createAppStore() {
     await axios.put(`/api/v1/user-permissions/${userId}`, { permission_ids: permissionIds });
   }
 
-  // Set up axios interceptor for 401 responses
+  // Set up axios interceptor for 401 responses.
+  //
+  // A 401 from a regular API call means the session expired (or the
+  // user was never authenticated to begin with) — flip the global gate
+  // so App.svelte swaps in the Login component.
+  //
+  // Exceptions — these endpoints are intentionally probed before/around
+  // a session exists and a 401 from them is not evidence that the user
+  // got logged out:
+  //   /login/*                — auth dance itself (login, signup, /me)
+  //   /api/v1/info            — capability bootstrap; works anonymous
+  //   /api/v1/me/preferences  — fetched right after /login/password as
+  //                             part of the post-login fan-out. If the
+  //                             backend doesn't (yet) expose it, or the
+  //                             session cookie isn't visible to this
+  //                             request for any reason, treating that
+  //                             401 as a logout would bounce the user
+  //                             straight back to the login screen even
+  //                             though they just authenticated
+  //                             successfully.
+  const SKIP_401_PATHS = ['/login/', '/api/v1/info', '/api/v1/me/preferences'];
   axios.interceptors.response.use(
     (response) => response,
     (error) => {
-      if (
-        error?.response?.status === 401 &&
-        !error.config?.url?.includes('/login/')
-      ) {
+      const url: string = error?.config?.url ?? '';
+      const skip = SKIP_401_PATHS.some((p) => url.includes(p));
+      if (error?.response?.status === 401 && !skip) {
         authenticated = false;
         identity = null;
       }

@@ -53,6 +53,10 @@ function createConfigStore() {
   let settings = $state<Settings | null>(null);
   let tokens = $state<TokenInfo[]>([]);
   let isLoading = $state(false);
+  // Panel widths are intentionally session-only: dragging the resize
+  // handles updates the layout immediately for the current tab and the
+  // chosen width is forgotten on reload. Not worth a DB write per drag
+  // and not worth the complexity of a "Save" affordance.
   let leftPanelWidth = $state(250);
   let rightPanelWidth = $state(280);
 
@@ -1138,7 +1142,7 @@ function createConfigStore() {
     }
   }
 
-  // Panel width operations
+  // Panel width operations. Session-only state; not persisted anywhere.
   function setLeftPanelWidth(width: number): void {
     leftPanelWidth = Math.max(150, Math.min(500, width));
   }

@@ -36,8 +36,8 @@ require (
 	github.com/spf13/afero v1.15.0
 	github.com/studio-b12/gowebdav v0.12.0
 	github.com/twmb/franz-go v1.20.7
-	golang.org/x/crypto v0.49.0
-	golang.org/x/net v0.52.0
+	golang.org/x/crypto v0.51.0
+	golang.org/x/net v0.53.0
 )
 
 require (
@@ -76,7 +76,7 @@ require (
 	github.com/rakunlabs/cache v0.3.3 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
-	github.com/tinylib/msgp v1.6.1 // indirect
+	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/twmb/franz-go/pkg/kmsg v1.12.0 // indirect
 	github.com/twmb/tlscfg v1.3.0 // indirect
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
@@ -97,10 +97,24 @@ require (
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260311181403-84a4fc48630c // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260311181403-84a4fc48630c // indirect
 	google.golang.org/grpc v1.79.3 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+// Local development override: the passkey strategy lives in the
+// ada/middleware/auth tree and isn't released yet. The replace
+// directive points at the local checkout so changes flow directly
+// without a publish cycle. Drop once ada cuts a tagged release that
+// includes the strategy/passkey package.
+replace github.com/rakunlabs/ada/middleware/auth => ../ada/middleware/auth
+
+// ada/middleware/auth has its own replace that points at
+// ../../handler/folder relative to the auth module. When we replace
+// the auth module with a local path, that relative path resolves
+// against our pika checkout, not the ada checkout — so we mirror
+// the replace here.
+replace github.com/rakunlabs/ada/handler/folder => ../ada/handler/folder

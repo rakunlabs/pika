@@ -162,6 +162,12 @@ func (s *userStorage) cascadeDelete(ctx context.Context, userID string) error {
 			return err
 		}
 	}
+	// Drop enrolled passkeys too — otherwise the deleted user's
+	// credentials would still grant login (the strategy authenticates
+	// by credential, not by username).
+	if err := s.store.passkeysAt(s.scope).DeleteByUserID(ctx, userID); err != nil {
+		return err
+	}
 	return s.store.sessionsAt(s.scope).DeleteByUserID(ctx, userID)
 }
 

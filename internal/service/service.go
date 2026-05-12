@@ -33,6 +33,11 @@ type Service struct {
 	// hookDispatcher emits events when config operations occur.
 	// May be nil if hooks are not configured.
 	hookDispatcher *hook.Dispatcher
+
+	// passkeys is the WebAuthn coordinator. nil when the deployment
+	// has no passkey configuration (e.g. RPID unset). Set by
+	// SetPasskeys at boot; consumed via Passkeys() with a nil-check.
+	passkeys *PasskeyService
 }
 
 func New(store Storage) *Service {

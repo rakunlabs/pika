@@ -54,15 +54,17 @@ func (c *Config) effectivePath() string {
 type Storage struct {
 	db *bw.DB
 
-	users          *bw.Bucket[userRow]
-	userIdentities *bw.Bucket[userIdentityRow]
-	tokens         *bw.Bucket[tokenRow]
-	sessions       *bw.Bucket[sessionRow]
-	permissions    *bw.Bucket[permissionRow]
-	folders        *bw.Bucket[folderRow]
-	files          *bw.Bucket[fileRow]
-	fileVersions   *bw.Bucket[fileVersionRow]
-	settings       *bw.Bucket[settingsRow]
+	users           *bw.Bucket[userRow]
+	userIdentities  *bw.Bucket[userIdentityRow]
+	tokens          *bw.Bucket[tokenRow]
+	sessions        *bw.Bucket[sessionRow]
+	permissions     *bw.Bucket[permissionRow]
+	folders         *bw.Bucket[folderRow]
+	files           *bw.Bucket[fileRow]
+	fileVersions    *bw.Bucket[fileVersionRow]
+	settings        *bw.Bucket[settingsRow]
+	userPreferences *bw.Bucket[userPreferencesRow]
+	passkeys        *bw.Bucket[passkeyCredentialRow]
 }
 
 // New opens (or creates) a bw database at the configured path and

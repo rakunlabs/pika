@@ -61,7 +61,7 @@ Files can declare **inheritance entries** that pull data from elsewhere and merg
 
 - another pika file (or one of its variants),
 - a [raw mount](./raw-files) (local disk, S3, FTP, …),
-- an [external resource](./inheritance) (Vault, Kubernetes, Consul, etcd, AWS, GCP, Azure, plain HTTP).
+- an [external resource](./inheritance/) (Vault, Kubernetes, Consul, etcd, AWS, GCP, Azure, plain HTTP).
 
 Merging happens at **read time**, not at save time. The stored file content is always your hand-edited document; pika resolves the inheritance chain when a consumer asks for it.
 

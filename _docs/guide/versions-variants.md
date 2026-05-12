@@ -85,7 +85,7 @@ A **variant** is an independent parallel history of the same file. The base file
 - Per-region configs: `us-east`, `eu-west`.
 - A/B variants of the same service config.
 
-If your variants are mostly the same with a few overrides, [inheritance](./inheritance) is usually a better fit — define a base and let variants inherit from it.
+If your variants are mostly the same with a few overrides, [inheritance](./inheritance/) is usually a better fit — define a base and let variants inherit from it.
 
 ### Creating a variant
 

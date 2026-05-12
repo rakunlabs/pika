@@ -65,6 +65,14 @@ func (s *Storage) Settings() service.SettingsStorage {
 	return s.backend.Settings()
 }
 
+func (s *Storage) UserPreferences() service.UserPreferencesStorage {
+	return s.backend.UserPreferences()
+}
+
+func (s *Storage) Passkeys() service.PasskeyStorage {
+	return s.backend.Passkeys()
+}
+
 // Tx executes a function within a transaction.
 func (s *Storage) Tx(ctx context.Context, fn func(ctx context.Context, tx service.Storage) error) error {
 	return s.backend.Tx(ctx, func(ctx context.Context, tx service.Storage) error {

@@ -10,21 +10,12 @@ import (
 )
 
 // getData serves resolved configuration data with token authentication.
+// Accepts either an API token (Authorization: Bearer <token>) for external
+// callers or a UI session cookie for logged-in browser users.
 func (a *api) getData(c *ada.Context) error {
 	key := c.Request.PathValue("*")
 
-	// Authenticate via Bearer token
-	tokenRaw := c.Request.Header.Get("Authorization")
-	if len(tokenRaw) > 7 && tokenRaw[:7] == "Bearer " {
-		tokenRaw = tokenRaw[7:]
-	}
-
-	if tokenRaw == "" {
-		return errors.Join(errors.New("missing authentication token"), service.ErrUnauthorized)
-	}
-
-	// Validate token and check scope
-	if err := a.svc.ValidateToken(c.Request.Context(), tokenRaw, key, "read"); err != nil {
+	if err := a.authBearerOrSession(c, key, "read", service.CapFilesRead, key); err != nil {
 		return err
 	}
 

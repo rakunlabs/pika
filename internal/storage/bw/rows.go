@@ -313,6 +313,119 @@ type fileVersionRow struct {
 	Versions service.FileVersions `bw:"versions"`
 }
 
+// passkeyCredentialRow is one persisted WebAuthn credential. PK is a
+// stable random id so a credential can be renamed/deleted without
+// touching the lookup key the authenticator emits. CredentialID
+// carries `unique` so a malicious or buggy authenticator that
+// presents the same credential twice cannot land two rows and
+// confuse the assertion path; the same flag also makes
+// FindByCredentialID an O(1) index hit.
+//
+// UserID is indexed so the security page (ListByUserID) is cheap
+// even when a user has tens of credentials.
+//
+// Transports is stored as a single comma-joined string (rather than
+// a slice) because bw's struct-tag schema doesn't support typed
+// slice indexes; the join/split is done in toService/from with a
+// fixed comma separator. Transport tokens are constrained to a
+// fixed ASCII vocabulary by WebAuthn so comma is safe.
+type passkeyCredentialRow struct {
+	ID              string    `bw:"id,pk"`
+	UserID          string    `bw:"user_id,index"`
+	CredentialID    []byte    `bw:"credential_id,unique"`
+	PublicKey       []byte    `bw:"public_key"`
+	AAGUID          []byte    `bw:"aaguid"`
+	SignCount       uint32    `bw:"sign_count"`
+	Transports      string    `bw:"transports"`
+	UserVerified    bool      `bw:"user_verified"`
+	BackupEligible  bool      `bw:"backup_eligible"`
+	BackupState     bool      `bw:"backup_state"`
+	AttestationType string    `bw:"attestation_type"`
+	Name            string    `bw:"name"`
+	CreatedAt       time.Time `bw:"created_at,index"`
+	LastUsedAt      time.Time `bw:"last_used_at"`
+}
+
+func (r *passkeyCredentialRow) toService() *service.PasskeyCredential {
+	var transports []string
+	if r.Transports != "" {
+		transports = splitTransports(r.Transports)
+	}
+	return &service.PasskeyCredential{
+		ID:              r.ID,
+		UserID:          r.UserID,
+		CredentialID:    r.CredentialID,
+		PublicKey:       r.PublicKey,
+		AAGUID:          r.AAGUID,
+		SignCount:       r.SignCount,
+		Transports:      transports,
+		UserVerified:    r.UserVerified,
+		BackupEligible:  r.BackupEligible,
+		BackupState:     r.BackupState,
+		AttestationType: r.AttestationType,
+		Name:            r.Name,
+		CreatedAt:       r.CreatedAt,
+		LastUsedAt:      r.LastUsedAt,
+	}
+}
+
+func passkeyCredentialRowFromService(c *service.PasskeyCredential) *passkeyCredentialRow {
+	return &passkeyCredentialRow{
+		ID:              c.ID,
+		UserID:          c.UserID,
+		CredentialID:    c.CredentialID,
+		PublicKey:       c.PublicKey,
+		AAGUID:          c.AAGUID,
+		SignCount:       c.SignCount,
+		Transports:      joinTransports(c.Transports),
+		UserVerified:    c.UserVerified,
+		BackupEligible:  c.BackupEligible,
+		BackupState:     c.BackupState,
+		AttestationType: c.AttestationType,
+		Name:            c.Name,
+		CreatedAt:       c.CreatedAt,
+		LastUsedAt:      c.LastUsedAt,
+	}
+}
+
+// joinTransports / splitTransports collapse the WebAuthn transports
+// list onto a single string for bw storage. Tokens come from a
+// fixed WebAuthn vocabulary ("usb", "nfc", "ble", "internal",
+// "hybrid", "smart-card") so comma joining is safe.
+func joinTransports(in []string) string {
+	if len(in) == 0 {
+		return ""
+	}
+	out := ""
+	for i, v := range in {
+		if i > 0 {
+			out += ","
+		}
+		out += v
+	}
+	return out
+}
+
+func splitTransports(in string) []string {
+	if in == "" {
+		return nil
+	}
+	out := []string{}
+	start := 0
+	for i := 0; i < len(in); i++ {
+		if in[i] == ',' {
+			if i > start {
+				out = append(out, in[start:i])
+			}
+			start = i + 1
+		}
+	}
+	if start < len(in) {
+		out = append(out, in[start:])
+	}
+	return out
+}
+
 // settingsRow is a singleton — there's only ever one row, keyed by the
 // fixed string "default", matching the SQLite layout.
 type settingsRow struct {

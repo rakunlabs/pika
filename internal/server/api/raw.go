@@ -41,8 +41,8 @@ type publicServerInfo struct {
 // RawHandler holds the mounted filesystem backends.
 // Mounts can be updated at runtime (hot-reload from settings).
 type RawHandler struct {
-	mu         sync.RWMutex
-	mounts     []mountEntry
+	mu           sync.RWMutex
+	mounts       []mountEntry
 	ftpServer    *ftpserve.Server
 	sftpServer   *sftpserve.Server
 	tftpServer   *tftpserve.Server
@@ -51,9 +51,9 @@ type RawHandler struct {
 	sftpCancel   context.CancelFunc
 	tftpCancel   context.CancelFunc
 	webdavCancel context.CancelFunc
-	publicSrv  *publicServerInfo
-	appCtx     context.Context
-	dispatcher *hook.Dispatcher
+	publicSrv    *publicServerInfo
+	appCtx       context.Context
+	dispatcher   *hook.Dispatcher
 }
 
 // NewRawHandler creates a new RawHandler with initial mount entries.
@@ -379,60 +379,39 @@ func mapFSError(err error) error {
 	return err
 }
 
-// getRaw serves raw files with token authentication.
+// getRaw serves raw files with either an API token (Authorization: Bearer)
+// or a UI session cookie.
 func (a *api) getRaw(c *ada.Context) error {
-	tokenRaw := c.Request.Header.Get("Authorization")
-	if len(tokenRaw) > 7 && tokenRaw[:7] == "Bearer " {
-		tokenRaw = tokenRaw[7:]
-	}
+	subKey := c.Request.PathValue("*")
+	tokenScope := "raw/" + subKey
 
-	if tokenRaw == "" {
-		return errors.Join(errors.New("missing authentication token"), service.ErrUnauthorized)
-	}
-
-	key := "raw/" + c.Request.PathValue("*")
-
-	if err := a.svc.ValidateToken(c.Request.Context(), tokenRaw, key, "read"); err != nil {
+	if err := a.authBearerOrSession(c, tokenScope, "read", service.CapRawRead, subKey); err != nil {
 		return err
 	}
 
 	return a.rawHandler.serveRaw(c)
 }
 
-// putRaw handles authenticated file uploads.
+// putRaw handles authenticated file uploads via either API token or session.
 func (a *api) putRaw(c *ada.Context) error {
-	tokenRaw := c.Request.Header.Get("Authorization")
-	if len(tokenRaw) > 7 && tokenRaw[:7] == "Bearer " {
-		tokenRaw = tokenRaw[7:]
-	}
+	subKey := c.Request.PathValue("*")
+	tokenScope := "raw/" + subKey
 
-	if tokenRaw == "" {
-		return errors.Join(errors.New("missing authentication token"), service.ErrUnauthorized)
-	}
-
-	key := "raw/" + c.Request.PathValue("*")
-
-	if err := a.svc.ValidateToken(c.Request.Context(), tokenRaw, key, "write"); err != nil {
+	if err := a.authBearerOrSession(c, tokenScope, "write", service.CapRawWrite, subKey); err != nil {
 		return err
 	}
 
 	return a.rawHandler.writeFile(c)
 }
 
-// deleteRaw handles authenticated file deletion.
+// deleteRaw handles authenticated file deletion via either API token or session.
 func (a *api) deleteRaw(c *ada.Context) error {
-	tokenRaw := c.Request.Header.Get("Authorization")
-	if len(tokenRaw) > 7 && tokenRaw[:7] == "Bearer " {
-		tokenRaw = tokenRaw[7:]
-	}
+	subKey := c.Request.PathValue("*")
+	tokenScope := "raw/" + subKey
 
-	if tokenRaw == "" {
-		return errors.Join(errors.New("missing authentication token"), service.ErrUnauthorized)
-	}
-
-	key := "raw/" + c.Request.PathValue("*")
-
-	if err := a.svc.ValidateToken(c.Request.Context(), tokenRaw, key, "delete"); err != nil {
+	// CapRawWrite covers both write and delete on raw mounts (see
+	// capabilities.go: "Upload, delete, rename, copy and move raw files").
+	if err := a.authBearerOrSession(c, tokenScope, "delete", service.CapRawWrite, subKey); err != nil {
 		return err
 	}
 

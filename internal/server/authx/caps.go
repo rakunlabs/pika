@@ -69,6 +69,28 @@ func (r *CapResolver) resolve(ctx context.Context, id *identity.Identity) (servi
 	username := id.Subject
 	userID := ""
 
+	// Best-effort: always try to resolve the pika user ID for the
+	// identity, even for superadmins. Per-user resources like
+	// /api/v1/me/preferences read service.UserIDFromContext to scope
+	// their reads/writes, and bouncing them with "no user in context"
+	// just because the caller is a superadmin would be surprising. The
+	// resolver still returns the full capability set below.
+	resolveUserID := func() {
+		if r.svc == nil || userID != "" {
+			return
+		}
+		if id.Provider == "" || id.Provider == "local" {
+			if user, err := r.svc.GetUserByUsername(ctx, id.Subject); err == nil && user != nil {
+				userID = user.ID
+			}
+			return
+		}
+		if ui, err := r.svc.GetUserByIdentity(ctx, id.Provider, id.Subject); err == nil && ui != nil {
+			username = ui.Username
+			userID = ui.ID
+		}
+	}
+
 	seen := make(map[string]struct{})
 	var out []string
 	add := func(keys []string) {
@@ -85,6 +107,7 @@ func (r *CapResolver) resolve(ctx context.Context, id *identity.Identity) (servi
 	// No path patterns: superadmins are unrestricted by definition.
 	for _, admin := range r.settings.Superadmins {
 		if admin == id.Subject {
+			resolveUserID()
 			return service.Capabilities(service.KnownCapabilityKeys()), username, userID, nil
 		}
 	}
@@ -98,6 +121,7 @@ func (r *CapResolver) resolve(ctx context.Context, id *identity.Identity) (servi
 			keys, isSuper, _, err := r.svc.ResolveLocalCapabilityKeys(ctx, id.Subject)
 			if err == nil {
 				if isSuper {
+					resolveUserID()
 					return service.Capabilities(service.KnownCapabilityKeys()), username, userID, nil
 				}
 				add(keys)

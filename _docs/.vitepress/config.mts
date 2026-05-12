@@ -38,8 +38,21 @@ export default defineConfig({
           items: [
             { text: 'Concepts', link: '/guide/concepts' },
             { text: 'Versions & variants', link: '/guide/versions-variants' },
-            { text: 'Inheritance', link: '/guide/inheritance' },
-            { text: 'Kubernetes resource', link: '/guide/kubernetes-external' },
+            {
+              text: 'Inheritance',
+              link: '/guide/inheritance/',
+              collapsed: true,
+              items: [
+                { text: 'HTTP', link: '/guide/inheritance/http' },
+                { text: 'Vault', link: '/guide/inheritance/vault' },
+                { text: 'Kubernetes', link: '/guide/inheritance/kubernetes' },
+                { text: 'Consul', link: '/guide/inheritance/consul' },
+                { text: 'etcd', link: '/guide/inheritance/etcd' },
+                { text: 'AWS', link: '/guide/inheritance/aws' },
+                { text: 'GCP', link: '/guide/inheritance/gcp' },
+                { text: 'Azure', link: '/guide/inheritance/azure' },
+              ],
+            },
           ],
         },
         {

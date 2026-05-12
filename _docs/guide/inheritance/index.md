@@ -5,7 +5,7 @@ A pika config file can pull values from elsewhere and merge them into the resolv
 Sources fall into three categories:
 
 1. **Internal files** — another pika config (or a specific variant of it).
-2. **Raw mounts** — a file from one of your configured [raw mounts](./raw-files).
+2. **Raw mounts** — a file from one of your configured [raw mounts](../raw-files).
 3. **External resources** — Vault, Kubernetes Secrets, Consul, etcd, AWS Secrets Manager / SSM, GCP Secret Manager, Azure Key Vault, or plain HTTP.
 
 External resources are configured once under **Settings → External Resources** and then referenced by name from any file's inheritance chain.
@@ -36,108 +36,16 @@ You manage inheritance entries from the **Inherits** section of a file in the UI
 
 ## External resources
 
-Each external resource has a **name** that you choose. That name is what `resource:` references.
+Each external resource has a **name** that you choose. That name is what `resource:` references. Pika supports the following backends — each has its own page with auth, configuration, and inheritance examples:
 
-### HTTP
-
-Generic HTTP fetcher. Supports basic auth, bearer tokens, OAuth2 (client credentials, password, etc.), retries, and custom headers — all configurable via the resource form.
-
-```text
-Type: HTTP
-URL : https://example.com/configs/{path}
-Auth: bearer / basic / oauth2 / none
-```
-
-The inheritance entry then specifies a `path` that's substituted into the URL.
-
-### Vault
-
-[HashiCorp Vault](https://www.vaultproject.io/) KV secrets.
-
-```text
-Type     : Vault
-Address  : https://vault.example.com
-Mount    : secret
-Auth     : token   OR   AppRole
-Token    : (when auth=token)
-RoleID   : (when auth=AppRole)
-SecretID : (when auth=AppRole)
-```
-
-Inheritance: `path` is the secret path under the configured mount, e.g. `myapp/db`.
-
-### Kubernetes
-
-Reads `Secret` and `ConfigMap` objects directly from the Kubernetes API. See [Kubernetes external resource](./kubernetes-external) for the full breakdown — service-account / RBAC setup, the three authentication modes (in-cluster, kubeconfig path, inline kubeconfig), and inheritance examples.
-
-```text
-Type: Kubernetes
-Auth: in-cluster   |   kubeconfig path   |   paste kubeconfig
-```
-
-Inheritance: `path` is `<namespace>/<kind>/<name>`, e.g. `default/secret/db-credentials`.
-
-### Consul
-
-[Consul](https://www.consul.io/) KV.
-
-```text
-Type   : Consul
-Address: https://consul.example.com:8500
-Token  : (optional ACL token)
-```
-
-Inheritance: `path` is the KV key.
-
-### etcd
-
-```text
-Type    : etcd
-Address : etcd.example.com:2379
-Username: (optional)
-Password: (optional)
-```
-
-Inheritance: `path` is the etcd key.
-
-### AWS
-
-AWS Secrets Manager or SSM Parameter Store.
-
-```text
-Type      : AWS
-Region    : eu-west-1
-AccessKey : ...
-SecretKey : ...
-Service   : secretsmanager   |   ssm
-```
-
-Inheritance: `path` is the secret name (Secrets Manager) or the parameter name (SSM).
-
-### GCP
-
-GCP Secret Manager.
-
-```text
-Type               : GCP
-ServiceAccountJSON : { "type": "service_account", ... }   (full JSON key, pasted)
-```
-
-Inheritance: `path` is the secret name. Pika resolves the latest version automatically.
-
-### Azure
-
-Azure Key Vault, authenticated via an AAD client credentials flow.
-
-```text
-Type        : Azure
-VaultURL    : https://my-vault.vault.azure.net/
-TenantID    : ...
-ClientID    : ...
-ClientSecret: ...
-```
-
-Inheritance: `path` is the secret name.
+- [HTTP](./http) — generic HTTP fetcher with basic / bearer / OAuth2 auth.
+- [Vault](./vault) — HashiCorp Vault KV secrets.
+- [Kubernetes](./kubernetes) — `Secret` and `ConfigMap` objects from the Kubernetes API.
+- [Consul](./consul) — Consul KV.
+- [etcd](./etcd) — etcd keys.
+- [AWS](./aws) — Secrets Manager or SSM Parameter Store.
+- [GCP](./gcp) — Secret Manager.
+- [Azure](./azure) — Key Vault.
 
 ## Examples
 

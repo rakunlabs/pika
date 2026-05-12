@@ -9,15 +9,17 @@ import (
 
 // Bucket names. Kept in one place so tests can reach in for raw scans.
 const (
-	bucketUsers          = "users"
-	bucketUserIdentities = "user_identities"
-	bucketTokens         = "tokens"
-	bucketSessions       = "sessions"
-	bucketPermissions    = "permissions"
-	bucketFolders        = "folders"
-	bucketFiles          = "files"
-	bucketFileVersions   = "file_versions"
-	bucketSettings       = "settings"
+	bucketUsers           = "users"
+	bucketUserIdentities  = "user_identities"
+	bucketTokens          = "tokens"
+	bucketSessions        = "sessions"
+	bucketPermissions     = "permissions"
+	bucketFolders         = "folders"
+	bucketFiles           = "files"
+	bucketFileVersions    = "file_versions"
+	bucketSettings        = "settings"
+	bucketUserPreferences = "user_preferences"
+	bucketPasskeys        = "passkey_credentials"
 )
 
 // settingsSingletonID is the only key ever written into the settings
@@ -100,6 +102,18 @@ func (s *Storage) registerBuckets() error {
 		bw.WithVersion[settingsRow](1),
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketSettings, err)
+	}
+
+	if s.userPreferences, err = bw.RegisterBucket[userPreferencesRow](s.db, bucketUserPreferences,
+		bw.WithVersion[userPreferencesRow](1),
+	); err != nil {
+		return fmt.Errorf("bw register %s: %w", bucketUserPreferences, err)
+	}
+
+	if s.passkeys, err = bw.RegisterBucket[passkeyCredentialRow](s.db, bucketPasskeys,
+		bw.WithVersion[passkeyCredentialRow](1),
+	); err != nil {
+		return fmt.Errorf("bw register %s: %w", bucketPasskeys, err)
 	}
 
 	return nil

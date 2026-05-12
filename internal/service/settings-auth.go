@@ -19,10 +19,11 @@ type AuthSettings struct {
 	//     time (authx.BuildAPIKey). There is no configurable header — it
 	//     would let two clients silently disagree about where to put the
 	//     token. Tokens are managed under Settings → Access Tokens.
-	Local  *LocalStrategySettings   `json:"local,omitempty"`
-	OAuth2 []OAuth2StrategySettings `json:"oauth2,omitempty"`
-	LDAP   *LDAPStrategySettings    `json:"ldap,omitempty"`
-	Header *HeaderStrategySettings  `json:"header,omitempty"`
+	Local   *LocalStrategySettings   `json:"local,omitempty"`
+	OAuth2  []OAuth2StrategySettings `json:"oauth2,omitempty"`
+	LDAP    *LDAPStrategySettings    `json:"ldap,omitempty"`
+	Header  *HeaderStrategySettings  `json:"header,omitempty"`
+	Passkey *PasskeyStrategySettings `json:"passkey,omitempty"`
 
 	// RateLimit guards password-bearing endpoints (login, signup) against
 	// brute-force attacks. When nil, defaults are applied at boot.
@@ -209,6 +210,41 @@ type HeaderStrategySettings struct {
 	Roles          string   `json:"roles,omitempty"`
 	Groups         string   `json:"groups,omitempty"`
 	TrustedProxies []string `json:"trusted_proxies,omitempty"`
+}
+
+// PasskeyStrategySettings configures the WebAuthn login strategy.
+//
+// RPID is the WebAuthn relying-party identifier — the effective
+// domain the credentials are bound to (e.g. "example.com" or
+// "localhost"). MUST be set for passkey to work; an empty RPID
+// disables the feature.
+//
+// RPOrigins is the list of full origins (scheme + host + optional
+// port) the user agent may report in clientDataJSON. Multiple
+// entries allow the same pika instance to serve from both
+// "https://example.com" and "https://admin.example.com" without
+// re-enrolling passkeys per origin.
+//
+// Name / Label are the UI knobs: Name is the URL key the SPA POSTs
+// to (/login/pass/<name>); Label is the human string shown on the
+// login screen.
+//
+// UserVerification mirrors the WebAuthn enum. "preferred" (default)
+// asks for biometric/PIN when the authenticator supports it but
+// falls back to UP-only. "required" forces verification — set this
+// when passkey is being used as the sole authentication factor.
+//
+// ChallengeTTL caps how long a registration or login challenge stays
+// valid. 5 minutes is the typical sweet spot.
+type PasskeyStrategySettings struct {
+	Enabled          bool          `json:"enabled"`
+	Name             string        `json:"name,omitempty"`
+	Label            string        `json:"label,omitempty"`
+	RPID             string        `json:"rp_id,omitempty"`
+	RPDisplayName    string        `json:"rp_display_name,omitempty"`
+	RPOrigins        []string      `json:"rp_origins,omitempty"`
+	UserVerification string        `json:"user_verification,omitempty"`
+	ChallengeTTL     time.Duration `json:"challenge_ttl,omitempty"`
 }
 
 type CapabilityMapping struct {
@@ -407,6 +443,9 @@ func (s *AuthSettings) hasAnyStrategy() bool {
 		return true
 	}
 	if s.Header != nil {
+		return true
+	}
+	if s.Passkey != nil && s.Passkey.Enabled {
 		return true
 	}
 	// APIKey is always built (see AuthSettings doc), so it never

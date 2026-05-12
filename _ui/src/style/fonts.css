@@ -1,0 +1,38 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   Editor monospace fonts.
+
+   Self-hosted via @fontsource/* packages so the Appearance preferences
+   font-family selector always shows a working preview, regardless of
+   what's installed on the user's machine. Each face is bundled at
+   weight 400 (regular) and 700 (bold) — sufficient for syntax
+   highlighting bold tokens. font-display: swap is the @fontsource
+   default; consumers see fallback fonts during the brief load.
+
+   The CSS family name on the left mirrors the `value` in
+   _ui/src/lib/editor/themes.ts so CodeMirror's fontFamily string
+   matches whatever rule fires here.
+   ──────────────────────────────────────────────────────────────────── */
+
+/* JetBrains Mono — default editor face. */
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/700.css';
+
+/* Fira Code — popular alternative with ligatures. */
+@import '@fontsource/fira-code/400.css';
+@import '@fontsource/fira-code/700.css';
+
+/* Source Code Pro — Adobe's classic monospace. */
+@import '@fontsource/source-code-pro/400.css';
+@import '@fontsource/source-code-pro/700.css';
+
+/* IBM Plex Mono — clean modern monospace. */
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/700.css';
+
+/* Inconsolata — narrow workhorse face. */
+@import '@fontsource/inconsolata/400.css';
+@import '@fontsource/inconsolata/700.css';
+
+/* Roboto Mono — paired well with general Roboto UI fonts. */
+@import '@fontsource/roboto-mono/400.css';
+@import '@fontsource/roboto-mono/700.css';

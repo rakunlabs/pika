@@ -1,6 +1,103 @@
 /* stylelint-disable-next-line import-notation */
 @import 'tailwindcss';
 
+/* Self-hosted monospace fonts for the code editor. See fonts.css for
+   the rationale — every face exposed in the Appearance > Font family
+   dropdown is bundled here so previews always render correctly. */
+@import './fonts.css';
+
+/* Tailwind v4 uses CSS-first config. Enable the `dark:` variant against
+   a `.dark` class on a parent element. The prefs store toggles this
+   class on <html> based on the user's app theme preference. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Brand palette.
+   Reference colors picked for this project:
+     #1D3557  deep navy           (brand-700, primary actions)
+     #EB5E28  burnt orange        (accent-600, highlights / call-outs)
+     #FF9F1C  amber               (accent-400, warning / attention)
+     #F95738  coral red           (accent-500, destructive / alert)
+   The full scales below are computed around those anchors so the
+   familiar Tailwind utility ergonomics (brand-50 … brand-900) still
+   hold. `brand-*` is the calm navy used as the default primary
+   action color (replaces the old "blue" everywhere); `accent-*` is
+   the warm orange used sparingly for emphasis (active pills,
+   selected file highlights) where the navy would feel too quiet.
+   ──────────────────────────────────────────────────────────────────────── */
+@theme {
+  /* Navy — primary actions, focus rings, links. */
+  --color-brand-50:  #eaf0f7;
+  --color-brand-100: #cbd8e8;
+  --color-brand-200: #94aece;
+  --color-brand-300: #5d84b3;
+  --color-brand-400: #355f93;
+  --color-brand-500: #1d3557;
+  --color-brand-600: #182c49;
+  --color-brand-700: #14253c;
+  --color-brand-800: #0f1c2e;
+  --color-brand-900: #0a1320;
+
+  /* Teal — "selected / active" highlight. Used everywhere we previously
+     reached for a warm orange (file tree selection, tab indicators,
+     "you" row, capability picker chips, etc.). Cooler tone reads as
+     calmer next to the navy navbar and the warm-grey dark surfaces. */
+  --color-accent-50:  #e5f5f4;
+  --color-accent-100: #c2e9e6;
+  --color-accent-200: #84d3cd;
+  --color-accent-300: #46bdb5;
+  --color-accent-400: #1ca99e;
+  --color-accent-500: #0e9594;
+  --color-accent-600: #0c7a78;
+  --color-accent-700: #095e5c;
+  --color-accent-800: #074645;
+  --color-accent-900: #052f2e;
+
+  /* Vermilion — destructive/primary call-to-action. Used in just a few
+     places where we want a true red punch (Render Preview, etc.). Kept
+     separate from `accent-*` so changes to the selection palette don't
+     accidentally restyle the destructive surfaces. */
+  --color-vermilion-50:  #fdecef;
+  --color-vermilion-100: #fbd0d7;
+  --color-vermilion-200: #f7a4af;
+  --color-vermilion-300: #f47887;
+  --color-vermilion-400: #f14c5f;
+  --color-vermilion-500: #ef233c;
+  --color-vermilion-600: #c71e32;
+  --color-vermilion-700: #9f1828;
+  --color-vermilion-800: #77121e;
+  --color-vermilion-900: #4f0c14;
+
+  /* Cool neutral — info pills, dark-mode card surfaces. */
+  --color-cool-50:  #edf2f4;
+  --color-cool-100: #dce4e8;
+  --color-cool-200: #c2cdd5;
+  --color-cool-300: #a7b6c1;
+  --color-cool-400: #8d99ae;
+  --color-cool-500: #6f7c91;
+  --color-cool-600: #586374;
+  --color-cool-700: #404956;
+  --color-cool-800: #2a313b;
+  --color-cool-900: #181c22;
+
+  /* Warm neutral — anchored on #403D39 (warm-600) and #1a1a1a (warm-900).
+     Used as the dark-mode surface palette: warmer than slate-* and pairs
+     naturally with the burnt-orange accent (#EB5E28). The dark theme
+     prefers these over slate to avoid the cold "GitHub dark" look. The
+     deepest tone is pushed to near-black #1a1a1a so card surfaces sit
+     comfortably below the navbar without competing with it. */
+  --color-warm-50:  #f4f3f2;
+  --color-warm-100: #e3e1de;
+  --color-warm-200: #c4c0ba;
+  --color-warm-300: #a39e96;
+  --color-warm-400: #7a746a;
+  --color-warm-500: #58534b;
+  --color-warm-600: #403d39;
+  --color-warm-700: #2d2b29;
+  --color-warm-800: #222120;
+  --color-warm-900: #1a1a1a;
+}
+
 html,
 body {
   @apply h-full w-full;
@@ -10,6 +107,14 @@ body {
 * {
   scrollbar-width: thin;
   scrollbar-color: #555 transparent;
+}
+
+.dark *::-webkit-scrollbar-thumb {
+  background: #444;
+}
+
+.dark *::-webkit-scrollbar-thumb:hover {
+  background: #666;
 }
 
 *::-webkit-scrollbar {

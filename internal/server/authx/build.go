@@ -1,6 +1,9 @@
 package authx
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/rakunlabs/ada/middleware/auth"
 	"github.com/rakunlabs/ada/middleware/auth/issuer"
 	"github.com/rakunlabs/ada/middleware/auth/session"
@@ -65,6 +68,14 @@ func buildAuthConfig(s *service.AuthSettings, base, version string, signupFirstF
 }
 
 // buildStrategies translates AuthSettings → concrete strategies.
+//
+// The passkey strategy is special: it depends on a long-lived
+// *service.PasskeyService which holds the in-process challenge store.
+// We instantiate (or replace) that service here at every Boot/Reload
+// so a settings change (RPID, origins, TTL) takes effect on the next
+// request without invalidating in-flight enrollments unnecessarily —
+// the previous service is GC'd when the *auth.Auth registry replaces
+// the strategy.
 func buildStrategies(d Deps, s *service.AuthSettings, onRegister func()) ([]strategy.Authenticator, error) {
 	var out []strategy.Authenticator
 
@@ -94,5 +105,45 @@ func buildStrategies(d Deps, s *service.AuthSettings, onRegister func()) ([]stra
 	if l != nil {
 		out = append(out, l)
 	}
+
+	// Passkey: wire the engine + service if the settings have it on.
+	// Disabled (nil engine) means we skip registration AND tear down
+	// any previously-bound PasskeyService so the /api/v1/me/passkeys
+	// endpoints return 503 immediately.
+	engine, err := BuildPasskeyEngine(s)
+	if err != nil {
+		return nil, fmt.Errorf("passkey engine: %w", err)
+	}
+	if engine != nil {
+		ttl := time.Duration(0)
+		if s.Passkey != nil {
+			ttl = s.Passkey.ChallengeTTL
+		}
+		ps := service.NewPasskeyService(d.Svc, engine, ttl)
+		d.Svc.SetPasskeyService(ps)
+
+		name, label := "passkey", "Passkey"
+		if s.Passkey != nil {
+			if s.Passkey.Name != "" {
+				name = s.Passkey.Name
+			}
+			if s.Passkey.Label != "" {
+				label = s.Passkey.Label
+			}
+		}
+		strat, err := BuildPasskeyStrategy(engine, ps, name, label)
+		if err != nil {
+			return nil, fmt.Errorf("passkey strategy: %w", err)
+		}
+		if strat != nil {
+			out = append(out, strat)
+		}
+	} else {
+		// Tear down any prior coordinator so the API endpoints stop
+		// accepting enroll requests as soon as an operator turns the
+		// feature off.
+		d.Svc.SetPasskeyService(nil)
+	}
+
 	return out, nil
 }
