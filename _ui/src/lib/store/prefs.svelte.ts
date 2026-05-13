@@ -6,8 +6,11 @@ import axios from 'axios';
 export const DEFAULT_APP_THEME = 'system' as const;
 export const DEFAULT_EDITOR_THEME = 'one-dark' as const;
 export const DEFAULT_EDITOR_FONT_SIZE = 13;
+// Geist Mono leads the stack so new users (whose stored value is "" /
+// unset) get it by default. The trailing chain keeps older preference
+// rows working when their stored value is just "JetBrains Mono, ...".
 export const DEFAULT_EDITOR_FONT_FAMILY =
-  "JetBrains Mono, Fira Code, Menlo, Monaco, monospace";
+  "'Geist Mono', 'JetBrains Mono', Fira Code, Menlo, Monaco, monospace";
 export const DEFAULT_EDITOR_LINE_WRAP = false;
 export const DEFAULT_LEFT_WIDTH = 250;
 export const DEFAULT_RIGHT_WIDTH = 280;

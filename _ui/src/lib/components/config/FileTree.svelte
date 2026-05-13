@@ -30,6 +30,13 @@
  }, 300);
  }
 
+ // Flip between 'all' (path + content) and 'name' (path only).
+ // The store re-runs the in-flight query for us so the user sees the
+ // effect of the toggle immediately, no second keystroke required.
+ function toggleSearchMode() {
+ configStore.setSearchMode(configStore.searchMode === 'name' ? 'all' : 'name');
+ }
+
  function handleSearchKeyDown(e: KeyboardEvent) {
  if (e.key === 'Enter') {
  // Immediate search on Enter
@@ -125,7 +132,7 @@
  <Search size={14} class="text-gray-400 dark:text-slate-500 shrink-0" />
  <input
  type="text"
- placeholder="Search configs..."
+ placeholder={configStore.searchMode === 'name' ? 'Search file names...' : 'Search configs...'}
  bind:value={searchInput}
  oninput={handleSearchInput}
  onkeydown={handleSearchKeyDown}
@@ -133,6 +140,20 @@
  onblur={() => isSearchFocused = false}
  class="flex-1 border-none outline-none text-xs bg-transparent min-w-0 placeholder:text-gray-400 dark:text-slate-500"
  />
+ <button
+ class="flex items-center justify-center p-0.5 rounded bg-transparent border-none cursor-pointer transition-colors
+ {configStore.searchMode === 'name'
+ ? 'text-brand-500 bg-brand-50 dark:bg-brand-900/30 hover:bg-brand-100 dark:hover:bg-brand-900/50'
+ : 'text-gray-400 dark:text-slate-500 hover:text-gray-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700'}"
+ onclick={toggleSearchMode}
+ title={configStore.searchMode === 'name'
+ ? 'Name-only search active — click to also search file contents'
+ : 'Click to search file names only (skips reading file contents)'}
+ aria-label="Toggle name-only search"
+ aria-pressed={configStore.searchMode === 'name'}
+ >
+ <FileText size={14} />
+ </button>
  {#if configStore.isSearching}
  <button
  class="flex items-center justify-center p-0.5 rounded text-amber-500 bg-transparent border-none cursor-pointer hover:text-red-500 hover:bg-red-50"
@@ -190,17 +211,13 @@
  <div class="px-3 py-1 text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider bg-slate-50 dark:bg-warm-900 border-b border-slate-100 dark:border-warm-700">
  Content Matches
  </div>
- {#each contentResults as result (`${result.path}:${result.line}`)}
+ {#each contentResults as result (result.path)}
  <button
- class="flex flex-col w-full px-3 py-1.5 text-left bg-transparent border-none border-b border-slate-100 dark:border-warm-700 cursor-pointer hover:bg-brand-50 dark:hover:bg-brand-900/30 transition-colors"
+ class="flex items-center gap-2 w-full px-3 py-1.5 text-left bg-transparent border-none border-b border-slate-100 dark:border-warm-700 cursor-pointer hover:bg-brand-50 dark:hover:bg-brand-900/30 transition-colors"
  onclick={() => configStore.openFile(result.path)}
  >
- <div class="flex items-center gap-1.5">
  <File size={11} class="text-slate-400 dark:text-slate-500 shrink-0" />
  <span class="text-[11px] font-medium text-gray-700 dark:text-slate-200 overflow-hidden text-ellipsis whitespace-nowrap">{result.path}</span>
- <span class="text-[10px] text-slate-400 dark:text-slate-500 shrink-0">:{result.line}</span>
- </div>
- <span class="text-[11px] text-slate-500 dark:text-slate-400 overflow-hidden text-ellipsis whitespace-nowrap mt-0.5 pl-[19px]">{result.snippet}</span>
  </button>
  {/each}
  {/if}

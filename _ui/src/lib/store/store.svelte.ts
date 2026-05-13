@@ -8,6 +8,10 @@ export interface AppInfo {
   version: string;
   commit?: string;
   date?: string;
+  // Editable branding subtitle from auth settings; mirrors the value
+  // /login/info exposes so the post-login navbar can show the same
+  // string the login card shows. Empty/undefined when unset.
+  subtitle?: string;
   capabilities?: Capability[];
   raw_mounts?: RawMount[];
   // Effective capability keys for the current user (e.g. ["files.read", "users.manage"]).
@@ -17,6 +21,13 @@ export interface AppInfo {
   is_superadmin?: boolean;
   // Username of the current authenticated user (server-side identity).
   user?: string;
+  // VaultEnabled mirrors svc.VaultCoord() != nil on the server. When
+  // false, the SPA hides the /vault link entirely — the routes themselves
+  // 503 in that case, so a stray bookmark just fails closed.
+  vault_enabled?: boolean;
+  // VaultItemTypes is the server's known item-type vocabulary, used by
+  // the new-item picker. Empty when vault is disabled.
+  vault_item_types?: string[];
 }
 
 export interface Identity {
@@ -34,9 +45,16 @@ export interface Identity {
 export interface UserInfo {
   id: string;
   username: string;
+  email?: string;
+  display_name?: string;
   disabled: boolean;
   is_superadmin: boolean;
   active_sessions: number;
+  // has_totp is true when the user has an Enabled TOTP enrollment.
+  // Pending-but-not-confirmed enrollments don't count — only the
+  // live second factor flips this flag. The admin UI uses it to
+  // show a 2FA badge and conditionally render the Reset action.
+  has_totp: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -158,8 +176,32 @@ function createAppStore() {
     loginInfo = data as LoginInfo;
   }
 
-  async function loginWith(url: string, body: Record<string, string>): Promise<void> {
-    await axios.post(url, body, { headers: { Accept: 'application/json' } });
+  // TOTPChallenge is the step-up response shape the MFA-wrapped login
+  // strategy writes on phase 1. The caller renders a TOTP form and
+  // calls finishMFA() with the session id + the 6-digit code.
+  //
+  // expires_in is the configured pending TTL in seconds — the UI
+  // shows a countdown so the user knows they have ~5 minutes to enter
+  // the code before the challenge is discarded and they have to
+  // re-enter their password.
+  // eslint-disable-next-line no-unused-vars
+  interface TOTPChallenge {
+    phase: 'totp_required';
+    totp_session_id: string;
+    strategy: string;
+    expires_in: number;
+  }
+
+  async function loginWith(url: string, body: Record<string, string>): Promise<TOTPChallenge | null> {
+    const res = await axios.post(url, body, { headers: { Accept: 'application/json' } });
+    // The MFA decorator wraps phase-1 success: when the user is TOTP-
+    // enrolled the response body is the step-up challenge instead of
+    // ada's standard {strategy, redirect_path}. Detect by the
+    // `phase` field — a regular success response never carries it.
+    const data = res?.data;
+    if (data && typeof data === 'object' && data.phase === 'totp_required') {
+      return data as TOTPChallenge;
+    }
     // Refresh identity (/login/me), app info (/api/v1/info) and the
     // user's UI preferences in parallel.
     //
@@ -169,6 +211,24 @@ function createAppStore() {
     // Login.svelte caller and leave the UI on the login screen even
     // though the cookie was set. loadIdentity is the source of truth
     // for "are we authenticated"; the other two are best-effort.
+    await Promise.allSettled([loadIdentity(), loadInfo(), prefsStore.loadPreferences()]);
+    return null;
+  }
+
+  // finishMFA submits the TOTP code (or a recovery code) for a
+  // pending step-up challenge. Posts to the SAME url the password
+  // POST went to — the MFA strategy dispatches phase-2 by inspecting
+  // the body shape (presence of totp_session_id + code).
+  //
+  // On success the server mints the real session cookie and we
+  // refresh identity exactly like loginWith does. On failure the
+  // axios error surfaces with the standard {error, message} body.
+  async function finishMFA(url: string, totpSessionID: string, code: string): Promise<void> {
+    await axios.post(
+      url,
+      { totp_session_id: totpSessionID, code },
+      { headers: { Accept: 'application/json' } }
+    );
     await Promise.allSettled([loadIdentity(), loadInfo(), prefsStore.loadPreferences()]);
   }
 
@@ -241,6 +301,18 @@ function createAppStore() {
 
   async function kickUser(id: string): Promise<void> {
     await axios.post(`/api/v1/users-kick/${id}`);
+    await loadUsers();
+  }
+
+  // resetUserTOTP wipes a target user's TOTP enrollment from the
+  // admin side — used when a user has lost both their authenticator
+  // and their recovery codes. Idempotent on the server: calling it
+  // on a user without TOTP returns 204 too.
+  //
+  // Requires CapUsersManage; failures (403, 404) surface as axios
+  // errors the caller can map to a toast.
+  async function resetUserTOTP(id: string): Promise<void> {
+    await axios.delete(`/api/v1/users-totp/${id}`);
     await loadUsers();
   }
 
@@ -341,6 +413,7 @@ function createAppStore() {
     loadIdentity,
     loadLoginInfo,
     loginWith,
+    finishMFA,
     registerWith,
     logout,
     loadUsers,
@@ -348,6 +421,7 @@ function createAppStore() {
     updateUser,
     deleteUser,
     kickUser,
+    resetUserTOTP,
     loadPermissions,
     createPermission,
     updatePermission,

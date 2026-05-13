@@ -5,6 +5,7 @@ go 1.26
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/bmatcuk/doublestar/v4 v4.10.0
+	github.com/dgraph-io/badger/v4 v4.9.1
 	github.com/fclairamb/ftpserverlib v0.30.0
 	github.com/go-ldap/ldap/v3 v3.4.13
 	github.com/goccy/go-yaml v1.19.2
@@ -13,16 +14,16 @@ require (
 	github.com/nats-io/nats.go v1.50.0
 	github.com/pin/tftp/v3 v3.2.0
 	github.com/pkg/sftp v1.13.10
-	github.com/rakunlabs/ada v0.4.0
-	github.com/rakunlabs/ada/handler/folder v0.4.0
-	github.com/rakunlabs/ada/middleware/auth v0.4.0
-	github.com/rakunlabs/ada/middleware/cors v0.4.0
-	github.com/rakunlabs/ada/middleware/log v0.4.0
-	github.com/rakunlabs/ada/middleware/ratelimit v0.4.0
-	github.com/rakunlabs/ada/middleware/recover v0.4.0
-	github.com/rakunlabs/ada/middleware/requestid v0.4.0
-	github.com/rakunlabs/ada/middleware/server v0.4.0
-	github.com/rakunlabs/ada/middleware/telemetry v0.4.0
+	github.com/rakunlabs/ada v0.4.1
+	github.com/rakunlabs/ada/handler/folder v0.4.1
+	github.com/rakunlabs/ada/middleware/auth v0.4.1
+	github.com/rakunlabs/ada/middleware/cors v0.4.1
+	github.com/rakunlabs/ada/middleware/log v0.4.1
+	github.com/rakunlabs/ada/middleware/ratelimit v0.4.1
+	github.com/rakunlabs/ada/middleware/recover v0.4.1
+	github.com/rakunlabs/ada/middleware/requestid v0.4.1
+	github.com/rakunlabs/ada/middleware/server v0.4.1
+	github.com/rakunlabs/ada/middleware/telemetry v0.4.1
 	github.com/rakunlabs/alan v0.5.0
 	github.com/rakunlabs/bw v0.2.0
 	github.com/rakunlabs/chu v0.4.4
@@ -44,7 +45,6 @@ require (
 	github.com/Azure/go-ntlmssp v0.1.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/dgraph-io/badger/v4 v4.9.1 // indirect
 	github.com/dgraph-io/ristretto/v2 v2.2.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -104,17 +104,3 @@ require (
 	google.golang.org/grpc v1.79.3 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-// Local development override: the passkey strategy lives in the
-// ada/middleware/auth tree and isn't released yet. The replace
-// directive points at the local checkout so changes flow directly
-// without a publish cycle. Drop once ada cuts a tagged release that
-// includes the strategy/passkey package.
-replace github.com/rakunlabs/ada/middleware/auth => ../ada/middleware/auth
-
-// ada/middleware/auth has its own replace that points at
-// ../../handler/folder relative to the auth module. When we replace
-// the auth module with a local path, that relative path resolves
-// against our pika checkout, not the ada checkout — so we mirror
-// the replace here.
-replace github.com/rakunlabs/ada/handler/folder => ../ada/handler/folder

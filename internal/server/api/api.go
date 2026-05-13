@@ -112,6 +112,49 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.PATCH("/api/v1/me/passkeys/*", m.Wrap(api.renameMyPasskey))
 	m.DELETE("/api/v1/me/passkeys/*", m.Wrap(api.deleteMyPasskey))
 
+	// TOTP / 2FA self-service: status, enroll (begin/finish),
+	// disable, regenerate recovery codes. The login-time step-up
+	// verification is owned by ada's strategy mux via the MFA
+	// wrapper in authx — not these endpoints. These only manage the
+	// enrollment lifecycle.
+	m.GET("/api/v1/me/totp", m.Wrap(api.getMyTOTPStatus))
+	m.POST("/api/v1/me/totp/begin", m.Wrap(api.beginMyTOTPEnroll))
+	m.POST("/api/v1/me/totp/finish", m.Wrap(api.finishMyTOTPEnroll))
+	m.DELETE("/api/v1/me/totp", m.Wrap(api.disableMyTOTP))
+	m.POST("/api/v1/me/totp/recovery-codes", m.Wrap(api.regenerateMyTOTPRecoveryCodes))
+
+	// Personal vault self-service. Every endpoint is scoped to the
+	// calling user — the server resolves user_id from the session,
+	// not from any path param. Returns 503 when the vault feature
+	// isn't wired (s.VaultCoord() == nil) so the SPA can hide the
+	// /vault route entirely instead of surfacing noisy errors.
+	//
+	// Account lifecycle: status (always 200), account (404 when
+	// not initialized), setup (one-shot, 409 on re-init),
+	// unlock-check (rate-limited), rotate-password, recovery-kit,
+	// session-lock, reset (destructive).
+	m.GET("/api/v1/me/vault/status", m.Wrap(api.getMyVaultStatus))
+	m.GET("/api/v1/me/vault/account", m.Wrap(api.getMyVaultAccount))
+	m.POST("/api/v1/me/vault/setup", m.Wrap(api.setupMyVault))
+	m.POST("/api/v1/me/vault/unlock-check", m.Wrap(api.unlockMyVaultCheck))
+	m.POST("/api/v1/me/vault/rotate-password", m.Wrap(api.rotateMyVaultMasterPassword))
+	m.POST("/api/v1/me/vault/recovery-kit", m.Wrap(api.regenerateMyVaultRecoveryKit))
+	m.PUT("/api/v1/me/vault/session-lock", m.Wrap(api.setMyVaultSessionLock))
+	m.DELETE("/api/v1/me/vault", m.Wrap(api.resetMyVault))
+
+	// Items: standard CRUD, soft-delete + purge via DELETE with
+	// ?purge=true, restore, touch (last-used-at), versions list.
+	// PathValue("*") is the item id; the wildcard convention matches
+	// /users/* and the rest of the API so route parsing is uniform.
+	m.GET("/api/v1/me/vault/items", m.Wrap(api.listMyVaultItems))
+	m.POST("/api/v1/me/vault/items", m.Wrap(api.createMyVaultItem))
+	m.GET("/api/v1/me/vault/items/*", m.Wrap(api.getMyVaultItem))
+	m.PUT("/api/v1/me/vault/items/*", m.Wrap(api.updateMyVaultItem))
+	m.DELETE("/api/v1/me/vault/items/*", m.Wrap(api.softDeleteMyVaultItem))
+	m.POST("/api/v1/me/vault/items-restore/*", m.Wrap(api.restoreMyVaultItem))
+	m.POST("/api/v1/me/vault/items-use/*", m.Wrap(api.touchMyVaultItem))
+	m.GET("/api/v1/me/vault/items-versions/*", m.Wrap(api.listMyVaultItemVersions))
+
 	// User management endpoints.
 	m.GET("/api/v1/users", m.Wrap(api.withPerm(service.CapUsersManage, api.listUsers)))
 	m.POST("/api/v1/users", m.Wrap(api.withPerm(service.CapUsersManage, api.createUser)))
@@ -119,6 +162,12 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.PATCH("/api/v1/users/*", m.Wrap(api.withPerm(service.CapUsersManage, api.updateUser)))
 	m.DELETE("/api/v1/users/*", m.Wrap(api.withPerm(service.CapUsersManage, api.deleteUser)))
 	m.POST("/api/v1/users-kick/*", m.Wrap(api.withPerm(service.CapUsersManage, api.kickUser)))
+	// Admin TOTP reset: the escape hatch when a user has lost both
+	// their authenticator and their recovery codes. Sibling path
+	// (not nested under /users/{id}/totp) because the /users/*
+	// wildcard catches everything under it — same convention as
+	// /users-kick. Idempotent on the server side.
+	m.DELETE("/api/v1/users-totp/*", m.Wrap(api.withPerm(service.CapUsersManage, api.adminResetUserTOTP)))
 
 	// Permission bundle management.
 	m.GET("/api/v1/permissions", m.Wrap(api.withPerm(service.CapPermissionsManage, api.listPermissions)))
@@ -295,25 +344,50 @@ func (a *api) infoHandler(c *ada.Context) error {
 		caps = []string{}
 	}
 
+	// Surface the editable branding subtitle from auth settings so the
+	// authenticated UI (navbar) can render the same value the login
+	// screen shows via /login/info. Reading from the same source
+	// (settings DB > AuthSettings.UI.Subtitle) keeps the two views in
+	// sync automatically when an operator edits the setting. nil is
+	// treated as "not configured": Subtitle stays empty and omitempty
+	// drops it from the JSON.
+	var subtitle string
+	if as := a.svc.GetAuthSettings(ctx); as != nil {
+		subtitle = as.UI.Subtitle
+	}
+
+	// VaultEnabled mirrors a.svc.VaultCoord() != nil so the SPA can
+	// gate the /vault link in the navigation. The known item-type
+	// vocabulary is also surfaced here so the SPA's "new item"
+	// picker doesn't have to hard-code the list (and stays in sync
+	// when we add a new type server-side).
+	vaultEnabled := a.svc.VaultCoord() != nil
+
 	resp := struct {
 		Info
-		User          string               `json:"user,omitempty"`
-		AuthEnabled   bool                 `json:"auth_enabled"`
-		BuiltinAuth   bool                 `json:"builtin_auth"`
-		IsSuperadmin  bool                 `json:"is_superadmin"`
-		Permissions   []string             `json:"permissions"`
-		Capabilities  []service.Capability `json:"capabilities"`
-		SetupRequired bool                 `json:"setup_required,omitempty"`
-		RawMounts     []MountInfo          `json:"raw_mounts,omitempty"`
+		Subtitle            string                  `json:"subtitle,omitempty"`
+		User                string                  `json:"user,omitempty"`
+		AuthEnabled         bool                    `json:"auth_enabled"`
+		BuiltinAuth         bool                    `json:"builtin_auth"`
+		IsSuperadmin        bool                    `json:"is_superadmin"`
+		Permissions         []string                `json:"permissions"`
+		Capabilities        []service.Capability    `json:"capabilities"`
+		SetupRequired       bool                    `json:"setup_required,omitempty"`
+		RawMounts           []MountInfo             `json:"raw_mounts,omitempty"`
+		VaultEnabled        bool                    `json:"vault_enabled"`
+		VaultItemTypes      []service.VaultItemType `json:"vault_item_types,omitempty"`
 	}{
-		Info:         a.info,
-		User:         username,
-		AuthEnabled:  true,
-		BuiltinAuth:  true,
-		IsSuperadmin: isSuperadmin,
-		Permissions:  caps,
-		Capabilities: service.KnownCapabilities,
-		RawMounts:    a.rawHandler.MountsInfo(),
+		Info:           a.info,
+		Subtitle:       subtitle,
+		User:           username,
+		AuthEnabled:    true,
+		BuiltinAuth:    true,
+		IsSuperadmin:   isSuperadmin,
+		Permissions:    caps,
+		Capabilities:   service.KnownCapabilities,
+		RawMounts:      a.rawHandler.MountsInfo(),
+		VaultEnabled:   vaultEnabled,
+		VaultItemTypes: service.KnownVaultItemTypes,
 	}
 
 	// Fresh-install detection: no users exist yet.
@@ -1346,6 +1420,11 @@ func (a *api) searchHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// mode=name skips reading file contents entirely (faster + safer,
+	// no content scanning). Default (omitted or any other value) keeps
+	// the existing path + content behaviour for backward compatibility.
+	nameOnly := r.URL.Query().Get("mode") == "name"
+
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -1367,7 +1446,7 @@ func (a *api) searchHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Run search in background
 	go func() {
-		_ = a.svc.Search(ctx, query, results)
+		_ = a.svc.Search(ctx, service.SearchOptions{Query: query, NameOnly: nameOnly}, results)
 	}()
 
 	// Stream results as SSE events. When the user's files.read grant is

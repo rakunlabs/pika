@@ -210,15 +210,34 @@ func TestSessionStore_SaveCapturesUserIDFromPair(t *testing.T) {
 	}
 }
 
-// TestSessionStore_ProvisionsExternalUser verifies that when an OAuth2
-// login writes a session with provider != "local", the session store
-// auto-creates the users row (via FindOrCreateExternalUser) and links
-// the session to it. Without this, OAuth2 users would be invisible to
-// admin operations like kick and list.
-func TestSessionStore_ProvisionsExternalUser(t *testing.T) {
+// TestSessionStore_BindsExistingExternalUser verifies the happy path
+// for an OAuth2 session whose (provider, subject) is already linked
+// to a pika user — typically created up-front by the user-sync
+// engine. The session row must be bound to that existing user so
+// admin operations like kick work uniformly across strategies.
+//
+// Pre-condition: the user + identity link have been provisioned by
+// user-sync (simulated here via FindOrCreateExternalUser, which is
+// the legitimate caller). The session-save path itself MUST NOT
+// create users — that invariant is covered by
+// TestSessionStore_DoesNotProvisionUnknownExternal.
+func TestSessionStore_BindsExistingExternalUser(t *testing.T) {
 	svc := newTestService(t)
-	store := NewSessionStore(svc, "pika_session")
 
+	// Pre-provision the external user as user-sync would.
+	preInfo, err := svc.FindOrCreateExternalUser(context.Background(), service.ExternalIdentityInput{
+		Provider:      "google",
+		Subject:       "google-sub-777",
+		Email:         "carol@example.com",
+		EmailVerified: true,
+		DisplayName:   "Carol",
+		Username:      "Carol",
+	})
+	if err != nil {
+		t.Fatalf("pre-provision external user: %v", err)
+	}
+
+	store := NewSessionStore(svc, "pika_session")
 	const sid = "oauth-sid-1"
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.AddCookie(&http.Cookie{Name: "pika_session", Value: sid})
@@ -228,8 +247,6 @@ func TestSessionStore_ProvisionsExternalUser(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 
-	// Ada issuer shape but with provider="google" (external). This is
-	// what the session store sees when an OAuth2 login just completed.
 	pairJSON, _ := json.Marshal(map[string]any{
 		"session_id": sid,
 		"identity": map[string]any{
@@ -249,32 +266,216 @@ func TestSessionStore_ProvisionsExternalUser(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Verify the users row exists with the external flag set.
-	info, err := svc.GetUserByIdentity(context.Background(), "google", "google-sub-777")
-	if err != nil {
-		t.Fatalf("GetUserByIdentity: %v", err)
-	}
-	if !info.External {
-		t.Error("provisioned user should have External=true")
-	}
-	if info.Email != "carol@example.com" {
-		t.Errorf("Email = %q", info.Email)
-	}
-
-	// Verify the session row points at that user.
 	row, err := svc.GetRawSession(context.Background(), sid)
 	if err != nil {
 		t.Fatalf("GetRawSession: %v", err)
 	}
-	if row.UserID != info.ID {
-		t.Errorf("session.UserID = %q, want %q (provisioned)", row.UserID, info.ID)
+	if row.UserID != preInfo.ID {
+		t.Errorf("session.UserID = %q, want %q (pre-provisioned)", row.UserID, preInfo.ID)
 	}
 
-	// Kick works for OAuth2 users too.
-	if err := svc.KickUser(context.Background(), info.ID); err != nil {
+	if err := svc.KickUser(context.Background(), preInfo.ID); err != nil {
 		t.Fatalf("KickUser: %v", err)
 	}
 	if _, err := svc.GetRawSession(context.Background(), sid); err == nil {
 		t.Error("OAuth2 session should be gone after kick")
+	}
+}
+
+// TestSessionStore_DoesNotProvisionUnknownExternal is the regression
+// test for the rule: the live auth path MUST NOT create users. Only
+// user-sync (internal/usersync) is permitted to materialize new
+// users; a login from an unrecognized external identity must persist
+// the session unbound (no user_id) and emit a warning, never silently
+// invent a duplicate users row.
+//
+// Without this guarantee, an OAuth2 sign-in for an unknown subject
+// would create a brand-new "google_2"-style user even when the human
+// already exists in pika under a different username — leaking
+// permissions and confusing admins.
+func TestSessionStore_DoesNotProvisionUnknownExternal(t *testing.T) {
+	svc := newTestService(t)
+	store := NewSessionStore(svc, "pika_session")
+
+	const sid = "oauth-sid-unknown"
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "pika_session", Value: sid})
+
+	sess, err := store.Get(r, "pika_session")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	pairJSON, _ := json.Marshal(map[string]any{
+		"session_id": sid,
+		"identity": map[string]any{
+			"subject":  "unknown-sub-999",
+			"name":     "Stranger",
+			"provider": "google",
+		},
+		"access":  map[string]any{"value": "a", "expires_at": time.Now().Add(time.Hour)},
+		"refresh": map[string]any{"value": "r", "expires_at": time.Now().Add(24 * time.Hour)},
+	})
+	sess.Values["pair"] = string(pairJSON)
+
+	w := httptest.NewRecorder()
+	if err := store.Save(r, w, sess); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Identity must NOT resolve — no user was provisioned.
+	if _, err := svc.GetUserByIdentity(context.Background(), "google", "unknown-sub-999"); err == nil {
+		t.Error("expected no users row for unknown external identity; auth path provisioned one")
+	}
+
+	// Session row still exists (login isn't blocked) but is unbound
+	// from any user_id, which is the fail-closed behavior we want.
+	row, err := svc.GetRawSession(context.Background(), sid)
+	if err != nil {
+		t.Fatalf("GetRawSession: %v", err)
+	}
+	if row.UserID != "" {
+		t.Errorf("session.UserID = %q, want empty (unbound, no auto-provision)", row.UserID)
+	}
+}
+
+// TestSessionStore_StampsUserIDClaim locks in the claim-decoration
+// contract: after Save resolves (Provider, Subject) → users.id, it
+// MUST embed that id into the serialized identity claims under
+// PikaUserIDClaim so the per-request CapResolver can skip the
+// provider-based dispatch. Without this, every authenticated request
+// pays the cost of re-running the dispatch, and worse, every code
+// path that re-runs the dispatch is another place the same bug class
+// ("passkey treated as external → zero caps") can regress.
+func TestSessionStore_StampsUserIDClaim(t *testing.T) {
+	svc := newTestService(t)
+	user, err := svc.CreateSetupUser(context.Background(), &service.CreateUserRequest{
+		Username: "alice",
+		Password: "x",
+	})
+	if err != nil {
+		t.Fatalf("CreateSetupUser: %v", err)
+	}
+
+	store := NewSessionStore(svc, "pika_session")
+	const sid = "claim-sid"
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "pika_session", Value: sid})
+
+	sess, err := store.Get(r, "pika_session")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	pairJSON, _ := json.Marshal(map[string]any{
+		"session_id": sid,
+		"identity": map[string]any{
+			"subject":  "alice",
+			"provider": "passkey",
+		},
+		"access":  map[string]any{"value": "a", "expires_at": time.Now().Add(time.Hour)},
+		"refresh": map[string]any{"value": "r", "expires_at": time.Now().Add(24 * time.Hour)},
+	})
+	sess.Values["pair"] = string(pairJSON)
+
+	w := httptest.NewRecorder()
+	if err := store.Save(r, w, sess); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Re-read the persisted payload and inspect the embedded identity
+	// claims. The pair is round-tripped as JSON, so claims surface as
+	// a generic map[string]any.
+	row, err := svc.GetRawSession(context.Background(), sid)
+	if err != nil {
+		t.Fatalf("GetRawSession: %v", err)
+	}
+	var persisted map[string]any
+	if err := json.Unmarshal(row.Payload, &persisted); err != nil {
+		t.Fatalf("payload unmarshal: %v", err)
+	}
+	pairStr, _ := persisted["pair"].(string)
+	if pairStr == "" {
+		t.Fatal("payload missing pair")
+	}
+	var pair map[string]any
+	if err := json.Unmarshal([]byte(pairStr), &pair); err != nil {
+		t.Fatalf("pair unmarshal: %v", err)
+	}
+	ident, _ := pair["identity"].(map[string]any)
+	claims, _ := ident["claims"].(map[string]any)
+	got, _ := claims[PikaUserIDClaim].(string)
+	if got != user.ID {
+		t.Errorf("pika_user_id claim = %q, want %q", got, user.ID)
+	}
+}
+
+// TestSessionStore_PasskeyLoginBindsExistingLocalUser locks in the
+// passkey ↔ local-user resolution: ada stamps id.Provider with the
+// strategy name ("passkey" by default), but a passkey assertion has
+// already authenticated against an existing pika user (the credential
+// is FK'd to users.id in the passkeys table). The session store must
+// recognize "passkey" as local-equivalent and bind to the existing
+// user via username lookup — NEVER fall into the external branch and
+// auto-create a "<username>_2" duplicate. This was the original bug:
+// after enrolling a passkey, the first passkey login spawned a second
+// users row.
+func TestSessionStore_PasskeyLoginBindsExistingLocalUser(t *testing.T) {
+	svc := newTestService(t)
+
+	user, err := svc.CreateSetupUser(context.Background(), &service.CreateUserRequest{
+		Username: "alice",
+		Password: "s3cret!",
+	})
+	if err != nil {
+		t.Fatalf("CreateSetupUser: %v", err)
+	}
+
+	store := NewSessionStore(svc, "pika_session")
+	const sid = "passkey-sid-1"
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "pika_session", Value: sid})
+
+	sess, err := store.Get(r, "pika_session")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	// Mirror what ada's passkey strategy writes after a successful
+	// FinishLogin: provider="passkey", subject=<username>.
+	pairJSON, _ := json.Marshal(map[string]any{
+		"session_id": sid,
+		"identity": map[string]any{
+			"subject":  "alice",
+			"name":     "Alice",
+			"provider": "passkey",
+		},
+		"access":  map[string]any{"value": "a", "expires_at": time.Now().Add(time.Hour)},
+		"refresh": map[string]any{"value": "r", "expires_at": time.Now().Add(24 * time.Hour)},
+	})
+	sess.Values["pair"] = string(pairJSON)
+
+	w := httptest.NewRecorder()
+	if err := store.Save(r, w, sess); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Session must be bound to the EXISTING alice — not a fresh
+	// "alice_2" provisioned via the external path.
+	row, err := svc.GetRawSession(context.Background(), sid)
+	if err != nil {
+		t.Fatalf("GetRawSession: %v", err)
+	}
+	if row.UserID != user.ID {
+		t.Errorf("session.UserID = %q, want %q (existing alice)", row.UserID, user.ID)
+	}
+	if row.Username != "alice" {
+		t.Errorf("session.Username = %q, want alice", row.Username)
+	}
+
+	// And no spurious external identity link should exist for
+	// (provider="passkey", subject="alice").
+	if _, err := svc.GetUserByIdentity(context.Background(), "passkey", "alice"); err == nil {
+		t.Error("passkey login must not create a user_identities row; passkey is local-equivalent")
 	}
 }

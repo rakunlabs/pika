@@ -13,7 +13,11 @@
    matches whatever rule fires here.
    ──────────────────────────────────────────────────────────────────── */
 
-/* JetBrains Mono — default editor face. */
+/* Geist Mono — Vercel's monospace; default editor face. */
+@import '@fontsource/geist-mono/400.css';
+@import '@fontsource/geist-mono/700.css';
+
+/* JetBrains Mono — alternative. */
 @import '@fontsource/jetbrains-mono/400.css';
 @import '@fontsource/jetbrains-mono/700.css';
 

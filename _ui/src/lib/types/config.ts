@@ -84,13 +84,16 @@ export interface Tab {
   viewMode: ViewMode;   // Current view mode: 'text' or 'hex'
 }
 
-// Search result from backend
+// Search result from backend (path-only for safety; no file contents leak)
 export interface SearchResult {
   path: string;
   type: 'name' | 'content';
-  line?: number;
-  snippet?: string;
 }
+
+// SearchMode picks what the backend walks:
+//  - 'all'  : path matches AND file content matches (default; reads every file)
+//  - 'name' : path matches only, no file contents are ever read (faster, safer)
+export type SearchMode = 'all' | 'name';
 
 // Vault AppRole authentication
 export interface VaultAppRole {

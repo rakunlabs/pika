@@ -63,6 +63,12 @@ export default defineConfig({
           ],
         },
         {
+          text: 'Personal vault',
+          items: [
+            { text: 'Overview', link: '/guide/vault' },
+          ],
+        },
+        {
           text: 'Operations',
           items: [
             { text: 'Authentication', link: '/guide/authentication' },

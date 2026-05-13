@@ -32,6 +32,11 @@ type Storage interface {
 	Settings() SettingsStorage
 	UserPreferences() UserPreferencesStorage
 	Passkeys() PasskeyStorage
+	PasskeyChallenges() PasskeyChallengeStorage
+	UserTOTPs() UserTOTPStorage
+	VaultAccounts() VaultAccountStorage
+	VaultItems() VaultItemStorage
+	VaultItemVersions() VaultItemVersionStorage
 
 	// Tx executes a function within a transaction.
 	// If the function returns an error, the transaction is rolled back.
@@ -372,6 +377,98 @@ type PasskeyStorage interface {
 	DeleteByUserID(ctx context.Context, userID string) error
 }
 
+// PasskeyChallenge is one in-flight WebAuthn ceremony session. Both
+// enrollment and assertion ceremonies use this row: enrollment sets
+// UserID (the user the ceremony belongs to); assertion login leaves
+// it empty (the user isn't known until the rawId comes back at
+// finish time).
+//
+// We persist the SessionData blob verbatim (JSON-serialized
+// ada/passkey.SessionData) rather than splitting its fields onto
+// columns. The struct's shape is owned by the ada library and we
+// want passkey ceremonies to keep working across ada upgrades that
+// add new fields — JSON gives us forward/backward compatibility for
+// free, at the cost of one indexed lookup per round trip.
+//
+// Kind tags the row so the security UI / audit log can tell enroll
+// challenges apart from login challenges without round-tripping
+// through the JSON blob. It is not part of the lookup key — the
+// session id alone is unique by construction (32-byte crypto/rand).
+//
+// ExpiresAt is indexed so the periodic sweep can range-seek expired
+// rows without scanning the whole bucket.
+type PasskeyChallenge struct {
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind"`              // "enroll" | "login"
+	UserID    string    `json:"user_id,omitempty"` // enroll only
+	Data      []byte    `json:"-"`                 // JSON-encoded passkey.SessionData; opaque to the service layer
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// PasskeyChallengeStorage persists short-lived WebAuthn ceremony
+// state. In a multi-instance pika deployment the begin and finish
+// requests may land on different nodes; this bucket (replicated
+// through the bw cluster) is what makes that work without sticky
+// sessions.
+//
+// Save/Get/Delete map one-to-one onto the ada/passkey.ChallengeStore
+// interface; the kind/userID fields are extra metadata for audit and
+// for the enrollment service's cross-user-smuggling check
+// (PasskeyService.FinishEnroll rejects a session whose userID
+// doesn't match the caller).
+type PasskeyChallengeStorage interface {
+	Save(ctx context.Context, c *PasskeyChallenge) error
+	Get(ctx context.Context, id string) (*PasskeyChallenge, error)
+	Delete(ctx context.Context, id string) error
+	// DeleteExpired removes every row whose ExpiresAt is in the past.
+	// Returns the number deleted so callers can log sweep activity.
+	DeleteExpired(ctx context.Context) (int, error)
+}
+
+// UserTOTP holds the persisted state for a single user's TOTP second
+// factor. One row per user (keyed by user_id) — TOTP isn't multi-device
+// like passkeys; a user enrolls one authenticator and shares the
+// secret with whichever apps they want to use.
+//
+// Secret is base32-encoded (the canonical form authenticator apps
+// emit/accept). It is the actual HMAC key — anyone with the secret
+// can generate valid codes. The row is marked json:"-" so it never
+// leaks through the API; the service layer also blanks the field on
+// every read except the brief enrollment window.
+//
+// RecoveryCodes are bcrypt hashes (NOT plaintext). The plaintext
+// codes are shown to the user exactly once at enrollment / regenerate
+// time; lost codes are not recoverable. On a successful login with a
+// recovery code the corresponding hash is removed from the slice
+// (single-use semantics).
+//
+// Enabled separates "user started enrollment but hasn't confirmed the
+// first code yet" (Enabled=false, row exists but doesn't gate login)
+// from "TOTP is live for this user" (Enabled=true, every login goes
+// through step-up). The two-step enrollment guards against the user
+// scanning the QR, closing the browser, and locking themselves out
+// because they couldn't prove they actually have the secret.
+type UserTOTP struct {
+	UserID        string    `json:"user_id"`
+	Secret        string    `json:"-"` // base32; never expose over API
+	Enabled       bool      `json:"enabled"`
+	RecoveryCodes []string  `json:"-"` // bcrypt hashes; never expose
+	CreatedAt     time.Time `json:"created_at"`
+	LastUsedAt    time.Time `json:"last_used_at,omitempty"`
+}
+
+// UserTOTPStorage manages the per-user TOTP state. One row per user;
+// Get/Delete take a user_id (not a synthetic primary key) since TOTP
+// is a one-to-one with users. Update and Set are kept distinct so the
+// service layer can express "insert new enrollment" vs "patch
+// existing" intent.
+type UserTOTPStorage interface {
+	Get(ctx context.Context, userID string) (*UserTOTP, error)
+	Set(ctx context.Context, t *UserTOTP) error
+	Delete(ctx context.Context, userID string) error
+}
+
 // Folder represents a directory containing folders and files.
 type Folder struct {
 	Folders  []string            `json:"folders"`
@@ -379,12 +476,26 @@ type Folder struct {
 	Variants map[string][]string `json:"variants,omitempty"` // file name -> variant keys
 }
 
-// SearchResult represents a single search match.
+// SearchResult represents a single search match. Only the path is exposed
+// so file contents never leak through search results.
 type SearchResult struct {
-	Path    string `json:"path"`              // config path
-	Type    string `json:"type"`              // "name" or "content"
-	Line    int    `json:"line,omitempty"`    // line number (content match)
-	Snippet string `json:"snippet,omitempty"` // matching line text (content match)
+	Path string `json:"path"` // config path
+	Type string `json:"type"` // "name" or "content"
+}
+
+// SearchOptions controls how Service.Search walks the tree. Kept as a
+// struct (rather than positional params) so we can add knobs like
+// MaxResults or IncludeVariants later without touching every caller.
+type SearchOptions struct {
+	// Query is the substring to look for (case-insensitive). Empty Query
+	// is treated as a no-op by Search.
+	Query string
+
+	// NameOnly skips reading file contents entirely. This is both faster
+	// (no I/O per file) and safer (file bytes never leave storage), at
+	// the cost of missing matches that only appear inside files. Useful
+	// when the caller only needs to locate a config by path.
+	NameOnly bool
 }
 
 // DataResult holds the resolved configuration data returned by GetData.

@@ -58,9 +58,16 @@
  }
 
  const hasMultipleTabs = $derived(filesStore.openTabs.length > 1);
- const ctxTabIndex = $derived(
- contextMenu ? filesStore.openTabs.findIndex(t => t.id === contextMenu.tabId) : -1
- );
+ // Local non-null binding so TS narrowing carries through the findIndex
+ // closure. The outer `contextMenu ? ... : -1` already gates on
+ // truthiness, but TS treats the closure capture as a fresh read of
+ // the variable (which is again possibly null) — pinning to a local
+ // makes the closure see a non-null `cm`.
+ const ctxTabIndex = $derived.by(() => {
+ const cm = contextMenu;
+ if (!cm) return -1;
+ return filesStore.openTabs.findIndex(t => t.id === cm.tabId);
+ });
  const hasTabsToRight = $derived(ctxTabIndex >= 0 && ctxTabIndex < filesStore.openTabs.length - 1);
  const hasTabsToLeft = $derived(ctxTabIndex > 0);
 </script>

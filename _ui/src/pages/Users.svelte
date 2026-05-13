@@ -1,7 +1,7 @@
 <script lang="ts">
  import { appStore, type UserInfo, type UserQuery, type PermissionInfo } from '@/lib/store/store.svelte';
  import { addToast } from '@/lib/store/toast.svelte';
- import { Plus, Trash2, UserCheck, UserX, KeyRound, LogOut, Search, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, Shield, ShieldCheck, Check, Users as UsersIcon } from 'lucide-svelte';
+ import { Plus, Trash2, UserCheck, UserX, KeyRound, LogOut, Search, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, Shield, ShieldCheck, ShieldOff, Check, Users as UsersIcon } from 'lucide-svelte';
 
   // Tab state.
   //
@@ -56,6 +56,12 @@
  let loadingUserPerms = $state(false);
 
  let confirmDeleteId = $state<string | null>(null);
+ // confirmResetTOTPId mirrors confirmDeleteId for the "Reset 2FA"
+ // affordance. The action is destructive (the user's enrolled
+ // authenticator is wiped and they have to re-enroll), so we use the
+ // same inline-confirm pattern as Delete rather than relying on a
+ // browser confirm() dialog.
+ let confirmResetTOTPId = $state<string | null>(null);
 
  // Query state
  let searchText = $state('');
@@ -135,22 +141,39 @@
  appStore.loadUsers(buildQuery());
  }
 
-  // Data fetch is keyed off `infoLoaded` instead of `onMount` so the
-  // initial load runs only once capability info is actually known. Same
-  // race as the activeTab initialization: at mount time hasPermission()
-  // is always false because appStore.info is null. A second guard
-  // (`dataLoaded`) prevents the effect from re-firing on every
-  // capability flicker — we only want to seed the lists once per page
-  // visit; user actions (search, sort, filter) call `reload()`
-  // explicitly.
-  let dataLoaded = $state(false);
+  // Data fetch is keyed off `infoLoaded` AND the per-tab capability
+  // becoming true. The previous version used a single `dataLoaded`
+  // flag that was flipped BEFORE the capability check, which caused a
+  // silent race on first navigation after login:
+  //
+  //   1. info loads (unauthenticated GET at boot returns empty caps),
+  //      then identity resolves moments later.
+  //   2. Effect fires the first time with `infoLoaded=true` but
+  //      `canManageUsers=false` (because identity hasn't propagated
+  //      through hasPermission yet, or the post-login info hasn't
+  //      replaced the boot-time empty one).
+  //   3. The old code set `dataLoaded=true` unconditionally and
+  //      skipped reload(). When canManageUsers later flipped true the
+  //      effect re-ran but the early-return swallowed it.
+  //   4. User saw an empty Users tab until they navigated away and
+  //      back, which remounted the component with fresh local state.
+  //
+  // Per-resource flags fix this: each flag is only set after the
+  // matching capability check passes AND the load fires, so a "not
+  // yet permitted" effect run leaves the flag false and a later
+  // capability flip triggers the load on re-run. Flicker is still
+  // suppressed because each resource only loads on the FIRST run
+  // where its capability is true.
+  let usersLoaded = $state(false);
+  let permissionsLoaded = $state(false);
   $effect(() => {
-    if (!infoLoaded || dataLoaded) return;
-    dataLoaded = true;
-    if (canManageUsers) {
+    if (!infoLoaded) return;
+    if (canManageUsers && !usersLoaded) {
+      usersLoaded = true;
       reload();
     }
-    if (canManagePermissions) {
+    if (canManagePermissions && !permissionsLoaded) {
+      permissionsLoaded = true;
       appStore.loadPermissions();
     }
   });
@@ -228,6 +251,21 @@
  addToast(`All sessions for "${user.username}" terminated`, 'success');
  } catch (err: any) {
  addToast(err?.response?.data?.message || 'Failed to kick user', 'alert');
+ }
+ }
+
+ // handleResetTOTP wipes the target user's TOTP enrollment from
+ // the admin side. Used when a user has lost both their authenticator
+ // device and their recovery codes — without this they would be
+ // permanently locked out of any account whose login goes through
+ // the MFA wrapper.
+ async function handleResetTOTP(user: UserInfo) {
+ try {
+ await appStore.resetUserTOTP(user.id);
+ addToast(`2FA reset for "${user.username}" — they can sign in with password and re-enroll`, 'success');
+ confirmResetTOTPId = null;
+ } catch (err: any) {
+ addToast(err?.response?.data?.message || 'Failed to reset 2FA', 'alert');
  }
  }
 
@@ -628,9 +666,17 @@
   {#if isYou}
   <span class="text-[10px] px-1.5 py-0.5 bg-accent-100 text-accent-700 dark:bg-accent-900/40 dark:text-accent-200 rounded font-medium">you</span>
   {/if}
-  {#if user.is_superadmin}
-  <span class="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 rounded font-medium">superadmin</span>
-  {/if}
+   {#if user.is_superadmin}
+   <span class="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200 rounded font-medium">superadmin</span>
+   {/if}
+   {#if user.has_totp}
+   <span
+    class="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-emerald-50 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded font-medium"
+    title="User has TOTP / 2FA enabled"
+   >
+    <ShieldCheck size={10} /> 2FA
+   </span>
+   {/if}
  </div>
  </td>
  <td class="px-4 py-3">
@@ -666,12 +712,22 @@
  title={user.disabled ? 'Enable user' : 'Disable user'} disabled={isYou}>
  {#if user.disabled}<UserCheck size={14} />{:else}<UserX size={14} />{/if}
  </button>
+ {#if user.has_totp && !isYou}
+ {#if confirmResetTOTPId === user.id}
+ <button onclick={() => handleResetTOTP(user)} class="px-2 py-1 text-xs bg-vermilion-500 text-white rounded hover:bg-vermilion-600 transition-colors" title="Confirm reset — user must re-enroll their authenticator">Reset 2FA</button>
+ <button onclick={() => { confirmResetTOTPId = null; }} class="px-2 py-1 text-xs bg-slate-200 dark:bg-warm-700 text-slate-600 dark:text-warm-200 rounded hover:bg-slate-300 dark:hover:bg-warm-600 transition-colors">Cancel</button>
+ {:else}
+ <button onclick={() => { confirmResetTOTPId = user.id; confirmDeleteId = null; }} class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-vermilion-500 hover:bg-vermilion-50 dark:hover:bg-vermilion-900/30 rounded transition-colors" title="Reset 2FA (user lost their authenticator)">
+ <ShieldOff size={14} />
+ </button>
+ {/if}
+ {/if}
  {#if !isYou}
  {#if confirmDeleteId === user.id}
  <button onclick={() => handleDelete(user.id)} class="px-2 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600 transition-colors">Confirm</button>
  <button onclick={() => { confirmDeleteId = null; }} class="px-2 py-1 text-xs bg-slate-200 dark:bg-warm-700 text-slate-600 dark:text-warm-200 rounded hover:bg-slate-300 dark:hover:bg-warm-600 transition-colors">Cancel</button>
  {:else}
- <button onclick={() => { confirmDeleteId = user.id; }} class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded transition-colors" title="Delete user">
+ <button onclick={() => { confirmDeleteId = user.id; confirmResetTOTPId = null; }} class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded transition-colors" title="Delete user">
  <Trash2 size={14} />
  </button>
  {/if}

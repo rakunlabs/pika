@@ -22,28 +22,29 @@ type ExternalIdentityInput struct {
 	Username      string // preferred username hint from the provider
 }
 
-// FindOrCreateExternalUser resolves an external identity to a pika user,
-// creating the user + identity link when necessary. The call is idempotent:
-// calling it twice for the same (provider, subject) returns the same user.
+// FindExternalUser resolves an external identity to an EXISTING pika
+// user without provisioning a new one. This is the lookup-only sibling
+// of FindOrCreateExternalUser, intended for the live authentication
+// path (session save, capability resolver) where silent account
+// creation is undesirable: an unrecognized identity should fail
+// closed, not mint a brand-new users row.
 //
 // Resolution order:
 //
-//  1. (provider, subject) already linked → return that user. Refresh the
-//     identity snapshot (email, display name, last_login_at).
-//  2. Auto-link by verified email — only when:
-//     - AuthSettings.LinkByVerifiedEmail is effectively true (default),
-//     - input.EmailVerified is true,
-//     - input.Email is non-empty,
-//     - a users row exists with matching email.
-//     Creates a new user_identities row pointing at the existing user. The
-//     merge is logged (audit).
-//  3. Provision a brand-new external user with no password, plus the
-//     user_identities link. The username is generated from the provider's
-//     hints (preferred_username → email local part → "<provider>:<subject>")
-//     with collision-suffixing.
+//  1. (provider, subject) already linked → return that user. Refresh
+//     the identity snapshot (email, display name) so a renamed
+//     external account stays in sync on next login.
+//  2. Auto-link by verified email — only when LinkByVerifiedEmail is
+//     enabled, the IdP asserts email_verified=true and a local users
+//     row already exists at that email. This adds a user_identities
+//     row but never touches the users table itself, so it does not
+//     violate the "no new users via auth" invariant.
 //
-// On success, returns the full UserInfo for the resolved user.
-func (s *Service) FindOrCreateExternalUser(ctx context.Context, in ExternalIdentityInput) (*UserInfo, error) {
+// Returns ErrNotFound when neither path matches. Callers in the auth
+// path use this to bind sessions only to pre-existing users; the
+// user-sync engine is the only legitimate caller that goes further and
+// invokes FindOrCreateExternalUser to provision missing users.
+func (s *Service) FindExternalUser(ctx context.Context, in ExternalIdentityInput) (*UserInfo, error) {
 	if in.Provider == "" || in.Subject == "" {
 		return nil, fmt.Errorf("provider and subject are required: %w", ErrBadRequest)
 	}
@@ -75,7 +76,7 @@ func (s *Service) FindOrCreateExternalUser(ctx context.Context, in ExternalIdent
 		return nil, fmt.Errorf("lookup identity: %w", err)
 	}
 
-	// Step 2: auto-link by verified email.
+	// Step 2: auto-link by verified email — only LINKS, never creates a user.
 	authSettings := s.GetAuthSettings(ctx)
 	if authSettings.LinkByVerifiedEmailEnabled() && in.EmailVerified && normalizedEmail != "" {
 		if existingUser, err := s.store.Users().GetByEmail(ctx, normalizedEmail); err == nil && existingUser != nil {
@@ -104,7 +105,38 @@ func (s *Service) FindOrCreateExternalUser(ctx context.Context, in ExternalIdent
 		}
 	}
 
-	// Step 3: provision a new external user + identity link.
+	return nil, ErrNotFound
+}
+
+// FindOrCreateExternalUser is the provisioning variant of
+// FindExternalUser. It first attempts the lookup-only resolution and,
+// only on ErrNotFound, provisions a brand-new external users row plus
+// identity link. The call is idempotent: calling it twice for the same
+// (provider, subject) returns the same user.
+//
+// Provisioning step: username is generated from the provider's hints
+// (preferred_username → email local part → "<provider>:<subject>")
+// with collision-suffixing.
+//
+// IMPORTANT: this method is the only auth-path entry point that can
+// create users, and is reserved for the user-sync engine
+// (`internal/usersync`). The live auth flow (session save, login
+// callbacks) MUST use FindExternalUser so that unrecognized identities
+// fail closed instead of silently provisioning. See sessionstore.go
+// resolveSessionUser for the call site that enforces this.
+func (s *Service) FindOrCreateExternalUser(ctx context.Context, in ExternalIdentityInput) (*UserInfo, error) {
+	if info, err := s.FindExternalUser(ctx, in); err == nil {
+		return info, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+
+	// Provision: only reachable when FindExternalUser returned
+	// ErrNotFound. Both identifier validation and the (provider,
+	// subject) / verified-email lookups already happened inside the
+	// nested call.
+	normalizedEmail := normalizeEmail(in.Email)
+
 	username, err := s.chooseExternalUsername(ctx, in)
 	if err != nil {
 		return nil, err
@@ -190,9 +222,8 @@ func (s *Service) SetUserPermissionsBySource(ctx context.Context, userID, source
 
 // GetUserByIdentity resolves a (provider, subject) pair to the pika user
 // it's linked to. Returns ErrNotFound when no link exists. Used by the
-// capability resolver on protected-request paths, which cannot afford
-// the cost of FindOrCreateExternalUser's provisioning branch — the
-// session-store layer already did that at login time.
+// capability resolver on protected-request paths — strictly lookup-only,
+// like FindExternalUser, with no auto-link or provisioning side effects.
 func (s *Service) GetUserByIdentity(ctx context.Context, provider, subject string) (*UserInfo, error) {
 	if provider == "" || subject == "" {
 		return nil, ErrNotFound

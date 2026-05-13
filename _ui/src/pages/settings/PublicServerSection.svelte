@@ -124,7 +124,7 @@
  <button
  onclick={handleSavePublicServer}
  disabled={isSavingPublicServer}
- class="px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-md hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+ class="px-4 py-2 text-sm font-medium text-white bg-accent-600 rounded-md hover:bg-accent-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
  >
  {isSavingPublicServer ? 'Saving...' : 'Save Public Server Settings'}
  </button>

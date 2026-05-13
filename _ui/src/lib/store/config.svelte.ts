@@ -1,5 +1,5 @@
 import type {
-  Tab, TreeNode, SearchResult, FileFormat, FileVersion, FileMeta,
+  Tab, TreeNode, SearchResult, SearchMode, FileFormat, FileVersion, FileMeta,
   Settings, TokenInfo, CreateTokenRequest, CreateTokenResponse,
   PatchTokenRequest, ViewMode
 } from '@/lib/types/config';
@@ -50,6 +50,10 @@ function createConfigStore() {
   let searchQuery = $state('');
   let searchResults = $state<SearchResult[]>([]);
   let isSearching = $state(false);
+  // Session-only: remembered across searches but not persisted to
+  // storage. Default 'all' keeps the existing behaviour for users who
+  // never touch the toggle.
+  let searchMode = $state<SearchMode>('all');
   let settings = $state<Settings | null>(null);
   let tokens = $state<TokenInfo[]>([]);
   let isLoading = $state(false);
@@ -65,7 +69,15 @@ function createConfigStore() {
   const hasUnsavedChanges = $derived(openTabs.some(t => t.isDirty));
 
   // API functions
-  async function fetchFolder(path: string): Promise<{ folders: string[]; files: string[] }> {
+  //
+  // `variants` mirrors service.Folder.Variants (Go: `map[string][]string`
+  // keyed by file name). Older deployments may omit the field; the
+  // optional `?` + `|| {}` at every call site keep us forward-compatible.
+  async function fetchFolder(path: string): Promise<{
+    folders: string[];
+    files: string[];
+    variants?: Record<string, string[]>;
+  }> {
     try {
       const response = await axios.get(`/api/v1/folder/${path}`);
       return response.data;
@@ -609,11 +621,12 @@ function createConfigStore() {
   // Search operations
   let searchAbortController: AbortController | null = null;
 
-  function search(query: string): void {
+  function search(query: string, mode?: SearchMode): void {
     // Cancel any ongoing search
     cancelSearch();
 
     searchQuery = query;
+    if (mode) searchMode = mode;
 
     if (!query.trim()) {
       searchResults = [];
@@ -627,7 +640,12 @@ function createConfigStore() {
     const controller = new AbortController();
     searchAbortController = controller;
 
-    const eventSource = new EventSource(`${basePath}/api/v1/search?q=${encodeURIComponent(query.trim())}`);
+    // Only attach mode when 'name' — omitting it keeps URLs short and
+    // makes the server-side default ('all') the source of truth.
+    const params = new URLSearchParams({ q: query.trim() });
+    if (searchMode === 'name') params.set('mode', 'name');
+
+    const eventSource = new EventSource(`${basePath}/api/v1/search?${params.toString()}`);
 
     // Handle abort — close the connection
     controller.signal.addEventListener('abort', () => {
@@ -671,6 +689,17 @@ function createConfigStore() {
     cancelSearch();
     searchQuery = '';
     searchResults = [];
+  }
+
+  // setSearchMode updates the mode and, if a query is already active,
+  // re-runs the search immediately so the user sees the effect of the
+  // toggle without retyping. No-op if the mode didn't actually change.
+  function setSearchMode(mode: SearchMode): void {
+    if (searchMode === mode) return;
+    searchMode = mode;
+    if (searchQuery.trim()) {
+      search(searchQuery, mode);
+    }
   }
 
   // Settings operations
@@ -1160,6 +1189,7 @@ function createConfigStore() {
     get searchQuery() { return searchQuery; },
     get searchResults() { return searchResults; },
     get isSearching() { return isSearching; },
+    get searchMode() { return searchMode; },
     get settings() { return settings; },
     get tokens() { return tokens; },
     get isLoading() { return isLoading; },
@@ -1198,6 +1228,7 @@ function createConfigStore() {
     search,
     cancelSearch,
     clearSearch,
+    setSearchMode,
 
     // Settings operations
     loadSettings,

@@ -1,24 +1,36 @@
 <script lang="ts">
  import { link, router } from 'svelte-spa-router';
  import { appStore } from '@/lib/store/store.svelte';
- import { Blocks, Settings, User, Users, LogOut, HardDrive, FileSliders } from 'lucide-svelte';
+  import { Blocks, Settings, User, Users, LogOut, HardDrive, FileSliders, Lock } from 'lucide-svelte';
  import ThemeSwitcher from '@/lib/components/ThemeSwitcher.svelte';
 
  const info = $derived(appStore.info);
  const identity = $derived(appStore.identity);
 
- const hasRawMounts = $derived((info?.raw_mounts?.length ?? 0) > 0);
+  const hasRawMounts = $derived((info?.raw_mounts?.length ?? 0) > 0);
+  // VaultEnabled is set by /api/v1/info from the server-side vault
+  // coordinator. The /vault page renders an "unavailable" fallback
+  // when this is false, but we hide the nav entry entirely so the
+  // user isn't tempted to click a dead link.
+  const vaultEnabled = $derived(info?.vault_enabled ?? false);
 
- const navItems = $derived.by(() => {
- const items: { path: string; label: string; icon: typeof Settings }[] = [];
+  const navItems = $derived.by(() => {
+  const items: { path: string; label: string; icon: typeof Settings }[] = [];
 
- if (appStore.hasPermission('files.read')) {
- items.push({ path: '/configurations', label: 'Configurations', icon: FileSliders });
- }
+  if (appStore.hasPermission('files.read')) {
+  items.push({ path: '/configurations', label: 'Configurations', icon: FileSliders });
+  }
 
- if (hasRawMounts && appStore.hasPermission('raw.read')) {
- items.push({ path: '/files', label: 'Files', icon: HardDrive });
- }
+  if (hasRawMounts && appStore.hasPermission('raw.read')) {
+  items.push({ path: '/files', label: 'Files', icon: HardDrive });
+  }
+
+  // Personal vault is per-user; no capability gate (every logged-in
+  // user owns their own vault). The link is only hidden when the
+  // feature is server-disabled.
+  if (vaultEnabled) {
+  items.push({ path: '/vault', label: 'Vault', icon: Lock });
+  }
 
  // Settings is always visible: even users without settings.manage can
  // reach the About section. Individual sections gate themselves inside
@@ -40,13 +52,17 @@
 </script>
 
 <nav class="flex items-center h-10 bg-warm-900 text-white border-b border-warm-700 px-4 shrink-0">
- <!-- Logo / Brand -->
+ <!-- Logo / Brand. The line under "pika" carries the editable
+ subtitle from settings (mirrors the login card). Version moved
+ out of the logo cluster to the right side, next to the user
+ pill — keeping operator-editable branding and build metadata
+ visually separated. -->
  <div class="flex items-center gap-2 mr-6 text-white">
  <Blocks size={18} color="#EF233C" />
  <div class="flex flex-col leading-none">
  <span class="text-sm font-bold tracking-wide">pika</span>
- {#if info}
-  <span class="text-[9px] font-mono text-warm-300">{info.version}</span>
+ {#if info?.subtitle}
+  <span class="text-[9px] text-warm-300">{info.subtitle}</span>
  {/if}
  </div>
  </div>
@@ -77,6 +93,12 @@
  one consistent row instead of having a slightly smaller cluster
  on the right. -->
  <div class="flex items-center gap-1 text-warm-300">
+  {#if info?.version}
+  <!-- Build version sits just left of the user pill. Bare text
+  (no pill background) keeps the build-metadata visually
+  subordinate to the user identity it sits next to. -->
+  <span class="px-2 text-[10px] font-mono text-warm-300 select-text">{info.version}</span>
+  {/if}
   {#if identity}
   <span class="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-warm-700 text-warm-100">
   <User size={14} />

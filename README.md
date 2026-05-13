@@ -25,6 +25,7 @@ Open `http://localhost:8080` to access the web UI.
 - Event hooks (HTTP webhooks, Kafka, Redis Pub/Sub, NATS)
 - Raw file serving (local, S3, FTP, SFTP, WebDAV, Vercel Blob)
 - Inline editor with syntax validation (JSON, YAML, TOML)
+- Personal vault (client-side end-to-end encrypted passwords, TOTP, SSH keys, …)
 
 ## Consuming Configs
 

@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,9 +18,15 @@ import (
 )
 
 // PasskeyService coordinates WebAuthn flows on top of the underlying
-// passkey storage. It owns the in-process challenge store used to bind
-// a begin response to the matching finish call, and it knows how to
-// translate pika identities ↔ passkey-package types.
+// passkey storage. It is the translator between pika identities ↔
+// passkey-package types, and the home of the registration ceremony's
+// state (login-side challenges live inside the ada strategy itself).
+//
+// Ceremony state — both enrollment and login challenges — is
+// persisted through the bw cluster (via PasskeyChallengeStorage) so a
+// begin call on one node and the corresponding finish on a different
+// node both see the same row. Per-instance in-memory maps were the
+// previous design and didn't work in multi-instance deployments.
 //
 // The split between *Service (general pika service) and PasskeyService
 // keeps the WebAuthn-specific dependencies (ada/passkey) contained:
@@ -27,24 +36,73 @@ type PasskeyService struct {
 	svc    *Service
 	engine *passkey.WebAuthn
 
-	// regChallenges holds enrollment sessions keyed by the opaque id
-	// handed to the SPA. Separate from the login-side challenge store
-	// (which lives inside the strategy) so enrollment and login flows
-	// can't collide on session IDs.
-	regMu         sync.Mutex
-	regChallenges map[string]*passkeyRegEntry
-
 	// challengeTTL is how long a begin-issued challenge stays valid.
-	// Mirrored from the WebAuthn config so the GC tick can evict
-	// without a separate config knob.
+	// Mirrored from the WebAuthn config so the GC tick and the
+	// enrollment-session save both pick up the same value.
 	challengeTTL time.Duration
+
+	// lastUsedCh is a buffered queue of LastUsedAt bumps that the
+	// hot login path hands off to the lastUsedLoop goroutine. Doing
+	// the DB write inline would add a synchronous round-trip to
+	// every passkey login; coalescing per-row in the background
+	// keeps SQLite contention down and trims login latency at the
+	// cost of a small staleness window (≤ 2 s, see lastUsedLoop).
+	// The channel is buffered and we drop on full: losing one
+	// LastUsedAt update is preferable to blocking a login on a
+	// slow background flusher.
+	lastUsedCh chan lastUsedEvent
+
+	// flushReqCh lets callers (mainly tests, but also a future
+	// shutdown hook) drain the pending batch synchronously.
+	flushReqCh chan flushReq
+
+	// gcOnce gates the lazy-launch of the periodic sweep so tests
+	// that spin up many short-lived PasskeyService instances don't
+	// fork a new goroutine each time. Background sweeps still run
+	// on every instance but only one per process per service.
+	gcOnce sync.Once
 }
 
-type passkeyRegEntry struct {
-	session *passkey.SessionData
-	userID  string
-	expires time.Time
+// challengeKind values distinguish enrollment from login challenges
+// in the persisted bucket. Both flows use the same row shape; the
+// kind tag is metadata for audit logs and the cross-user-smuggling
+// check in FinishEnroll.
+const (
+	challengeKindEnroll = "enroll"
+	challengeKindLogin  = "login"
+)
+
+// lastUsedEvent is a single LastUsedAt bump enqueued by LookupForLogin.
+// Coalesced by rowID inside the loop, so two logins to the same
+// credential within a flush interval cost one DB write, not two.
+type lastUsedEvent struct {
+	rowID string
+	at    time.Time
 }
+
+// flushReq is the message FlushLastUsed sends to drain the pending
+// batch synchronously. The loop closes done once persistence is
+// complete.
+type flushReq struct {
+	done chan struct{}
+}
+
+const (
+	// lastUsedBufferSize bounds the in-flight LastUsedAt queue. At
+	// 1024 we'd need >>500 logins/second to saturate it; under that
+	// rate the queue is always nearly empty.
+	lastUsedBufferSize = 1024
+	// lastUsedBatchSize triggers an eager flush when the pending
+	// map grows past this many distinct rows. Without it a slow
+	// trickle would never hit the timer-based flush ceiling either,
+	// but a burst of unique-credential logins would otherwise pile
+	// up for the full 2 s.
+	lastUsedBatchSize = 128
+	// lastUsedFlushInterval is the periodic batch tick. Keeping it
+	// short (≤ a few seconds) means the "last seen" column in the
+	// security UI lags reality by at most that long.
+	lastUsedFlushInterval = 2 * time.Second
+)
 
 // NewPasskeyService wires a WebAuthn engine onto the service. Callers
 // that don't intend to use passkeys can leave this nil — the Service
@@ -54,12 +112,14 @@ func NewPasskeyService(svc *Service, engine *passkey.WebAuthn, challengeTTL time
 		challengeTTL = 5 * time.Minute
 	}
 	ps := &PasskeyService{
-		svc:           svc,
-		engine:        engine,
-		regChallenges: make(map[string]*passkeyRegEntry),
-		challengeTTL:  challengeTTL,
+		svc:          svc,
+		engine:       engine,
+		challengeTTL: challengeTTL,
+		lastUsedCh:   make(chan lastUsedEvent, lastUsedBufferSize),
+		flushReqCh:   make(chan flushReq),
 	}
 	go ps.gcLoop()
+	go ps.lastUsedLoop()
 	return ps
 }
 
@@ -86,6 +146,29 @@ func (s *Service) PasskeyStore() PasskeyStorage {
 	return s.store.Passkeys()
 }
 
+// PasskeyChallengeStore returns the cluster-aware bucket the ada
+// passkey strategy uses for in-flight login ceremony sessions. The
+// authx wiring layer adapts this onto the ada ChallengeStore
+// interface; nothing else should need to reach into the bucket
+// directly.
+func (s *Service) PasskeyChallengeStore() PasskeyChallengeStorage {
+	return s.store.PasskeyChallenges()
+}
+
+// EnrollOptions tunes a single BeginEnroll call. All fields are
+// optional; zero values produce the default behavior (any
+// authenticator).
+type EnrollOptions struct {
+	// AuthenticatorAttachment scopes the ceremony to a class of
+	// device — "platform" (built-in: Touch ID / Hello / Android
+	// keystore) or "cross-platform" (roaming: USB/NFC/BLE security
+	// key). Any other value (including the empty string) lets the
+	// browser show the chooser. We don't return an error for
+	// invalid input here — the ada layer normalizes it to "" so
+	// the ceremony still works.
+	AuthenticatorAttachment string
+}
+
 // BeginEnroll starts a registration ceremony for the given user. The
 // returned options are JSON-encoded and sent to the SPA verbatim;
 // sessionID must be echoed back on FinishEnroll.
@@ -96,7 +179,12 @@ func (s *Service) PasskeyStore() PasskeyStorage {
 // others ignore it and let the user re-enroll, in which case the
 // finish path catches the collision on credential_id (unique
 // constraint).
-func (ps *PasskeyService) BeginEnroll(ctx context.Context, userID string) (sessionID string, opts *passkey.CredentialCreationOptions, err error) {
+//
+// opts is optional — passing nil yields the same behavior as
+// before. It's a struct rather than variadic options so future
+// fields (e.g. ResidentKey) don't require adding another With…
+// helper for every caller layer.
+func (ps *PasskeyService) BeginEnroll(ctx context.Context, userID string, opts *EnrollOptions) (sessionID string, options *passkey.CredentialCreationOptions, err error) {
 	if ps == nil || ps.engine == nil {
 		return "", nil, ErrNoStorageBackend
 	}
@@ -125,25 +213,38 @@ func (ps *PasskeyService) BeginEnroll(ctx context.Context, userID string) (sessi
 		})
 	}
 
-	opts, session, err := ps.engine.BeginRegistration(passkey.User{
+	var regOpts []passkey.RegistrationOption
+	if opts != nil && opts.AuthenticatorAttachment != "" {
+		regOpts = append(regOpts, passkey.WithAuthenticatorAttachment(opts.AuthenticatorAttachment))
+	}
+
+	options, session, err := ps.engine.BeginRegistration(passkey.User{
 		Handle:      userIDToHandle(userID),
 		Name:        user.Username,
 		DisplayName: displayNameOrUsername(user),
-	}, exclude)
+	}, exclude, regOpts...)
 	if err != nil {
 		return "", nil, fmt.Errorf("passkey begin enroll: %w", err)
 	}
 
+	// Persist the enrollment session through the cluster-aware
+	// bucket so the matching finish call can land on any node.
 	sessionID = newSessionID()
-	ps.regMu.Lock()
-	ps.regChallenges[sessionID] = &passkeyRegEntry{
-		session: session,
-		userID:  userID,
-		expires: time.Now().Add(ps.challengeTTL),
+	blob, err := json.Marshal(session)
+	if err != nil {
+		return "", nil, fmt.Errorf("passkey marshal session: %w", err)
 	}
-	ps.regMu.Unlock()
+	if err := ps.svc.store.PasskeyChallenges().Save(ctx, &PasskeyChallenge{
+		ID:        sessionID,
+		Kind:      challengeKindEnroll,
+		UserID:    userID,
+		Data:      blob,
+		ExpiresAt: time.Now().Add(ps.challengeTTL),
+	}); err != nil {
+		return "", nil, fmt.Errorf("passkey save challenge: %w", err)
+	}
 
-	return sessionID, opts, nil
+	return sessionID, options, nil
 }
 
 // FinishEnroll verifies the registration response, stores the
@@ -157,28 +258,44 @@ func (ps *PasskeyService) FinishEnroll(ctx context.Context, userID, sessionID, n
 		return nil, fmt.Errorf("user id and session id required: %w", ErrBadRequest)
 	}
 
-	ps.regMu.Lock()
-	entry, ok := ps.regChallenges[sessionID]
-	if ok {
-		// One-shot: drop the entry eagerly so a replay can't reuse
-		// it even if the rest of verification fails.
-		delete(ps.regChallenges, sessionID)
-	}
-	ps.regMu.Unlock()
-
-	if !ok {
+	entry, err := ps.svc.store.PasskeyChallenges().Get(ctx, sessionID)
+	if err != nil {
+		// bw returns ErrNotFound for an unknown id; map to a generic
+		// 401 so an attacker can't probe valid session ids by
+		// timing.
 		return nil, fmt.Errorf("unknown session: %w", ErrUnauthorized)
 	}
-	if entry.userID != userID {
+	// One-shot: drop the row eagerly so a replay can't reuse it even
+	// if the rest of verification fails. We delete before any other
+	// check both to minimize the replay window and to keep the
+	// cleanup unconditional — even a cross-user-smuggling attempt
+	// burns the session id.
+	_ = ps.svc.store.PasskeyChallenges().Delete(ctx, sessionID)
+
+	if entry.Kind != challengeKindEnroll {
+		// Cross-purpose smuggling (e.g. login challenge handed to
+		// the finish-enroll endpoint). Reject with the same generic
+		// message as "unknown session" to avoid leaking shape.
+		return nil, fmt.Errorf("session is not an enrollment: %w", ErrUnauthorized)
+	}
+	if entry.UserID != userID {
 		// Session belongs to a different user — likely cross-user
 		// session smuggling. Reject with a generic message.
 		return nil, fmt.Errorf("session does not belong to user: %w", ErrUnauthorized)
 	}
-	if time.Now().After(entry.expires) {
+	if time.Now().After(entry.ExpiresAt) {
 		return nil, fmt.Errorf("session expired: %w", ErrUnauthorized)
 	}
 
-	cred, attResult, err := ps.engine.FinishRegistration(entry.session, body)
+	var session passkey.SessionData
+	if err := json.Unmarshal(entry.Data, &session); err != nil {
+		// Persisted blob is corrupt. Surface as "unknown session" to
+		// the client; log loudly so operators can investigate.
+		slog.Warn("passkey: corrupt enrollment session", "id", sessionID, "error", err)
+		return nil, fmt.Errorf("unknown session: %w", ErrUnauthorized)
+	}
+
+	cred, attResult, err := ps.engine.FinishRegistration(&session, body)
 	if err != nil {
 		return nil, fmt.Errorf("passkey finish enroll: %w", err)
 	}
@@ -232,14 +349,13 @@ func (ps *PasskeyService) ListUserPasskeys(ctx context.Context, userID string) (
 	}
 	// Sort newest-first. ListByUserID is currently unsorted; doing
 	// the sort here keeps the contract stable regardless of storage
-	// backend ordering.
-	for i := 0; i < len(rows); i++ {
-		for j := i + 1; j < len(rows); j++ {
-			if rows[j].CreatedAt.After(rows[i].CreatedAt) {
-				rows[i], rows[j] = rows[j], rows[i]
-			}
-		}
-	}
+	// backend ordering. sort.Slice keeps the cost at O(n log n)
+	// rather than the O(n²) pairwise compare we had originally —
+	// most users have only a handful of passkeys, but doing the
+	// right thing here is free.
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].CreatedAt.After(rows[j].CreatedAt)
+	})
 	for i := range rows {
 		rows[i].PublicKey = nil
 	}
@@ -344,11 +460,15 @@ func (ps *PasskeyService) LookupForLogin(ctx context.Context, credentialID []byt
 	// the strategy's sign-count callback) because LastUsedAt updates
 	// even when the counter doesn't change — many platform
 	// authenticators stay at 0.
-	row.LastUsedAt = time.Now().UTC().Truncate(time.Microsecond)
-	if err := ps.svc.store.Passkeys().Update(ctx, row); err != nil {
-		// Don't fail the login — losing one timestamp update is
-		// not worth blocking auth.
-		_ = err
+	//
+	// The bump is enqueued to the background batch flusher instead
+	// of issued inline so we don't add a DB write to every login.
+	// Dropping on full (default branch) preserves login throughput
+	// even if the flusher temporarily backs up.
+	select {
+	case ps.lastUsedCh <- lastUsedEvent{rowID: row.ID, at: time.Now().UTC().Truncate(time.Microsecond)}:
+	default:
+		// Queue full — fine; the next login will requeue.
 	}
 
 	return cred, id, nil
@@ -367,21 +487,190 @@ func (ps *PasskeyService) UpdateSignCount(ctx context.Context, credentialID []by
 	return ps.svc.store.Passkeys().Update(ctx, row)
 }
 
-// gcLoop sweeps expired registration challenges. The strategy has its
-// own GC for login challenges; this one covers the enrollment side.
+// LookupCredentialIDs returns the credential ids enrolled for the
+// user identified by handle or username. Used by the ada/passkey
+// strategy to scope the assertion ceremony to the user's own
+// passkeys (the "username-first" login flow): the SPA sends
+// { username: "alice" }, this method resolves alice → user_id →
+// credential ids, and the strategy puts them in allowCredentials so
+// the platform UI presents only the matching passkey.
+//
+// Returns (nil, nil) for any unresolvable hint (unknown user,
+// disabled account, etc.) so the ceremony falls back to discoverable
+// without leaking the mapping shape — an attacker submitting
+// arbitrary usernames can't tell which exist by timing the response.
+// Genuine storage failures bubble up as errors; the strategy logs
+// them at warn and still falls back to discoverable rather than
+// failing the login outright.
+func (ps *PasskeyService) LookupCredentialIDs(ctx context.Context, handle []byte, username string) ([][]byte, error) {
+	if ps == nil || ps.engine == nil {
+		return nil, nil
+	}
+
+	var userID string
+	switch {
+	case len(handle) > 0:
+		// userIDToHandle stores the userID hex string verbatim as
+		// raw bytes, so reversing the encoding is a plain cast.
+		// Any future change to userIDToHandle must update this side
+		// in lockstep.
+		userID = string(handle)
+	case username != "":
+		u, err := ps.svc.GetUserByUsername(ctx, username)
+		if err != nil {
+			// Most likely "user not found". Treat as soft-miss so
+			// the front-end can't enumerate the user table.
+			return nil, nil
+		}
+		if u.Disabled {
+			return nil, nil
+		}
+		userID = u.ID
+	default:
+		return nil, nil
+	}
+
+	rows, err := ps.svc.store.Passkeys().ListByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	out := make([][]byte, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.CredentialID)
+	}
+	return out, nil
+}
+
+// gcLoop sweeps expired challenge rows from the bw-backed bucket.
+// Both enrollment and login challenges land in the same bucket, so a
+// single sweeper covers both. The interval is intentionally coarse
+// (30 s) because each sweep is a bw write — the leader fans it out
+// to every follower — and we'd rather pay one cluster round-trip
+// every half-minute than one per minute per kind.
+//
+// On a multi-instance cluster every node runs its own gcLoop. They
+// all converge on the same set of rows; bw makes the deletes
+// idempotent so the redundancy is harmless. A future optimization
+// would be to gate the sweep on cluster leadership, but that adds a
+// dependency on the cluster package and is not worth the complexity
+// for a 30-second job.
 func (ps *PasskeyService) gcLoop() {
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
 	for range t.C {
-		now := time.Now()
-		ps.regMu.Lock()
-		for id, e := range ps.regChallenges {
-			if now.After(e.expires) {
-				delete(ps.regChallenges, id)
-			}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		n, err := ps.svc.store.PasskeyChallenges().DeleteExpired(ctx)
+		cancel()
+		if err != nil {
+			slog.Warn("passkey: challenge sweep", "error", err)
+			continue
 		}
-		ps.regMu.Unlock()
+		if n > 0 {
+			slog.Debug("passkey: challenge sweep", "removed", n)
+		}
 	}
+}
+
+// lastUsedLoop is the background coalescer for LastUsedAt bumps.
+// Three sources can trigger a write:
+//
+//   - An incoming bump pushes the pending map past lastUsedBatchSize:
+//     flush eagerly so a burst of unique-credential logins doesn't
+//     pile up to the timer-based ceiling.
+//   - The periodic tick fires: flush whatever has accumulated.
+//   - A FlushLastUsed caller asks for a synchronous drain: flush and
+//     signal completion before returning to the caller.
+//
+// We deliberately don't pull a context from the bumps themselves —
+// the originating request may have completed long before we get to
+// the row, and we don't want a cancelled context to drop a legitimate
+// write. Each flush attaches its own short-lived background context.
+func (ps *PasskeyService) lastUsedLoop() {
+	pending := make(map[string]time.Time)
+	flush := time.NewTicker(lastUsedFlushInterval)
+	defer flush.Stop()
+
+	for {
+		select {
+		case ev := <-ps.lastUsedCh:
+			// Coalesce: a second login to the same credential within
+			// the flush window overwrites the timestamp (we want the
+			// most recent one).
+			pending[ev.rowID] = ev.at
+			if len(pending) >= lastUsedBatchSize {
+				ps.persistLastUsed(pending)
+				pending = make(map[string]time.Time)
+			}
+		case <-flush.C:
+			if len(pending) > 0 {
+				ps.persistLastUsed(pending)
+				pending = make(map[string]time.Time)
+			}
+		case req := <-ps.flushReqCh:
+			// Drain the channel before persisting so any events that
+			// raced the FlushLastUsed call don't get left behind for
+			// the next tick. Best-effort: a flood of in-flight bumps
+			// could in theory keep us looping, but the caller asked
+			// for "everything visible right now" semantics anyway.
+		drain:
+			for {
+				select {
+				case ev := <-ps.lastUsedCh:
+					pending[ev.rowID] = ev.at
+				default:
+					break drain
+				}
+			}
+			if len(pending) > 0 {
+				ps.persistLastUsed(pending)
+				pending = make(map[string]time.Time)
+			}
+			close(req.done)
+		}
+	}
+}
+
+// persistLastUsed writes the batched timestamps back to the store.
+// Errors are intentionally swallowed (logged elsewhere if needed) —
+// LastUsedAt is a display-only column and a failed write is no
+// worse than a dropped queue entry. We re-fetch each row to avoid
+// clobbering any concurrent changes (rename, sign-count updates).
+func (ps *PasskeyService) persistLastUsed(pending map[string]time.Time) {
+	if len(pending) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for id, t := range pending {
+		row, err := ps.svc.store.Passkeys().Get(ctx, id)
+		if err != nil {
+			continue
+		}
+		row.LastUsedAt = t
+		_ = ps.svc.store.Passkeys().Update(ctx, row)
+	}
+}
+
+// FlushLastUsed forces a synchronous drain of the LastUsedAt batch.
+// Returns once the in-memory queue is empty and the pending writes
+// have been persisted. Primarily used by tests that need to assert
+// on the column right after a login; it could also be wired into a
+// future shutdown hook so the last batch isn't lost on process exit.
+//
+// Safe to call concurrently with the hot path (the queue and flush
+// requests are independent channels). No-op if the service was
+// constructed without the loop (e.g. an exotic test that nil'd the
+// channel out).
+func (ps *PasskeyService) FlushLastUsed() {
+	if ps == nil || ps.flushReqCh == nil {
+		return
+	}
+	done := make(chan struct{})
+	ps.flushReqCh <- flushReq{done: done}
+	<-done
 }
 
 // userIDToHandle maps a pika user id (hex string) to the byte slice

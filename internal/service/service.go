@@ -38,6 +38,20 @@ type Service struct {
 	// has no passkey configuration (e.g. RPID unset). Set by
 	// SetPasskeys at boot; consumed via Passkeys() with a nil-check.
 	passkeys *PasskeyService
+
+	// totp is the TOTP / 2FA coordinator. nil when TOTP is disabled
+	// in settings. Set by SetTOTPService at boot; consumed via
+	// TOTPCoord() with a nil-check. The MFA strategy reads
+	// IsEnabledForUser to decide whether to step up at login.
+	totp *TOTPService
+
+	// vault is the personal-vault coordinator (1Password-style E2E
+	// item store). nil when the deployment doesn't enable the
+	// feature. Set by SetVaultService at boot; consumed via
+	// VaultCoord() with a nil-check. The /api/v1/me/vault/* handler
+	// chain skips registration when this is nil so the routes 404
+	// instead of 503-ing every call.
+	vault *VaultService
 }
 
 func New(store Storage) *Service {

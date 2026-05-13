@@ -92,7 +92,7 @@
  error = response.data.error;
  }
 
- // If the backend returns raw bytes, decode them (Unicode-safe)
+ // If the backend returns raw bytes, decode them (Unicode-safe).
  if (response.data.data) {
  try {
  const binaryStr = atob(response.data.data);
@@ -105,6 +105,22 @@
  renderedContent = response.data;
  } else {
  renderedContent = JSON.stringify(response.data, null, 2);
+ }
+
+ // The backend's JSON renderer emits compact, one-line output —
+ // useful for transport, unreadable in the preview pane. Re-format
+ // with 2-space indentation when the active tab is JSON. We don't
+ // touch yaml/toml/raw: yaml/toml have their own canonical layout
+ // the renderer is already responsible for, and raw is opaque.
+ // Failed parse leaves the content as-is so an invalid render is
+ // still inspectable verbatim.
+ if (previewFormat === 'json' && renderedContent) {
+ try {
+ renderedContent = JSON.stringify(JSON.parse(renderedContent), null, 2);
+ } catch {
+ // Leave compact / malformed output alone — the editor still
+ // renders it; reformatting a broken doc would mask the bug.
+ }
  }
  } catch (err: any) {
  // If render endpoint doesn't exist yet, just show the current content
@@ -156,7 +172,7 @@
 {#if isOpen}
  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
  <div 
- class="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-5"
+ class="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4"
  onmousedown={handleBackdropMouseDown}
  onclick={handleBackdropClick}
  onkeydown={(e) => e.key === 'Escape' && onClose()}
@@ -165,18 +181,18 @@
  aria-labelledby="modal-title"
  tabindex="-1"
  >
- <div class="bg-white dark:bg-warm-900 rounded-lg shadow-xl w-full max-w-[900px] max-h-[80vh] flex flex-col overflow-hidden">
- <div class="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900">
- <h2 id="modal-title" class="text-base font-semibold text-slate-800 dark:text-slate-200">
+ <div class="bg-white dark:bg-warm-900 rounded-lg shadow-xl w-full max-w-[900px] max-h-[85vh] flex flex-col overflow-hidden">
+ <div class="flex items-center justify-between px-4 py-2 border-b border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900">
+ <h2 id="modal-title" class="text-sm font-semibold text-slate-800 dark:text-slate-200">
  Rendered Configuration
  {#if activeTab}
- <span class="font-normal text-slate-500 dark:text-slate-400">- {activeTab.name}</span>
+ <span class="font-normal text-slate-500 dark:text-slate-400">— {activeTab.name}</span>
  {/if}
  </h2>
- <div class="flex items-center gap-2">
+ <div class="flex items-center gap-1.5">
  {#if canMask}
  <button
- class="flex items-center gap-1.5 px-3 py-1.5 border rounded text-sm cursor-pointer transition-all duration-150
+ class="flex items-center gap-1 px-2 py-1 border rounded text-xs cursor-pointer transition-all duration-150
  {fullyMasked
  ? 'bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/50'
  : 'bg-slate-100 dark:bg-warm-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-warm-500 hover:bg-slate-200 dark:hover:bg-warm-600'}"
@@ -184,34 +200,34 @@
  title={fullyMasked ? 'Reveal all values' : 'Mask all values'}
  >
  {#if fullyMasked}
- <EyeOff size={16} />
+ <EyeOff size={14} />
  <span>Masked</span>
  {:else}
- <Eye size={16} />
+ <Eye size={14} />
  <span>Visible</span>
  {/if}
  </button>
  {/if}
  <button 
- class="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 dark:bg-warm-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-warm-500 rounded text-sm cursor-pointer transition-all duration-150 hover:bg-slate-200 dark:hover:bg-warm-600 disabled:opacity-50 disabled:cursor-not-allowed"
+ class="flex items-center gap-1 px-2 py-1 bg-slate-100 dark:bg-warm-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-warm-500 rounded text-xs cursor-pointer transition-all duration-150 hover:bg-slate-200 dark:hover:bg-warm-600 disabled:opacity-50 disabled:cursor-not-allowed"
  onclick={copyToClipboard}
  disabled={!renderedContent || isLoading}
  title="Copy to clipboard"
  >
  {#if copied}
- <Check size={16} />
+ <Check size={14} />
  <span>Copied!</span>
  {:else}
- <Copy size={16} />
+ <Copy size={14} />
  <span>Copy</span>
  {/if}
  </button>
  <button 
- class="flex items-center justify-center p-1.5 bg-transparent border-none rounded text-slate-500 dark:text-slate-400 cursor-pointer transition-all duration-150 hover:bg-slate-200 dark:hover:bg-warm-700 hover:text-slate-800 dark:hover:text-slate-200"
+ class="flex items-center justify-center p-1 bg-transparent border-none rounded text-slate-500 dark:text-slate-400 cursor-pointer transition-all duration-150 hover:bg-slate-200 dark:hover:bg-warm-700 hover:text-slate-800 dark:hover:text-slate-200"
  onclick={onClose} 
  aria-label="Close modal"
  >
- <X size={20} />
+ <X size={16} />
  </button>
  </div>
  </div>
@@ -222,8 +238,8 @@
  <Loader2 size={32} class="animate-spin" />
  <p>Rendering configuration...</p>
  </div>
- {:else if error}
- <p class="px-5 py-3 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 text-sm border-b border-red-200 dark:border-red-800 shrink-0">{error}</p>
+  {:else if error}
+ <p class="px-4 py-2 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 text-xs border-b border-red-200 dark:border-red-800 shrink-0">{error}</p>
  {#if renderedContent}
  <div class="flex-1 min-h-0 overflow-auto">
  <AppCodeMirror
@@ -252,8 +268,8 @@
  {/if}
  </div>
 
- <div class="flex items-center justify-between px-5 py-3 border-t border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900">
- <span class="text-xs text-slate-500 dark:text-slate-400">
+  <div class="flex items-center justify-between px-4 py-1.5 border-t border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900">
+ <span class="text-[11px] text-slate-500 dark:text-slate-400">
  {#if activeTab?.meta.inherits?.length}
  Inheriting from:
  {#each activeTab.meta.inherits as entry, i}
@@ -264,7 +280,7 @@
  {/if}
  </span>
  <button 
- class="px-4 py-2 bg-slate-100 dark:bg-warm-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-warm-500 rounded text-sm cursor-pointer transition-all duration-150 hover:bg-slate-200 dark:hover:bg-warm-600"
+ class="px-3 py-1 bg-slate-100 dark:bg-warm-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-warm-500 rounded text-xs cursor-pointer transition-all duration-150 hover:bg-slate-200 dark:hover:bg-warm-600"
  onclick={onClose}
  >
  Close

@@ -426,6 +426,286 @@ func splitTransports(in string) []string {
 	return out
 }
 
+// passkeyChallengeRow is one in-flight WebAuthn ceremony session. We
+// store the SessionData blob as opaque JSON bytes so the on-disk
+// shape doesn't have to track every field the ada library carries on
+// passkey.SessionData. Kind disambiguates enroll vs login challenges
+// for audit; user_id is non-empty only for enroll rows (the
+// FinishEnroll path uses it for the cross-user-smuggling check).
+//
+// expires_at is indexed so the periodic sweep can find expired rows
+// without scanning the whole bucket. The bucket lives in the same bw
+// cluster as the rest of pika's state, so a challenge written on
+// follower A is visible to follower B once the leader has finished
+// replicating — same propagation contract as sessions/tokens.
+type passkeyChallengeRow struct {
+	ID        string    `bw:"id,pk"`
+	Kind      string    `bw:"kind,index"`
+	UserID    string    `bw:"user_id,index"`
+	Data      []byte    `bw:"data"`
+	CreatedAt time.Time `bw:"created_at"`
+	ExpiresAt time.Time `bw:"expires_at,index"`
+}
+
+func (r *passkeyChallengeRow) toService() *service.PasskeyChallenge {
+	return &service.PasskeyChallenge{
+		ID:        r.ID,
+		Kind:      r.Kind,
+		UserID:    r.UserID,
+		Data:      r.Data,
+		CreatedAt: r.CreatedAt,
+		ExpiresAt: r.ExpiresAt,
+	}
+}
+
+func passkeyChallengeRowFromService(c *service.PasskeyChallenge) *passkeyChallengeRow {
+	return &passkeyChallengeRow{
+		ID:        c.ID,
+		Kind:      c.Kind,
+		UserID:    c.UserID,
+		Data:      c.Data,
+		CreatedAt: c.CreatedAt,
+		ExpiresAt: c.ExpiresAt,
+	}
+}
+
+// userTOTPRow is one row per user holding their TOTP enrollment state.
+// user_id is the primary key — TOTP is one-to-one with users, unlike
+// passkeys (multiple credentials per user).
+//
+// Secret is the base32-encoded HMAC key. RecoveryCodes is the
+// bcrypt-hashed plaintexts; storing the hashes alongside the secret is
+// fine — they're a different recovery channel that an attacker who has
+// the row already doesn't need to crack.
+//
+// Enabled is the "live" flag: enrollment writes an Enabled=false row
+// (start of the QR scan), the finish-enroll handler flips it to true
+// once the user proves possession by entering a valid code. A row
+// stuck at Enabled=false is harmless; it doesn't gate login.
+type userTOTPRow struct {
+	UserID        string    `bw:"user_id,pk"`
+	Secret        string    `bw:"secret"`
+	Enabled       bool      `bw:"enabled"`
+	RecoveryCodes []string  `bw:"recovery_codes"`
+	CreatedAt     time.Time `bw:"created_at"`
+	LastUsedAt    time.Time `bw:"last_used_at"`
+}
+
+func (r *userTOTPRow) toService() *service.UserTOTP {
+	codes := append([]string(nil), r.RecoveryCodes...)
+	return &service.UserTOTP{
+		UserID:        r.UserID,
+		Secret:        r.Secret,
+		Enabled:       r.Enabled,
+		RecoveryCodes: codes,
+		CreatedAt:     r.CreatedAt,
+		LastUsedAt:    r.LastUsedAt,
+	}
+}
+
+func userTOTPRowFromService(t *service.UserTOTP) *userTOTPRow {
+	codes := append([]string(nil), t.RecoveryCodes...)
+	return &userTOTPRow{
+		UserID:        t.UserID,
+		Secret:        t.Secret,
+		Enabled:       t.Enabled,
+		RecoveryCodes: codes,
+		CreatedAt:     t.CreatedAt,
+		LastUsedAt:    t.LastUsedAt,
+	}
+}
+
+// vaultAccountRow is the per-user vault crypto state. PK is the user_id
+// so the table is one-to-one with users (same shape as userTOTPRow).
+// Every field is sensitive enough that toService returns a copy rather
+// than the raw row; the service layer surfaces only the wrapped key +
+// KDF parameters on the unlock path, never the secret-key hash.
+//
+// Argon2id parameters live as scalar columns rather than a nested
+// struct so a future filter (e.g. "list vaults using the legacy
+// memory budget") could index them. Today nothing scans by these
+// fields; the columns are still split because bw nested-struct
+// support is shallow and breaking them out keeps the row encoder
+// simple.
+type vaultAccountRow struct {
+	UserID                 string    `bw:"user_id,pk"`
+	SecretKeyHash          []byte    `bw:"secret_key_hash"`
+	KDFAlgorithm           string    `bw:"kdf_algorithm"`
+	KDFMemory              int       `bw:"kdf_memory"`
+	KDFIterations          int       `bw:"kdf_iterations"`
+	KDFParallelism         int       `bw:"kdf_parallelism"`
+	KDFSalt                []byte    `bw:"kdf_salt"`
+	WrappedVaultKey        []byte    `bw:"wrapped_vault_key"`
+	WrappedVaultKeyVersion int       `bw:"wrapped_vault_key_version"`
+	RecoveryKitID          string    `bw:"recovery_kit_id"`
+	SessionLockSeconds     int       `bw:"session_lock_seconds"`
+	CreatedAt              time.Time `bw:"created_at"`
+	UpdatedAt              time.Time `bw:"updated_at"`
+}
+
+func (r *vaultAccountRow) toService() *service.VaultAccount {
+	hash := append([]byte(nil), r.SecretKeyHash...)
+	salt := append([]byte(nil), r.KDFSalt...)
+	wrapped := append([]byte(nil), r.WrappedVaultKey...)
+	return &service.VaultAccount{
+		UserID:        r.UserID,
+		SecretKeyHash: hash,
+		KDF: service.VaultKDFParams{
+			Algorithm:   r.KDFAlgorithm,
+			Memory:      r.KDFMemory,
+			Iterations:  r.KDFIterations,
+			Parallelism: r.KDFParallelism,
+			Salt:        salt,
+		},
+		WrappedVaultKey:        wrapped,
+		WrappedVaultKeyVersion: r.WrappedVaultKeyVersion,
+		RecoveryKitID:          r.RecoveryKitID,
+		SessionLockSeconds:     r.SessionLockSeconds,
+		CreatedAt:              r.CreatedAt,
+		UpdatedAt:              r.UpdatedAt,
+	}
+}
+
+func vaultAccountRowFromService(a *service.VaultAccount) *vaultAccountRow {
+	hash := append([]byte(nil), a.SecretKeyHash...)
+	salt := append([]byte(nil), a.KDF.Salt...)
+	wrapped := append([]byte(nil), a.WrappedVaultKey...)
+	return &vaultAccountRow{
+		UserID:                 a.UserID,
+		SecretKeyHash:          hash,
+		KDFAlgorithm:           a.KDF.Algorithm,
+		KDFMemory:              a.KDF.Memory,
+		KDFIterations:          a.KDF.Iterations,
+		KDFParallelism:         a.KDF.Parallelism,
+		KDFSalt:                salt,
+		WrappedVaultKey:        wrapped,
+		WrappedVaultKeyVersion: a.WrappedVaultKeyVersion,
+		RecoveryKitID:          a.RecoveryKitID,
+		SessionLockSeconds:     a.SessionLockSeconds,
+		CreatedAt:              a.CreatedAt,
+		UpdatedAt:              a.UpdatedAt,
+	}
+}
+
+// vaultItemRow stores a single encrypted entry in a user's personal
+// vault. id is the primary key; user_id is indexed so the per-user
+// listing (the only access path) is an O(items-per-user) scan rather
+// than a global scan.
+//
+// Type is indexed so the SPA's type filter ("show only Logins") is a
+// fast secondary scan within the user partition. Encrypted fields
+// (title, tags, hostnames, payload) are opaque to the server — the
+// server stores ciphertext and never inspects it, so indexing them
+// would be meaningless. List filtering against those values happens
+// entirely in the SPA after decryption.
+//
+// DeletedAt uses a pointer so the JSON "deleted_at: null" round-trips
+// cleanly; the service layer treats a non-nil DeletedAt as "in
+// trash" and excludes the row from the active list by default.
+//
+// EncryptedPayload / EncryptedTitle / EncryptedTags / EncryptedHostnames
+// are XChaCha20-Poly1305 ciphertexts produced by the SPA with the
+// per-user vault key. The server never holds the key and never
+// inspects these bytes; bw treats them as opaque blobs.
+//
+// Schema is version 2 — see migrate_vault.go for the v1 → v2 wipe
+// (v1 stored title/tags/url_hostnames in cleartext).
+type vaultItemRow struct {
+	ID                 string     `bw:"id,pk"`
+	UserID             string     `bw:"user_id,index"`
+	Type               string     `bw:"type,index"`
+	EncryptedTitle     []byte     `bw:"encrypted_title"`
+	EncryptedTags      []byte     `bw:"encrypted_tags"`
+	EncryptedHostnames []byte     `bw:"encrypted_hostnames"`
+	EncryptedPayload   []byte     `bw:"encrypted_payload"`
+	Favorite           bool       `bw:"favorite"`
+	Archived           bool       `bw:"archived"`
+	DeletedAt          *time.Time `bw:"deleted_at"`
+	LastUsedAt         *time.Time `bw:"last_used_at"`
+	CreatedAt          time.Time  `bw:"created_at,index"`
+	UpdatedAt          time.Time  `bw:"updated_at"`
+	Version            int64      `bw:"version"`
+}
+
+func (r *vaultItemRow) toService() *service.VaultItem {
+	return &service.VaultItem{
+		ID:                 r.ID,
+		UserID:             r.UserID,
+		Type:               service.VaultItemType(r.Type),
+		EncryptedTitle:     append([]byte(nil), r.EncryptedTitle...),
+		EncryptedTags:      append([]byte(nil), r.EncryptedTags...),
+		EncryptedHostnames: append([]byte(nil), r.EncryptedHostnames...),
+		EncryptedPayload:   append([]byte(nil), r.EncryptedPayload...),
+		Favorite:           r.Favorite,
+		Archived:           r.Archived,
+		DeletedAt:          r.DeletedAt,
+		LastUsedAt:         r.LastUsedAt,
+		CreatedAt:          r.CreatedAt,
+		UpdatedAt:          r.UpdatedAt,
+		Version:            r.Version,
+	}
+}
+
+func vaultItemRowFromService(i *service.VaultItem) *vaultItemRow {
+	return &vaultItemRow{
+		ID:                 i.ID,
+		UserID:             i.UserID,
+		Type:               string(i.Type),
+		EncryptedTitle:     append([]byte(nil), i.EncryptedTitle...),
+		EncryptedTags:      append([]byte(nil), i.EncryptedTags...),
+		EncryptedHostnames: append([]byte(nil), i.EncryptedHostnames...),
+		EncryptedPayload:   append([]byte(nil), i.EncryptedPayload...),
+		Favorite:           i.Favorite,
+		Archived:           i.Archived,
+		DeletedAt:          i.DeletedAt,
+		LastUsedAt:         i.LastUsedAt,
+		CreatedAt:          i.CreatedAt,
+		UpdatedAt:          i.UpdatedAt,
+		Version:            i.Version,
+	}
+}
+
+// vaultItemVersionRow stores one snapshot of an item's prior state.
+// Composite primary key (item_id, version) via a custom KeyFn — see
+// vaultItemVersionKey. user_id is indexed so DeleteAllByUser is a
+// fast secondary scan; item_id is indexed so ListByItem doesn't have
+// to walk the whole bucket.
+//
+// EncryptedTitle mirrors the live row's title encryption so history
+// entries do not leak the readable title — see schema v2.
+type vaultItemVersionRow struct {
+	ItemID           string    `bw:"item_id,index"`
+	UserID           string    `bw:"user_id,index"`
+	Version          int64     `bw:"version"`
+	EncryptedTitle   []byte    `bw:"encrypted_title"`
+	EncryptedPayload []byte    `bw:"encrypted_payload"`
+	UpdatedAt        time.Time `bw:"updated_at"`
+	Author           string    `bw:"author"`
+}
+
+func (r *vaultItemVersionRow) toService() *service.VaultItemVersion {
+	return &service.VaultItemVersion{
+		ItemID:           r.ItemID,
+		Version:          r.Version,
+		EncryptedTitle:   append([]byte(nil), r.EncryptedTitle...),
+		EncryptedPayload: append([]byte(nil), r.EncryptedPayload...),
+		UpdatedAt:        r.UpdatedAt,
+		Author:           r.Author,
+	}
+}
+
+func vaultItemVersionRowFromService(userID string, v *service.VaultItemVersion) *vaultItemVersionRow {
+	return &vaultItemVersionRow{
+		ItemID:           v.ItemID,
+		UserID:           userID,
+		Version:          v.Version,
+		EncryptedTitle:   append([]byte(nil), v.EncryptedTitle...),
+		EncryptedPayload: append([]byte(nil), v.EncryptedPayload...),
+		UpdatedAt:        v.UpdatedAt,
+		Author:           v.Author,
+	}
+}
+
 // settingsRow is a singleton — there's only ever one row, keyed by the
 // fixed string "default", matching the SQLite layout.
 type settingsRow struct {

@@ -50,6 +50,13 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		svc.SetHookDispatcher(d)
 	}
 
+	// Personal vault coordinator. Always-on (no AuthSettings dependency),
+	// because the feature is per-user opt-in (the SPA hides the route
+	// until the user explicitly visits Setup). The service holds an
+	// in-memory rate limiter for unlock-check attempts; instantiating
+	// it here keeps the wiring single-source.
+	svc.SetVaultService(service.NewVaultService(svc))
+
 	server := ada.New()
 	server.Use(
 		mrecover.Middleware(),

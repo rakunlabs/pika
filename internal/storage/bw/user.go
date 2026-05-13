@@ -168,6 +168,31 @@ func (s *userStorage) cascadeDelete(ctx context.Context, userID string) error {
 	if err := s.store.passkeysAt(s.scope).DeleteByUserID(ctx, userID); err != nil {
 		return err
 	}
+	// Same reasoning for TOTP: a stale enrollment row would either
+	// gate login for a non-existent user (if Enabled=true) or sit as
+	// orphaned material an attacker could rehydrate by reusing the
+	// user_id. Delete ignores a missing row.
+	if err := s.store.userTOTPAt(s.scope).Delete(ctx, userID); err != nil {
+		return err
+	}
+	// Personal vault cascade: drop every encrypted item, its history,
+	// and the account crypto state. Without this a recycled user_id
+	// would either inherit the previous user's items (still encrypted
+	// with an unknown key, but visible in listings) or trip the
+	// "already initialized" guard on Setup.
+	//
+	// Order matters: items first, then history (already cascaded by
+	// vaultItemStorage.Delete for individual rows; bulk delete here
+	// does both for safety), then the account.
+	if err := s.store.vaultItemsAt(s.scope).DeleteAllByUser(ctx, userID); err != nil {
+		return err
+	}
+	if err := s.store.vaultItemVersionsAt(s.scope).DeleteAllByUser(ctx, userID); err != nil {
+		return err
+	}
+	if err := s.store.vaultAccountsAt(s.scope).Delete(ctx, userID); err != nil {
+		return err
+	}
 	return s.store.sessionsAt(s.scope).DeleteByUserID(ctx, userID)
 }
 

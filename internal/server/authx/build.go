@@ -79,19 +79,40 @@ func buildAuthConfig(s *service.AuthSettings, base, version string, signupFirstF
 func buildStrategies(d Deps, s *service.AuthSettings, onRegister func()) ([]strategy.Authenticator, error) {
 	var out []strategy.Authenticator
 
+	// TOTP / 2FA coordinator. Built before the strategies that need
+	// it so we can pass it into the MFA wrapper. nil-safe: when MFA
+	// is off (TOTPCoord returns nil), the wrapper is a transparent
+	// pass-through, so the wiring is identical whether or not 2FA is
+	// configured for this deployment.
+	totpCoord := BuildTOTPService(d.Svc, s)
+	d.Svc.SetTOTPService(totpCoord)
+
 	if local := BuildLocal(d.Svc, s.Local, onRegister); local != nil {
-		out = append(out, local)
+		// Local supports signup (first-user bootstrap), so we wrap
+		// with the Registerer-aware variant. The wrapper forwards
+		// Register straight to the inner — registration paths can't
+		// have TOTP enrolled yet.
+		out = append(out, NewMFAStrategyWithRegister(local, d.Svc, totpCoord))
 	}
 	// API Key strategy is always on: tokens created under the Access
 	// Tokens settings page must always work, and pika only accepts them
 	// via `Authorization: Bearer <key>` (no settings knob to change
-	// header name — see BuildAPIKey doc).
+	// header name — see BuildAPIKey doc). NOT wrapped with MFA — API
+	// keys are programmatic credentials, not interactive logins.
 	if apik := BuildAPIKey(d.Svc); apik != nil {
 		out = append(out, apik)
 	}
+	// Header / proxy auth: not wrapped. The upstream proxy is already
+	// trusted to assert identity; layering pika-side TOTP on top
+	// would be redundant and confusing (the proxy can't render the
+	// step-up screen).
 	if h := BuildHeader(s.Header); h != nil {
 		out = append(out, h)
 	}
+	// OAuth2: not wrapped. The IdP is responsible for its own MFA;
+	// pika doesn't see the user's IdP password, so adding pika-side
+	// TOTP on top would just inconvenience users without improving
+	// security (the user could just enroll TOTP at the IdP instead).
 	oa2, err := BuildOAuth2(s.OAuth2)
 	if err != nil {
 		return nil, err
@@ -103,7 +124,12 @@ func buildStrategies(d Deps, s *service.AuthSettings, onRegister func()) ([]stra
 		return nil, err
 	}
 	if l != nil {
-		out = append(out, l)
+		// LDAP wrapped with MFA. LDAP doesn't support signup (no
+		// Registerer interface satisfaction), so we use the plain
+		// MFAStrategy — that way ada's handleRegister returns 404
+		// for /login/register/<ldap-name>, matching the pre-wrap
+		// behavior.
+		out = append(out, NewMFAStrategy(l, d.Svc, totpCoord))
 	}
 
 	// Passkey: wire the engine + service if the settings have it on.
@@ -131,7 +157,7 @@ func buildStrategies(d Deps, s *service.AuthSettings, onRegister func()) ([]stra
 				label = s.Passkey.Label
 			}
 		}
-		strat, err := BuildPasskeyStrategy(engine, ps, name, label)
+		strat, err := BuildPasskeyStrategy(engine, ps, d.Svc, name, label, ttl)
 		if err != nil {
 			return nil, fmt.Errorf("passkey strategy: %w", err)
 		}

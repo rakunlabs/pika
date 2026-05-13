@@ -115,21 +115,34 @@ func (s *SessionStore) Save(r *http.Request, w http.ResponseWriter, sess *sessio
 		sess.ID = id
 	}
 
-	payload, err := json.Marshal(sess.Values)
-	if err != nil {
-		return err
-	}
-
 	ttl := 24 * time.Hour
 	if opts != nil && opts.MaxAge > 0 {
 		ttl = time.Duration(opts.MaxAge) * time.Second
 	}
 
-	// Derive the pika user the session belongs to, creating or linking
-	// external users on first login so every session row is anchored to
-	// a real users row. Admin flows (kick, disable, list) then work
-	// uniformly regardless of which strategy issued the session.
+	// Derive the pika user the session belongs to. Admin flows (kick,
+	// disable, list) all key off user_id, so this is the single point
+	// where ada's Identity (provider-shaped) is mapped onto pika's
+	// internal users.id once per save.
 	username, userID := s.resolveSessionUser(r.Context(), sess.Values)
+
+	// Stamp the resolved user_id INTO the serialized identity claims
+	// before persisting. Downstream readers (CapResolver, future
+	// middlewares) read it via identity.Claim[string]("pika_user_id")
+	// instead of re-running the provider-based dispatch on every
+	// request. Identity is the single source of truth: ada owns
+	// Subject/Provider/Email/etc., pika owns the user_id claim under
+	// a namespaced key. The decoration mutates sess.Values["pair"]
+	// directly, so the marshaled payload below carries the claim for
+	// every subsequent SessionStore.Get.
+	if userID != "" {
+		stampUserIDClaim(sess.Values, userID)
+	}
+
+	payload, err := json.Marshal(sess.Values)
+	if err != nil {
+		return err
+	}
 
 	if err := s.svc.PutRawSession(r.Context(), &service.RawSession{
 		ID:        sess.ID,
@@ -203,17 +216,104 @@ func extractIdentity(values map[string]any) extractedIdentity {
 	return out
 }
 
+// PikaUserIDClaim is the identity-claim key that carries the resolved
+// pika users.id alongside the rest of ada's Identity. SessionStore.Save
+// stamps it after resolving the (Provider, Subject) → users.id mapping
+// once, so downstream consumers (capability resolver, audit hooks)
+// never have to re-run the provider-based dispatch on every request.
+// Namespaced with the "pika_" prefix so it can't collide with custom
+// OIDC claims that an external IdP might emit.
+const PikaUserIDClaim = "pika_user_id"
+
+// stampUserIDClaim mutates the serialized "pair" inside sess.Values so
+// that Identity.Claims["pika_user_id"] carries the resolved user_id.
+// The pair is round-tripped through generic map[string]any — we avoid
+// importing ada's Pair/Identity structs here so the session payload
+// stays opaque to non-identity fields (access/refresh blobs etc.)
+// that we have no business reshaping.
+//
+// Failure modes are intentionally silent: a missing or unparseable
+// pair just doesn't get decorated, the DB row's user_id column still
+// reflects the resolved user, and the next Save will retry. This
+// avoids a session-save failure for what is effectively a cache
+// optimization.
+func stampUserIDClaim(values map[string]any, userID string) {
+	raw, ok := values["pair"].(string)
+	if !ok || raw == "" {
+		return
+	}
+	var pair map[string]any
+	if err := json.Unmarshal([]byte(raw), &pair); err != nil {
+		return
+	}
+	ident, _ := pair["identity"].(map[string]any)
+	if ident == nil {
+		ident = map[string]any{}
+		pair["identity"] = ident
+	}
+	claims, _ := ident["claims"].(map[string]any)
+	if claims == nil {
+		claims = map[string]any{}
+		ident["claims"] = claims
+	}
+	claims[PikaUserIDClaim] = userID
+	out, err := json.Marshal(pair)
+	if err != nil {
+		return
+	}
+	values["pair"] = string(out)
+}
+
+// localEquivalentProviders enumerates the identity.provider values that
+// resolve to a pika-managed local user (not an external IdP). Used
+// exclusively by resolveSessionUser below to pick the right one-shot
+// dispatch at login time — once user_id is resolved and stamped into
+// Identity.Claims[PikaUserIDClaim] via stampUserIDClaim, downstream
+// per-request consumers (CapResolver) lookup the user by id and never
+// re-run this dispatch.
+//
+//   - "" and "local": classic password login. Empty is the legacy
+//     value for sessions persisted before the provider field existed.
+//   - "passkey": ada's passkey strategy stamps id.Provider with the
+//     configured strategy name, defaulting to "passkey". A successful
+//     passkey assertion has already authenticated against an existing
+//     pika user (the credential row in `passkeys` is FK'd to
+//     `users.id`); there is no external identity to provision. If an
+//     operator renames the passkey strategy in settings, sessions for
+//     that strategy will fall through to the external-lookup branch
+//     and fail closed — which is preferable to silently creating a
+//     duplicate user.
+var localEquivalentProviders = map[string]struct{}{
+	"":        {},
+	"local":   {},
+	"passkey": {},
+}
+
+// isLocalEquivalentProvider is the readable form of the set membership
+// check. Kept as a helper so a future need to consult the set from
+// outside resolveSessionUser doesn't proliferate inline lookups.
+func isLocalEquivalentProvider(provider string) bool {
+	_, ok := localEquivalentProviders[provider]
+	return ok
+}
+
 // resolveSessionUser returns (username, user_id) for the session row. It
-// handles both local and external identities:
+// handles both local and external identities, but it never provisions
+// new users — that is reserved for the user-sync engine. Unrecognized
+// external identities fail closed (session persisted without a
+// user_id), surfacing a warning so operators can investigate.
 //
-//   - Local (identity.provider == "local" or empty-provider legacy rows):
-//     look up the user by username. No provisioning — local users are
-//     always created ahead of time through the normal /users flow.
+//   - Local (provider in localEquivalentProviders): look up the user
+//     by username. Missing → return Subject with empty user_id; the
+//     session still persists so the cookie remains valid, but admin
+//     flows that depend on user_id will treat it as unbound.
 //
-//   - External: call FindOrCreateExternalUser, which either resolves
-//     (provider, subject) to an existing link, auto-links by verified
-//     email, or provisions a brand-new external users row. This is what
-//     makes kick/list work for OAuth2 users.
+//   - External: call FindExternalUser, which resolves (provider,
+//     subject) to an existing link or auto-links by verified email
+//     against an existing local user. ErrNotFound means no
+//     pre-existing user — DO NOT create one. Operators must
+//     pre-provision external users via user sync or the admin Users
+//     page.
 //
 // A best-effort failure (e.g. identity has no Subject or the DB lookup
 // errors) yields empty strings so the session still persists. The auth
@@ -225,9 +325,11 @@ func (s *SessionStore) resolveSessionUser(ctx context.Context, values map[string
 		return "", ""
 	}
 
-	// Local: provider is "local" or missing (legacy local sessions
-	// predated the provider field). Username is the pika username.
-	if id.Provider == "" || id.Provider == "local" {
+	// Local-equivalent: bind to the existing pika user by username.
+	// No provisioning — local users are always created ahead of time
+	// through the admin /users flow, and passkey users authenticate
+	// against an already-existing local row by definition.
+	if isLocalEquivalentProvider(id.Provider) {
 		info, err := s.svc.GetUserByUsername(ctx, id.Subject)
 		if err == nil && info != nil {
 			return info.Username, info.ID
@@ -235,23 +337,33 @@ func (s *SessionStore) resolveSessionUser(ctx context.Context, values map[string
 		return id.Subject, ""
 	}
 
-	// External: ensure a users row exists for this identity.
-	info, err := s.svc.FindOrCreateExternalUser(ctx, service.ExternalIdentityInput{
+	// External: lookup-only. An unrecognized identity is logged and
+	// the session is persisted unbound — never auto-created. The
+	// user-sync engine (internal/usersync) is the only path
+	// permitted to materialize new users from external sources.
+	info, err := s.svc.FindExternalUser(ctx, service.ExternalIdentityInput{
 		Provider:      id.Provider,
 		Subject:       id.Subject,
 		Email:         id.Email,
 		EmailVerified: id.EmailVerified,
 		DisplayName:   id.Name,
-		Username:      id.Name, // use name as a username hint; sanitize at service layer
+		Username:      id.Name, // username hint, only consumed when verified-email auto-link fires
 	})
 	if err != nil {
-		// Don't block the login — the user already authenticated
-		// successfully upstream. Log and persist without user_id.
-		slog.Warn("authx: failed to provision external user",
-			"provider", id.Provider,
-			"subject", id.Subject,
-			"error", err.Error(),
-		)
+		if errors.Is(err, service.ErrNotFound) {
+			// Fail-closed: surface a clear hint that the user must be
+			// pre-provisioned, then let the session persist unbound.
+			slog.Warn("authx: external identity has no matching pika user; sync the user first",
+				"provider", id.Provider,
+				"subject", id.Subject,
+			)
+		} else {
+			slog.Warn("authx: failed to resolve external user",
+				"provider", id.Provider,
+				"subject", id.Subject,
+				"error", err.Error(),
+			)
+		}
 		return id.Subject, ""
 	}
 	return info.Username, info.ID

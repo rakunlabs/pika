@@ -46,48 +46,48 @@ func (r *CapResolver) Middleware() ada.MiddlewareFunc {
 // resolve computes the capability set for an authenticated identity and
 // returns the pika username + user_id that back it (for context-planting).
 //
-// Behavior by identity source:
+// The resolver is now uniform across every strategy: it reads the
+// already-resolved pika users.id from the Identity claim under
+// PikaUserIDClaim and looks up the user by that id. SessionStore.Save
+// stamps the claim once per session, after running the
+// provider-specific (Provider, Subject) → users.id dispatch
+// (resolveSessionUser). That stamp eliminates the dispatch from the
+// per-request hot path AND keeps every strategy (local, passkey,
+// oauth2, header, ...) on the same code path — adding a new strategy
+// no longer requires touching this file. See TestCapResolver_*.
 //
-//	local:
-//	    username = id.Subject (already the pika username)
-//	    caps = DB permissions (is_superadmin shortcut, else users_permissions)
-//	         ∪ Superadmins allowlist match
-//	         ∪ RoleMapping / ScopeMapping (rarely populated for local)
+// Grant sources (all unioned, dedup'd):
 //
-//	external (oauth2, header, ldap, ...):
-//	    Resolve via user_identities → users. The session store already did
-//	    this at cookie-issue time via FindOrCreateExternalUser, so the
-//	    lookup is a simple index hit.
-//	    caps = DB permissions for that users row
-//	         ∪ Superadmins allowlist match (on id.Subject, i.e. provider's sub)
-//	         ∪ RoleMapping[id.Roles] ∪ ScopeMapping[id.Scopes]
+//  1. Superadmin allowlist match on id.Subject (operator-set; for
+//     external IdPs Subject is the OIDC sub, for local it's the
+//     username — operators put either form). Returns the full
+//     known-key set; superadmins are unrestricted by definition.
+//  2. DB-backed permissions for the user_id resolved at login time:
+//     is_superadmin column on users (full set), else per-user
+//     permission bundle grants.
+//  3. Declarative RoleMapping[id.Roles] / ScopeMapping[id.Scopes] —
+//     useful for granting external users baseline caps without
+//     creating per-user DB rows. These are unrestricted (no path
+//     scoping); any key granted here strips its pattern from the DB
+//     patterns map so the broader grant wins.
 //
-// All three grant sources are unioned (deduplicated). Superadmin bit on the
-// users row short-circuits to the full capability set regardless of other
-// inputs.
+// If the Identity carries no PikaUserIDClaim (e.g. a request that
+// arrived before SessionStore.Save ran, or a non-session strategy
+// that hasn't been wired through resolveSessionUser yet), the
+// per-user DB step is skipped — the user still gets Superadmin/Role/
+// Scope caps when those apply.
 func (r *CapResolver) resolve(ctx context.Context, id *identity.Identity) (service.Capabilities, string, string, map[string][]string) {
 	username := id.Subject
-	userID := ""
+	userID := identity.Claim[string](id, PikaUserIDClaim)
 
-	// Best-effort: always try to resolve the pika user ID for the
-	// identity, even for superadmins. Per-user resources like
-	// /api/v1/me/preferences read service.UserIDFromContext to scope
-	// their reads/writes, and bouncing them with "no user in context"
-	// just because the caller is a superadmin would be surprising. The
-	// resolver still returns the full capability set below.
-	resolveUserID := func() {
-		if r.svc == nil || userID != "" {
-			return
-		}
-		if id.Provider == "" || id.Provider == "local" {
-			if user, err := r.svc.GetUserByUsername(ctx, id.Subject); err == nil && user != nil {
-				userID = user.ID
-			}
-			return
-		}
-		if ui, err := r.svc.GetUserByIdentity(ctx, id.Provider, id.Subject); err == nil && ui != nil {
-			username = ui.Username
-			userID = ui.ID
+	// Look the user up once and reuse for every subsequent decision.
+	// Failures (deleted user, DB error) leave `user` nil and we still
+	// honor Superadmin/Role/Scope mappings below.
+	var user *service.UserInfo
+	if r.svc != nil && userID != "" {
+		if u, err := r.svc.GetUserByID(ctx, userID); err == nil && u != nil {
+			user = u
+			username = u.Username
 		}
 	}
 
@@ -103,49 +103,28 @@ func (r *CapResolver) resolve(ctx context.Context, id *identity.Identity) (servi
 		}
 	}
 
-	// 1. Superadmin allowlist — Subject fast path, bypasses everything.
-	// No path patterns: superadmins are unrestricted by definition.
+	// 1. Superadmin allowlist — operator-controlled escape hatch. We
+	// short-circuit to the full known-key set; no patterns because
+	// superadmins are unrestricted by definition.
 	for _, admin := range r.settings.Superadmins {
 		if admin == id.Subject {
-			resolveUserID()
 			return service.Capabilities(service.KnownCapabilityKeys()), username, userID, nil
 		}
 	}
 
-	// 2. DB-backed permissions. The path differs by provider because the
-	// lookup key differs: local uses username, external uses
-	// (provider, subject) → user.
+	// 2. DB-backed permissions for the resolved user. The is_superadmin
+	// shortcut on the users row produces the full known-key set; else
+	// we union the per-user permission grants.
 	var patterns map[string][]string
-	if r.svc != nil {
-		if id.Provider == "" || id.Provider == "local" {
-			keys, isSuper, _, err := r.svc.ResolveLocalCapabilityKeys(ctx, id.Subject)
-			if err == nil {
-				if isSuper {
-					resolveUserID()
-					return service.Capabilities(service.KnownCapabilityKeys()), username, userID, nil
-				}
-				add(keys)
-				if user, err := r.svc.GetUserByUsername(ctx, id.Subject); err == nil && user != nil {
-					userID = user.ID
-					if pats, err := r.svc.ResolveUserCapabilityPatterns(ctx, user.ID); err == nil {
-						patterns = pats
-					}
-				}
-			}
-		} else {
-			if ui, err := r.svc.GetUserByIdentity(ctx, id.Provider, id.Subject); err == nil && ui != nil {
-				username = ui.Username
-				userID = ui.ID
-				if ui.IsSuperadmin {
-					return service.Capabilities(service.KnownCapabilityKeys()), username, userID, nil
-				}
-				if keys, _, _, err := r.svc.ResolveUserCapabilityKeysByID(ctx, ui.ID); err == nil {
-					add(keys)
-				}
-				if pats, err := r.svc.ResolveUserCapabilityPatterns(ctx, ui.ID); err == nil {
-					patterns = pats
-				}
-			}
+	if user != nil {
+		if user.IsSuperadmin {
+			return service.Capabilities(service.KnownCapabilityKeys()), username, userID, nil
+		}
+		if keys, _, _, err := r.svc.ResolveUserCapabilityKeysByID(ctx, user.ID); err == nil {
+			add(keys)
+		}
+		if pats, err := r.svc.ResolveUserCapabilityPatterns(ctx, user.ID); err == nil {
+			patterns = pats
 		}
 	}
 

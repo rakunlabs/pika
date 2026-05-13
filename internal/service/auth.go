@@ -57,6 +57,14 @@ type User struct {
 }
 
 // UserInfo is the public representation of a user (no password hash).
+//
+// HasTOTP is true when the user has finished TOTP enrollment (Enabled
+// row in user_totp). It is decorated post-toInfo at the service layer
+// — the User struct doesn't carry TOTP state. Useful to the admin UI
+// for showing a 2FA-enabled badge and conditionally rendering the
+// "Reset 2FA" affordance. A pending-but-not-finished enrollment
+// (Enabled=false) is reported as HasTOTP=false: pika treats only the
+// live enrollment as security-relevant.
 type UserInfo struct {
 	ID             string    `json:"id"`
 	Username       string    `json:"username"`
@@ -66,6 +74,7 @@ type UserInfo struct {
 	Disabled       bool      `json:"disabled"`
 	IsSuperadmin   bool      `json:"is_superadmin"`
 	ActiveSessions int64     `json:"active_sessions"`
+	HasTOTP        bool      `json:"has_totp"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
@@ -208,6 +217,13 @@ func (s *Service) ListUsers(ctx context.Context, q *query.Query) ([]UserInfo, in
 		if err == nil {
 			info.ActiveSessions = count
 		}
+		// TOTP enrollment status. We use a per-user fetch rather than
+		// a bulk preload because the typical user table is small
+		// (tens of rows) and the bw lookup is O(1). For installs with
+		// thousands of users this could be a bulk fetch instead.
+		// Errors are swallowed — HasTOTP defaults to false, which is
+		// the same as "no row".
+		s.decorateHasTOTP(ctx, &info)
 		infos = append(infos, info)
 	}
 
@@ -222,7 +238,25 @@ func (s *Service) GetUser(ctx context.Context, id string) (*UserInfo, error) {
 	}
 
 	info := user.toInfo()
+	s.decorateHasTOTP(ctx, &info)
 	return &info, nil
+}
+
+// decorateHasTOTP fills the HasTOTP field on a UserInfo by looking up
+// the user's TOTP row. A missing row, an Enabled=false row, or any
+// storage error all collapse to HasTOTP=false — the admin UI's
+// "user has 2FA on" badge is purely informational, so a false
+// negative here is harmless. The reset endpoint is idempotent and
+// safe to invoke regardless.
+func (s *Service) decorateHasTOTP(ctx context.Context, info *UserInfo) {
+	if info == nil || info.ID == "" {
+		return
+	}
+	row, err := s.store.UserTOTPs().Get(ctx, info.ID)
+	if err != nil || row == nil {
+		return
+	}
+	info.HasTOTP = row.Enabled
 }
 
 // GetUserByUsername retrieves a user by username. Used by the auth layer to

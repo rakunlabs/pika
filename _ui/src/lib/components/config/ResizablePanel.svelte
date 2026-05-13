@@ -67,8 +67,8 @@
  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
  <div 
- class="absolute top-0 bottom-0 w-1 bg-transparent cursor-col-resize z-10 transition-colors duration-150 hover:bg-brand-500 {side === 'left' ? 'right-0' : 'left-0'}"
- class:bg-brand-500={isDragging}
+ class="absolute top-0 bottom-0 w-1 bg-transparent cursor-col-resize z-10 transition-colors duration-150 hover:bg-vermilion-500 {side === 'left' ? 'right-0' : 'left-0'}"
+ class:bg-vermilion-500={isDragging}
  onmousedown={handleMouseDown}
  role="separator"
  aria-orientation="vertical"

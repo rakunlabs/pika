@@ -67,6 +67,8 @@ export function gutterStylesFor(theme: EditorThemeMeta): {
 // chain ends with `monospace` so a missing face never produces a
 // proportional-font rendering.
 export const EDITOR_FONT_FAMILIES: { label: string; value: string }[] = [
+  // Geist Mono — Vercel's monospace, default for new users.
+  { label: 'Geist Mono',      value: "'Geist Mono', ui-monospace, monospace" },
   { label: 'JetBrains Mono',  value: "'JetBrains Mono', ui-monospace, monospace" },
   { label: 'Fira Code',       value: "'Fira Code', ui-monospace, monospace" },
   { label: 'Source Code Pro', value: "'Source Code Pro', ui-monospace, monospace" },

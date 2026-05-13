@@ -73,6 +73,26 @@ func (s *Storage) Passkeys() service.PasskeyStorage {
 	return s.backend.Passkeys()
 }
 
+func (s *Storage) PasskeyChallenges() service.PasskeyChallengeStorage {
+	return s.backend.PasskeyChallenges()
+}
+
+func (s *Storage) UserTOTPs() service.UserTOTPStorage {
+	return s.backend.UserTOTPs()
+}
+
+func (s *Storage) VaultAccounts() service.VaultAccountStorage {
+	return s.backend.VaultAccounts()
+}
+
+func (s *Storage) VaultItems() service.VaultItemStorage {
+	return s.backend.VaultItems()
+}
+
+func (s *Storage) VaultItemVersions() service.VaultItemVersionStorage {
+	return s.backend.VaultItemVersions()
+}
+
 // Tx executes a function within a transaction.
 func (s *Storage) Tx(ctx context.Context, fn func(ctx context.Context, tx service.Storage) error) error {
 	return s.backend.Tx(ctx, func(ctx context.Context, tx service.Storage) error {

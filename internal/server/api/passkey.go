@@ -11,12 +11,19 @@ import (
 )
 
 // passkeyBeginRequest carries the optional human label the user wants
-// to attach to the credential post-enroll. We accept it here at begin
-// time so the SPA can collect it on the same form as the device
-// prompt and not have to round-trip through a second prompt after
-// the authenticator finishes.
+// to attach to the credential post-enroll, plus an optional hint that
+// scopes the registration ceremony to a class of authenticator. We
+// accept both at begin time so the SPA can collect them on the same
+// form as the device prompt and not have to round-trip through a
+// second prompt after the authenticator finishes.
+//
+// attachment is forwarded verbatim to the service layer; values
+// outside the spec ("platform" / "cross-platform") are normalized
+// away inside ada/passkey, so a typo in the SPA degrades to the
+// default chooser behavior instead of breaking the ceremony.
 type passkeyBeginRequest struct {
-	Name string `json:"name,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Attachment string `json:"attachment,omitempty"`
 }
 
 // passkeyBeginResponse is what we hand back to the SPA. session_id is
@@ -57,11 +64,17 @@ func (a *api) beginPasskeyEnroll(c *ada.Context) error {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "passkey not configured"})
 	}
 
-	// Name is optional at begin — we re-collect on finish if missing.
+	// Name and attachment are both optional at begin — we re-collect
+	// the name on finish if it wasn't supplied and the attachment
+	// has no late-binding alternative (it has to be baked into the
+	// challenge), so we just default to "any" when the SPA doesn't
+	// care.
 	var req passkeyBeginRequest
 	_ = c.Bind(&req) // empty body is fine
 
-	sessionID, opts, err := coord.BeginEnroll(ctx, userID)
+	sessionID, opts, err := coord.BeginEnroll(ctx, userID, &service.EnrollOptions{
+		AuthenticatorAttachment: req.Attachment,
+	})
 	if err != nil {
 		return err
 	}

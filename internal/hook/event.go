@@ -22,6 +22,20 @@ const (
 	EventConfigDeleted EventType = "config.deleted"
 	EventConfigUpdated EventType = "config.updated"
 
+	// Personal vault events. Item-level mutations emit the matching
+	// vault.item.* event so operators can pipe them to an audit log
+	// or trigger a backup. The user.* events cover lifecycle on the
+	// vault account row itself.
+	//
+	// EncryptedPayload bodies are NEVER included in the event — only
+	// the item id, type and the calling user. Operators can correlate
+	// to the live vault via the id; the encrypted payload stays
+	// inside the database.
+	EventVaultItemCreated  EventType = "vault.item.created"
+	EventVaultItemUpdated  EventType = "vault.item.updated"
+	EventVaultItemDeleted  EventType = "vault.item.deleted"
+	EventVaultUnlockFailed EventType = "vault.unlock.failed"
+
 	// Wildcard — matches all event types in a hook filter.
 	EventAll EventType = "*"
 )

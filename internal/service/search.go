@@ -7,22 +7,24 @@ import (
 	"strings"
 )
 
-// Search walks all folders recursively, searching file names and content.
-// Results are sent to the results channel as they are found.
-// The caller should cancel the context to stop the search.
-func (s *Service) Search(ctx context.Context, query string, results chan<- SearchResult) error {
+// Search walks all folders recursively, matching paths (always) and file
+// contents (unless opts.NameOnly is set). Results are streamed on the
+// results channel as they are found; the channel is closed when the
+// walk completes or the context is cancelled. Callers cancel the
+// context to stop an in-flight search early.
+func (s *Service) Search(ctx context.Context, opts SearchOptions, results chan<- SearchResult) error {
 	defer close(results)
 
-	if query == "" {
+	if opts.Query == "" {
 		return nil
 	}
 
-	lowerQuery := strings.ToLower(query)
+	lowerQuery := strings.ToLower(opts.Query)
 
-	return s.searchFolder(ctx, "", lowerQuery, results)
+	return s.searchFolder(ctx, "", lowerQuery, opts.NameOnly, results)
 }
 
-func (s *Service) searchFolder(ctx context.Context, folderPath string, lowerQuery string, results chan<- SearchResult) error {
+func (s *Service) searchFolder(ctx context.Context, folderPath string, lowerQuery string, nameOnly bool, results chan<- SearchResult) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -61,7 +63,12 @@ func (s *Service) searchFolder(ctx context.Context, folderPath string, lowerQuer
 			}
 		}
 
-		// Content match
+		if nameOnly {
+			continue
+		}
+
+		// Content match — emit only the path (no line/snippet) so file
+		// contents never leak through search results. One result per file.
 		file, err := s.File(ctx, filePath, 0)
 		if err != nil {
 			continue
@@ -73,30 +80,11 @@ func (s *Service) searchFolder(ctx context.Context, folderPath string, lowerQuer
 			content = string(decoded)
 		}
 
-		lines := strings.Split(content, "\n")
-		for lineNum, line := range lines {
+		if strings.Contains(strings.ToLower(content), lowerQuery) {
 			select {
+			case results <- SearchResult{Path: filePath, Type: "content"}:
 			case <-ctx.Done():
 				return ctx.Err()
-			default:
-			}
-
-			if strings.Contains(strings.ToLower(line), lowerQuery) {
-				snippet := strings.TrimSpace(line)
-				if len(snippet) > 200 {
-					snippet = snippet[:200] + "..."
-				}
-
-				select {
-				case results <- SearchResult{
-					Path:    filePath,
-					Type:    "content",
-					Line:    lineNum + 1,
-					Snippet: snippet,
-				}:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
 			}
 		}
 	}
@@ -128,7 +116,11 @@ func (s *Service) searchFolder(ctx context.Context, folderPath string, lowerQuer
 					}
 				}
 
-				// Content match on variant
+				if nameOnly {
+					continue
+				}
+
+				// Content match on variant — path only (no line/snippet).
 				fullKey := variantKey(filePath, vKey)
 				vFile, err := s.File(ctx, fullKey, 0)
 				if err != nil {
@@ -140,30 +132,11 @@ func (s *Service) searchFolder(ctx context.Context, folderPath string, lowerQuer
 					vContent = string(decoded)
 				}
 
-				vLines := strings.Split(vContent, "\n")
-				for lineNum, line := range vLines {
+				if strings.Contains(strings.ToLower(vContent), lowerQuery) {
 					select {
+					case results <- SearchResult{Path: variantPath, Type: "content"}:
 					case <-ctx.Done():
 						return ctx.Err()
-					default:
-					}
-
-					if strings.Contains(strings.ToLower(line), lowerQuery) {
-						snippet := strings.TrimSpace(line)
-						if len(snippet) > 200 {
-							snippet = snippet[:200] + "..."
-						}
-
-						select {
-						case results <- SearchResult{
-							Path:    variantPath,
-							Type:    "content",
-							Line:    lineNum + 1,
-							Snippet: snippet,
-						}:
-						case <-ctx.Done():
-							return ctx.Err()
-						}
 					}
 				}
 			}
@@ -179,7 +152,7 @@ func (s *Service) searchFolder(ctx context.Context, folderPath string, lowerQuer
 			subPath = folderPath + "/" + subFolder
 		}
 
-		if err := s.searchFolder(ctx, subPath, lowerQuery, results); err != nil {
+		if err := s.searchFolder(ctx, subPath, lowerQuery, nameOnly, results); err != nil {
 			return err
 		}
 	}

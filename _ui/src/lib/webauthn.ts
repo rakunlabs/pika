@@ -38,12 +38,25 @@ export function bufferToBase64URL(buf: ArrayBuffer | Uint8Array): string {
  *
  * Accepts both padded ("A=") and unpadded ("A") inputs since the
  * pika backend emits unpadded but some intermediaries may re-pad.
+ *
+ * Return type is the concrete `Uint8Array<ArrayBuffer>` (not the
+ * default `Uint8Array<ArrayBufferLike>` which includes
+ * SharedArrayBuffer): WebAuthn DOM types (BufferSource,
+ * PublicKeyCredentialDescriptor.id) require a non-shared backing
+ * buffer. Narrowing here lets us hand the result directly to
+ * navigator.credentials.create / .get without per-call casts.
  */
-export function base64URLToBuffer(s: string): Uint8Array {
+export function base64URLToBuffer(s: string): Uint8Array<ArrayBuffer> {
   // Add padding back if missing so atob accepts it.
   const padded = s.replace(/-/g, '+').replace(/_/g, '/').padEnd(s.length + ((4 - (s.length % 4)) % 4), '=');
   const bin = atob(padded);
-  const out = new Uint8Array(bin.length);
+  // Construct the backing buffer explicitly so the type is narrowed
+  // to Uint8Array<ArrayBuffer>. `new Uint8Array(number)` infers
+  // Uint8Array<ArrayBuffer> in recent TS, but pinning the buffer
+  // makes the narrowing explicit and robust to future lib.d.ts
+  // updates.
+  const buf = new ArrayBuffer(bin.length);
+  const out = new Uint8Array(buf);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
@@ -61,6 +74,35 @@ export function base64URLToBuffer(s: string): Uint8Array {
 export function isWebAuthnSupported(): boolean {
   return typeof window !== 'undefined'
     && typeof window.PublicKeyCredential !== 'undefined';
+}
+
+/**
+ * Feature-detect WebAuthn Conditional Mediation (a.k.a. "autofill UI").
+ *
+ * When supported, the browser surfaces enrolled passkeys inline with
+ * the username input's autocomplete dropdown — the user can pick a
+ * passkey without ever clicking a "Sign in with passkey" button.
+ * Requires `autocomplete="username webauthn"` on the input.
+ *
+ * Resolves false on browsers that lack the API entirely (older Firefox,
+ * pre-Safari 16) or when the static method throws — we never reject
+ * because callers want a simple "should we even try" boolean.
+ *
+ * Spec: https://w3c.github.io/webauthn/#sctn-conditional-ui
+ */
+export async function isConditionalMediationAvailable(): Promise<boolean> {
+  if (!isWebAuthnSupported()) return false;
+  const PKC = window.PublicKeyCredential as unknown as {
+    isConditionalMediationAvailable?: () => Promise<boolean>;
+  };
+  if (typeof PKC.isConditionalMediationAvailable !== 'function') return false;
+  try {
+    return await PKC.isConditionalMediationAvailable();
+  } catch {
+    // Some user agents implement the method but throw on private-mode
+    // / no-platform-authenticator combos. Treat any throw as "no".
+    return false;
+  }
 }
 
 /**
@@ -199,13 +241,36 @@ export async function startRegistration(opts: ServerCreationOptions): Promise<Re
 }
 
 /**
+ * Optional extras for the login ceremony.
+ *
+ * mediation lets callers opt into the conditional ("autofill") flow —
+ * see isConditionalMediationAvailable. signal is forwarded to
+ * navigator.credentials.get so a long-running conditional request
+ * can be aborted (e.g. when the user clicks a manual sign-in button
+ * instead of picking from the autofill dropdown).
+ */
+export interface StartAuthenticationExtra {
+  mediation?: CredentialMediationRequirement;
+  signal?: AbortSignal;
+}
+
+/**
  * Run the login (assertion) ceremony.
  *
  * Mirror of startRegistration. The user handle (when the assertion
  * was discoverable) is forwarded as base64url so the server can
  * round-trip it back through its handle-comparison check.
+ *
+ * Pass `{ mediation: 'conditional', signal }` to drive the inline
+ * autofill flow: the call returns when the user picks a passkey from
+ * the username field's autocomplete dropdown, or when the abort
+ * signal fires (then it returns null instead of throwing — callers
+ * use null to mean "no credential was selected").
  */
-export async function startAuthentication(opts: ServerRequestOptions): Promise<AssertionResponseJSON> {
+export async function startAuthentication(
+  opts: ServerRequestOptions,
+  extra?: StartAuthenticationExtra,
+): Promise<AssertionResponseJSON | null> {
   if (!isWebAuthnSupported()) throw new Error('webauthn not supported');
 
   const publicKey: PublicKeyCredentialRequestOptions = {
@@ -219,21 +284,32 @@ export async function startAuthentication(opts: ServerRequestOptions): Promise<A
     userVerification: opts.userVerification,
   };
 
-  const cred = (await navigator.credentials.get({ publicKey })) as PublicKeyCredential | null;
-  if (!cred) throw new Error('assertion returned null');
+  try {
+    const cred = (await navigator.credentials.get({
+      publicKey,
+      mediation: extra?.mediation,
+      signal: extra?.signal,
+    })) as PublicKeyCredential | null;
+    if (!cred) return null;
 
-  const asn = cred.response as AuthenticatorAssertionResponse;
-
-  return {
-    id: cred.id,
-    rawId: bufferToBase64URL(cred.rawId),
-    type: 'public-key',
-    response: {
-      clientDataJSON: bufferToBase64URL(asn.clientDataJSON),
-      authenticatorData: bufferToBase64URL(asn.authenticatorData),
-      signature: bufferToBase64URL(asn.signature),
-      userHandle: asn.userHandle ? bufferToBase64URL(asn.userHandle) : undefined,
-    },
-    authenticatorAttachment: (cred as any).authenticatorAttachment,
-  };
+    const asn = cred.response as AuthenticatorAssertionResponse;
+    return {
+      id: cred.id,
+      rawId: bufferToBase64URL(cred.rawId),
+      type: 'public-key',
+      response: {
+        clientDataJSON: bufferToBase64URL(asn.clientDataJSON),
+        authenticatorData: bufferToBase64URL(asn.authenticatorData),
+        signature: bufferToBase64URL(asn.signature),
+        userHandle: asn.userHandle ? bufferToBase64URL(asn.userHandle) : undefined,
+      },
+      authenticatorAttachment: (cred as any).authenticatorAttachment,
+    };
+  } catch (err: any) {
+    // AbortError is the expected outcome when the caller cancels the
+    // conditional get() to start a different flow. Translate it to
+    // null so callers don't have to special-case the error type.
+    if (err?.name === 'AbortError') return null;
+    throw err;
+  }
 }

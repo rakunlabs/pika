@@ -57,12 +57,12 @@ func seedPasskeyRow(t *testing.T, svc *service.Service, userID, name string, cre
 func TestPasskey_BeginEnroll_requiresValidUser(t *testing.T) {
 	_, ps := newTestPasskeyService(t)
 
-	_, _, err := ps.BeginEnroll(t.Context(), "")
+	_, _, err := ps.BeginEnroll(t.Context(), "", nil)
 	if !errors.Is(err, service.ErrBadRequest) {
 		t.Errorf("empty userID: got %v, want ErrBadRequest", err)
 	}
 
-	_, _, err = ps.BeginEnroll(t.Context(), "does-not-exist")
+	_, _, err = ps.BeginEnroll(t.Context(), "does-not-exist", nil)
 	if !errors.Is(err, service.ErrNotFound) {
 		t.Errorf("unknown user: got %v, want ErrNotFound", err)
 	}
@@ -72,7 +72,7 @@ func TestPasskey_BeginEnroll_returnsSessionAndOptions(t *testing.T) {
 	svc, ps := newTestPasskeyService(t)
 	uid := createUserHelper(t, svc, "alice")
 
-	sessionID, opts, err := ps.BeginEnroll(t.Context(), uid)
+	sessionID, opts, err := ps.BeginEnroll(t.Context(), uid, nil)
 	if err != nil {
 		t.Fatalf("BeginEnroll: %v", err)
 	}
@@ -98,6 +98,100 @@ func TestPasskey_BeginEnroll_returnsSessionAndOptions(t *testing.T) {
 	if !foundES256 {
 		t.Error("default algorithms missing ES256 (-7)")
 	}
+	// Default attachment is empty (browser chooser).
+	if opts.AuthenticatorSelection.AuthenticatorAttachment != "" {
+		t.Errorf("default attachment = %q, want empty", opts.AuthenticatorSelection.AuthenticatorAttachment)
+	}
+}
+
+// TestPasskey_BeginEnroll_persistsAcrossServiceInstances is the
+// regression test for the cluster-aware challenge storage. In a
+// multi-instance pika deployment behind a load balancer, begin and
+// finish can land on different nodes. We simulate that by issuing
+// begin on one PasskeyService instance and finish on a second
+// instance backed by the same storage — if challenges still lived in
+// an in-process map this would fail with ErrUnauthorized.
+//
+// We can't drive a full FinishEnroll without a real WebAuthn
+// response, so the assertion is "the session exists in the second
+// instance's view" — proxied through a known-bad finish that should
+// still get past the session-exists check.
+func TestPasskey_BeginEnroll_persistsAcrossServiceInstances(t *testing.T) {
+	svc, ps := newTestPasskeyService(t)
+	uid := createUserHelper(t, svc, "cluster-alice")
+
+	sid, _, err := ps.BeginEnroll(t.Context(), uid, nil)
+	if err != nil {
+		t.Fatalf("BeginEnroll: %v", err)
+	}
+
+	// Spin up a second coordinator pointed at the same backing
+	// store — analogous to a different pika instance reading the
+	// challenge after bw replicated it. The PasskeyService's own
+	// state (lastUsedCh, gcLoop) is intentionally local, but the
+	// challenge bucket is shared.
+	engine, err := passkey.New(&passkey.Config{
+		RPID: "localhost", RPDisplayName: "pika test",
+		RPOrigins: []string{"http://localhost"},
+	})
+	if err != nil {
+		t.Fatalf("passkey.New: %v", err)
+	}
+	ps2 := service.NewPasskeyService(svc, engine, 5*time.Minute)
+
+	row, err := svc.PasskeyChallengeStore().Get(t.Context(), sid)
+	if err != nil {
+		t.Fatalf("challenge missing from shared store: %v", err)
+	}
+	if row.UserID != uid {
+		t.Errorf("challenge user_id = %q, want %q", row.UserID, uid)
+	}
+	if row.Kind != "enroll" {
+		t.Errorf("challenge kind = %q, want enroll", row.Kind)
+	}
+
+	// FinishEnroll from the second instance should at least clear
+	// the "unknown session" path — the body is empty so it'll fail
+	// later, but the failure must NOT be ErrUnauthorized for
+	// session-not-found.
+	_, err = ps2.FinishEnroll(t.Context(), uid, sid, "", []byte(`{}`))
+	if errors.Is(err, service.ErrUnauthorized) && err.Error() == "unknown session: "+service.ErrUnauthorized.Error() {
+		// We only fail if the error specifically says "unknown
+		// session" — any other error (parse failure, etc.) means
+		// the session lookup passed, which is what this test cares
+		// about.
+		t.Errorf("second instance treats session as missing: %v", err)
+	}
+}
+
+// TestPasskey_BeginEnroll_attachmentScopesCeremony covers the
+// platform / cross-platform / garbage variants for the optional
+// attachment hint. Garbage values must degrade to empty so a typoed
+// SPA doesn't break the ceremony.
+func TestPasskey_BeginEnroll_attachmentScopesCeremony(t *testing.T) {
+	svc, ps := newTestPasskeyService(t)
+	uid := createUserHelper(t, svc, "alice-attach")
+
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"platform", "platform"},
+		{"cross-platform", "cross-platform"},
+		{"PLATFORM", ""}, // case-sensitive in spec
+		{"garbage", ""},
+		{"", ""},
+	}
+	for _, c := range cases {
+		_, opts, err := ps.BeginEnroll(t.Context(), uid, &service.EnrollOptions{AuthenticatorAttachment: c.in})
+		if err != nil {
+			t.Fatalf("BeginEnroll(%q): %v", c.in, err)
+		}
+		got := opts.AuthenticatorSelection.AuthenticatorAttachment
+		if got != c.want {
+			t.Errorf("attachment %q: got %q, want %q", c.in, got, c.want)
+		}
+	}
 }
 
 func TestPasskey_BeginEnroll_excludesEnrolledCredentials(t *testing.T) {
@@ -108,7 +202,7 @@ func TestPasskey_BeginEnroll_excludesEnrolledCredentials(t *testing.T) {
 	seedPasskeyRow(t, svc, uid, "first", []byte{0x01, 0x02}, []byte{0x10})
 	seedPasskeyRow(t, svc, uid, "second", []byte{0x03, 0x04}, []byte{0x20})
 
-	_, opts, err := ps.BeginEnroll(t.Context(), uid)
+	_, opts, err := ps.BeginEnroll(t.Context(), uid, nil)
 	if err != nil {
 		t.Fatalf("BeginEnroll: %v", err)
 	}
@@ -127,7 +221,7 @@ func TestPasskey_BeginEnroll_rejectsDisabledUser(t *testing.T) {
 		t.Fatalf("disable user: %v", err)
 	}
 
-	_, _, err := ps.BeginEnroll(t.Context(), uid)
+	_, _, err := ps.BeginEnroll(t.Context(), uid, nil)
 	if !errors.Is(err, service.ErrForbidden) {
 		t.Errorf("disabled user: got %v, want ErrForbidden", err)
 	}
@@ -149,7 +243,7 @@ func TestPasskey_FinishEnroll_rejectsCrossUserSession(t *testing.T) {
 	bob := createUserHelper(t, svc, "bob")
 
 	// Alice starts an enrollment.
-	sid, _, err := ps.BeginEnroll(t.Context(), alice)
+	sid, _, err := ps.BeginEnroll(t.Context(), alice, nil)
 	if err != nil {
 		t.Fatalf("BeginEnroll: %v", err)
 	}
@@ -306,7 +400,11 @@ func TestPasskey_LookupForLogin_returnsIdentityAndUpdatesLastUsed(t *testing.T) 
 		t.Errorf("identity provider = %q, want passkey", id.Provider)
 	}
 
-	// LastUsedAt should be bumped by the lookup side-effect.
+	// LastUsedAt is bumped asynchronously by the background flusher.
+	// In production it lands within ≤ 2 s; for tests we force a sync
+	// drain so the assertion is deterministic.
+	ps.FlushLastUsed()
+
 	stored, err := svc.PasskeyStore().Get(t.Context(), row.ID)
 	if err != nil {
 		t.Fatalf("re-fetch: %v", err)

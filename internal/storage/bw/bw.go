@@ -54,17 +54,22 @@ func (c *Config) effectivePath() string {
 type Storage struct {
 	db *bw.DB
 
-	users           *bw.Bucket[userRow]
-	userIdentities  *bw.Bucket[userIdentityRow]
-	tokens          *bw.Bucket[tokenRow]
-	sessions        *bw.Bucket[sessionRow]
-	permissions     *bw.Bucket[permissionRow]
-	folders         *bw.Bucket[folderRow]
-	files           *bw.Bucket[fileRow]
-	fileVersions    *bw.Bucket[fileVersionRow]
-	settings        *bw.Bucket[settingsRow]
-	userPreferences *bw.Bucket[userPreferencesRow]
-	passkeys        *bw.Bucket[passkeyCredentialRow]
+	users             *bw.Bucket[userRow]
+	userIdentities    *bw.Bucket[userIdentityRow]
+	tokens            *bw.Bucket[tokenRow]
+	sessions          *bw.Bucket[sessionRow]
+	permissions       *bw.Bucket[permissionRow]
+	folders           *bw.Bucket[folderRow]
+	files             *bw.Bucket[fileRow]
+	fileVersions      *bw.Bucket[fileVersionRow]
+	settings          *bw.Bucket[settingsRow]
+	userPreferences   *bw.Bucket[userPreferencesRow]
+	passkeys          *bw.Bucket[passkeyCredentialRow]
+	passkeyChallenges *bw.Bucket[passkeyChallengeRow]
+	userTOTP          *bw.Bucket[userTOTPRow]
+	vaultAccounts     *bw.Bucket[vaultAccountRow]
+	vaultItems        *bw.Bucket[vaultItemRow]
+	vaultItemVersions *bw.Bucket[vaultItemVersionRow]
 }
 
 // New opens (or creates) a bw database at the configured path and
@@ -93,6 +98,18 @@ func New(ctx context.Context, cfg *Config) (*Storage, error) {
 	}
 
 	s := &Storage{db: db}
+
+	// Pre-register migrations run on the raw Badger db while no bw
+	// bucket handle yet exists for the affected names. The vault v2
+	// wipe (see migrate_vault.go) lives here so that the v1 cleartext
+	// row blobs are gone before bw's auto-migrate adjusts indexes
+	// against the new schema; otherwise bw would happily keep the
+	// stale msgpack blobs underneath the new v2 fingerprint.
+	if err := MigrateVaultV2(ctx, s); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
 	if err := s.registerBuckets(); err != nil {
 		_ = db.Close()
 		return nil, err

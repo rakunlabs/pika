@@ -14,7 +14,12 @@ const (
 	DefaultAppTheme         = "system"
 	DefaultEditorTheme      = "one-dark"
 	DefaultEditorFontSize   = 13
-	DefaultEditorFontFamily = "JetBrains Mono, Fira Code, Menlo, Monaco, monospace"
+	// Geist Mono is the canonical default monospace; the trailing
+	// stack keeps fallback rendering sensible if the browser hasn't
+	// pulled the @fontsource bundle yet or on older clients that
+	// don't ship Geist Mono. Mirrored in
+	// _ui/src/lib/store/prefs.svelte.ts (DEFAULT_EDITOR_FONT_FAMILY).
+	DefaultEditorFontFamily = "'Geist Mono', 'JetBrains Mono', Fira Code, Menlo, Monaco, monospace"
 	DefaultEditorLineWrap   = false
 	DefaultPanelLeftWidth   = 250
 	DefaultPanelRightWidth  = 280
