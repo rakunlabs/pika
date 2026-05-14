@@ -154,7 +154,21 @@ export interface SecretKey {
   formatted: string; // human-typable string for the kit
 }
 
-const SECRET_KEY_ALPHABET = '23456789ABCDEFGHJKMNPQRSTVWXYZ';
+// Crockford base32. EXACTLY 32 characters — required because each
+// output character carries 5 bits and the encoder masks to & 0x1f.
+//
+// Previous versions used a 30-character alphabet (missing 0 and 1
+// in addition to I/L/O/U), which caused indexes 30 and 31 to land
+// on `undefined` during encoding. The resulting Secret Key string
+// silently dropped 4 characters on average (256-bit input had ≈8
+// five-bit chunks hitting indexes 30/31), making every generated
+// kit fail the 52-character length check at unlock time. Switching
+// to 32 chars closes the bug; the decoder also accepts the visually
+// confusable typos (I→1, L→1, O→0) per Crockford's convention.
+//
+// IMPORTANT: any vault created with the broken 30-char alphabet has
+// an unrecoverable Secret Key and must be reset before re-creating.
+const SECRET_KEY_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
 export async function generateSecretKey(): Promise<SecretKey> {
   await ready();
@@ -201,7 +215,32 @@ function formatSecretKey(b: Uint8Array): string {
  * wrong length.
  */
 export function parseSecretKey(input: string): Uint8Array {
-  const cleaned = input.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  // Crockford's forgiving decode: I and L are visually 1, O is 0.
+  // We rewrite them up front so a hand-written kit re-typed by the
+  // user doesn't fail on a perfectly recoverable typo.
+  const cleaned = input
+    .toUpperCase()
+    .replace(/[IL]/g, '1')
+    .replace(/O/g, '0')
+    .replace(/[^A-Z0-9]/g, '');
+  // Quick length check up front gives a clearer error than the
+  // "got N bytes" message the decoder would emit halfway through.
+  // 32 bytes encode as exactly 52 base32 characters from our alphabet.
+  if (cleaned.length !== 52) {
+    if (cleaned.length === 0) {
+      throw new Error('Secret Key is empty');
+    }
+    if (cleaned.length < 52) {
+      const missing = 52 - cleaned.length;
+      throw new Error(
+        `Secret Key is too short — got ${cleaned.length} characters, expected 52 (${missing} missing). Check that you copied the entire key.`,
+      );
+    }
+    const extra = cleaned.length - 52;
+    throw new Error(
+      `Secret Key is too long — got ${cleaned.length} characters, expected 52 (${extra} extra). Check that you didn't paste the key twice.`,
+    );
+  }
   const out = new Uint8Array(32);
   let buf = 0;
   let bits = 0;
@@ -216,13 +255,15 @@ export function parseSecretKey(input: string): Uint8Array {
     if (bits >= 8) {
       bits -= 8;
       if (outIdx >= 32) {
+        // Defensive — the length pre-check should have caught this.
         throw new Error('Secret Key is too long');
       }
       out[outIdx++] = (buf >> bits) & 0xff;
     }
   }
   if (outIdx !== 32) {
-    throw new Error(`Secret Key has wrong length (got ${outIdx} bytes, want 32)`);
+    // Defensive — also unreachable given the length pre-check.
+    throw new Error(`Secret Key decoding produced ${outIdx} bytes, expected 32`);
   }
   return out;
 }

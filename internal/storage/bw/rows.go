@@ -611,20 +611,26 @@ func vaultAccountRowFromService(a *service.VaultAccount) *vaultAccountRow {
 // Schema is version 2 — see migrate_vault.go for the v1 → v2 wipe
 // (v1 stored title/tags/url_hostnames in cleartext).
 type vaultItemRow struct {
-	ID                 string     `bw:"id,pk"`
-	UserID             string     `bw:"user_id,index"`
-	Type               string     `bw:"type,index"`
-	EncryptedTitle     []byte     `bw:"encrypted_title"`
-	EncryptedTags      []byte     `bw:"encrypted_tags"`
-	EncryptedHostnames []byte     `bw:"encrypted_hostnames"`
-	EncryptedPayload   []byte     `bw:"encrypted_payload"`
-	Favorite           bool       `bw:"favorite"`
-	Archived           bool       `bw:"archived"`
-	DeletedAt          *time.Time `bw:"deleted_at"`
-	LastUsedAt         *time.Time `bw:"last_used_at"`
-	CreatedAt          time.Time  `bw:"created_at,index"`
-	UpdatedAt          time.Time  `bw:"updated_at"`
-	Version            int64      `bw:"version"`
+	ID                 string `bw:"id,pk"`
+	UserID             string `bw:"user_id,index"`
+	Type               string `bw:"type,index"`
+	EncryptedTitle     []byte `bw:"encrypted_title"`
+	EncryptedTags      []byte `bw:"encrypted_tags"`
+	EncryptedHostnames []byte `bw:"encrypted_hostnames"`
+	// EncryptedFolder is the AEAD ciphertext of a single user-chosen
+	// folder name. Added after schema v2; older rows that pre-date
+	// this field deserialize with a nil slice — semantically "no
+	// folder", which is the same as a brand-new item. No migration
+	// is required because bw treats absent fields as zero-value.
+	EncryptedFolder  []byte     `bw:"encrypted_folder"`
+	EncryptedPayload []byte     `bw:"encrypted_payload"`
+	Favorite         bool       `bw:"favorite"`
+	Archived         bool       `bw:"archived"`
+	DeletedAt        *time.Time `bw:"deleted_at"`
+	LastUsedAt       *time.Time `bw:"last_used_at"`
+	CreatedAt        time.Time  `bw:"created_at,index"`
+	UpdatedAt        time.Time  `bw:"updated_at"`
+	Version          int64      `bw:"version"`
 }
 
 func (r *vaultItemRow) toService() *service.VaultItem {
@@ -635,6 +641,7 @@ func (r *vaultItemRow) toService() *service.VaultItem {
 		EncryptedTitle:     append([]byte(nil), r.EncryptedTitle...),
 		EncryptedTags:      append([]byte(nil), r.EncryptedTags...),
 		EncryptedHostnames: append([]byte(nil), r.EncryptedHostnames...),
+		EncryptedFolder:    append([]byte(nil), r.EncryptedFolder...),
 		EncryptedPayload:   append([]byte(nil), r.EncryptedPayload...),
 		Favorite:           r.Favorite,
 		Archived:           r.Archived,
@@ -654,6 +661,7 @@ func vaultItemRowFromService(i *service.VaultItem) *vaultItemRow {
 		EncryptedTitle:     append([]byte(nil), i.EncryptedTitle...),
 		EncryptedTags:      append([]byte(nil), i.EncryptedTags...),
 		EncryptedHostnames: append([]byte(nil), i.EncryptedHostnames...),
+		EncryptedFolder:    append([]byte(nil), i.EncryptedFolder...),
 		EncryptedPayload:   append([]byte(nil), i.EncryptedPayload...),
 		Favorite:           i.Favorite,
 		Archived:           i.Archived,

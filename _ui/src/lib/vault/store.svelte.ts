@@ -82,6 +82,12 @@ interface DecryptedItem {
   title: string | null;
   tags: string[];
   hostnames: string[];
+  // folder is the decrypted folder label (e.g. "Personal", "Work").
+  // null means "AEAD failed for this slot" — the row exists but the
+  // folder ciphertext was unreadable. Empty string means "no
+  // folder" (intentional absence: server returned no
+  // encrypted_folder ciphertext at all).
+  folder: string | null;
   payload: VaultItemPayload | null;
 }
 
@@ -89,6 +95,21 @@ function createVaultStore() {
   // Server-side state mirror.
   let status = $state<api.VaultStatus | null>(null);
   let account = $state<crypto.VaultAccountView | null>(null);
+
+  // The freshly generated Secret Key, kept in store state ONLY for
+  // the brief window between setup() returning and the user
+  // acknowledging the Emergency Kit. We hold it on the store (not
+  // local component state) for two reasons:
+  //   1. status.initialized flips to true inside setup(), which
+  //      would otherwise let the page-level switch unmount the
+  //      VaultSetup component mid-flow — local state would be lost
+  //      to a remount and the user would see a blank setup form
+  //      again with no Secret Key in sight.
+  //   2. Routes / hot reloads / accidental refreshes during the
+  //      Emergency Kit window all keep their semantics: the kit
+  //      stays available until acknowledgeKit() clears it.
+  // Cleared by acknowledgeKit() once the user clicks Continue.
+  let pendingSecretKey = $state<crypto.SecretKey | null>(null);
 
   // Client-only session material. `vaultKey` being non-null is the
   // single source of truth for "vault is unlocked". `secretKey` is
@@ -108,6 +129,17 @@ function createVaultStore() {
   // re-renders the unlock screen.
   let lockTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Reactive countdown. `lockDeadline` is the wall-clock ms after
+  // which the vault will auto-lock; `nowTick` is bumped once a
+  // second by `tickInterval` while the vault is unlocked so that
+  // `remainingLockSeconds` re-derives. Both are deliberately
+  // separated from `lockTimer` (which is the authoritative one-shot
+  // trigger) so the UI can show a countdown without ever risking
+  // a lock-vs-display drift.
+  let lockDeadline = $state<number>(0);
+  let nowTick = $state<number>(Date.now());
+  let tickInterval: ReturnType<typeof setInterval> | null = null;
+
   const DEFAULT_LOCK_SECONDS = 15 * 60;
 
   function lockTimeoutSeconds(): number {
@@ -118,9 +150,30 @@ function createVaultStore() {
   function resetLockTimer() {
     if (!vaultKey) return;
     if (lockTimer) clearTimeout(lockTimer);
+    const ttlMs = lockTimeoutSeconds() * 1000;
+    lockDeadline = Date.now() + ttlMs;
     lockTimer = setTimeout(() => {
       lock();
-    }, lockTimeoutSeconds() * 1000);
+    }, ttlMs);
+    // Lazy-start the once-per-second tick. We only run it while the
+    // vault is unlocked; lock() stops it.
+    if (!tickInterval) {
+      nowTick = Date.now();
+      tickInterval = setInterval(() => {
+        nowTick = Date.now();
+      }, 1000);
+    }
+  }
+
+  /**
+   * remainingLockSeconds is the user-visible countdown to the next
+   * idle auto-lock. Returns 0 when the vault is locked or the
+   * deadline has passed. Re-derives every second via `nowTick`.
+   */
+  function remainingLockSeconds(): number {
+    if (!vaultKey || lockDeadline === 0) return 0;
+    const remaining = Math.max(0, lockDeadline - nowTick);
+    return Math.ceil(remaining / 1000);
   }
 
   /**
@@ -175,12 +228,29 @@ function createVaultStore() {
       account = acc;
       vaultKey = result.vaultKey;
       secretKey = result.secretKey.bytes;
+      // CRITICAL: set pendingSecretKey BEFORE refreshStatus(). The
+      // refreshStatus call flips status.initialized = true, which
+      // triggers the page switch in Vault.svelte to re-evaluate.
+      // If pendingSecretKey isn't already populated at that moment,
+      // VaultSetup gets unmounted and the user lands on the
+      // unlocked layout having never seen their Secret Key.
+      pendingSecretKey = result.secretKey;
       await refreshStatus();
       resetLockTimer();
       return result.secretKey;
     } finally {
       loading = false;
     }
+  }
+
+  /**
+   * Called by VaultSetup once the user has confirmed they saved
+   * their Secret Key. Drops the kit reference from store state so
+   * the page-level switch can finally advance to the unlocked
+   * layout.
+   */
+  function acknowledgeKit(): void {
+    pendingSecretKey = null;
   }
 
   /**
@@ -364,6 +434,11 @@ function createVaultStore() {
       clearTimeout(lockTimer);
       lockTimer = null;
     }
+    if (tickInterval) {
+      clearInterval(tickInterval);
+      tickInterval = null;
+    }
+    lockDeadline = 0;
     crypto.zeroize(vaultKey);
     crypto.zeroize(secretKey);
     vaultKey = null;
@@ -440,7 +515,7 @@ function createVaultStore() {
    */
   async function decryptItem(item: VaultItem): Promise<DecryptedItem> {
     if (!vaultKey) {
-      return { item, title: null, tags: [], hostnames: [], payload: null };
+      return { item, title: null, tags: [], hostnames: [], folder: '', payload: null };
     }
     let title: string | null = null;
     if (item.encrypted_title) {
@@ -454,11 +529,36 @@ function createVaultStore() {
     if (item.encrypted_hostnames) {
       hostnames = (await crypto.decryptStringList(crypto.fromBase64(item.encrypted_hostnames), vaultKey)) ?? [];
     }
+    // Folder: absent ciphertext → empty string ("no folder"); failed
+    // decryption → null so the UI can render "unreadable" without
+    // accidentally bucketing the item into a real folder.
+    let folder: string | null = '';
+    if (item.encrypted_folder) {
+      folder = await crypto.decryptString(crypto.fromBase64(item.encrypted_folder), vaultKey);
+    }
     let payload: VaultItemPayload | null = null;
     if (item.encrypted_payload) {
       payload = await crypto.decryptItemPayload(crypto.fromBase64(item.encrypted_payload), vaultKey);
     }
-    return { item, title, tags, hostnames, payload };
+    return { item, title, tags, hostnames, folder, payload };
+  }
+
+  /**
+   * Decrypt a base64-encoded payload ciphertext with the live
+   * vault key. Used by the editor's "field history" flyout to
+   * inspect snapshots from vault_item_versions without ever
+   * exposing vaultKey outside the store. Returns null when the
+   * vault is locked or the ciphertext fails AEAD (e.g. the
+   * snapshot predates the current key after a master-password
+   * rotation that didn't re-key history).
+   */
+  async function decryptPayloadBytes(base64: string): Promise<VaultItemPayload | null> {
+    if (!vaultKey || !base64) return null;
+    try {
+      return await crypto.decryptItemPayload(crypto.fromBase64(base64), vaultKey);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -470,17 +570,24 @@ function createVaultStore() {
   async function refreshItems(filter: api.VaultListFilter = {}): Promise<void> {
     loading = true;
     error = null;
+    // Clear the visible list IMMEDIATELY so the UI doesn't paint the
+    // previous filter's items while we wait for the new fetch. The
+    // most user-visible symptom of leaving the old list up was the
+    // archived/trash tabs briefly showing active items before the
+    // server response replaced them — a confusing "are my items
+    // showing in the wrong place?" experience even though the
+    // server filtered correctly.
+    items = [];
+    decrypted = new Map();
     try {
       const list = await api.listItems(filter);
       items = list;
-      // Drop stale decrypted entries so the GC can reclaim them.
-      decrypted = new Map();
       if (vaultKey) {
+        const next = new Map<string, DecryptedItem>();
         for (const item of list) {
-          decrypted.set(item.id, await decryptItem(item));
+          next.set(item.id, await decryptItem(item));
         }
-        // Trigger reactivity since Map mutation doesn't reassign.
-        decrypted = new Map(decrypted);
+        decrypted = next;
       }
       resetLockTimer();
     } finally {
@@ -501,26 +608,37 @@ function createVaultStore() {
       tags?: string[];
       urlHostnames?: string[];
       favorite?: boolean;
+      folder?: string;
     } = {},
   ): Promise<VaultItem> {
     if (!vaultKey) throw new Error('vault must be unlocked first');
     const tags = extra.tags ?? [];
     const hostnames = extra.urlHostnames ?? [];
+    // Folder is encrypted with the same single-string AEAD as the
+    // title. A trimmed empty string means "no folder" — we skip the
+    // encryption in that case so the server stores nil rather than
+    // a ciphertext of an empty string.
+    const folder = (extra.folder ?? '').trim();
     const titleBlob = await crypto.encryptString(title, vaultKey);
     const tagsBlob = await crypto.encryptStringList(tags, vaultKey);
     const hostsBlob = await crypto.encryptStringList(hostnames, vaultKey);
     const payloadBlob = await crypto.encryptItemPayload(payload, vaultKey);
 
-    const item = await api.createItem({
+    const createReq: api.CreateVaultItemRequest = {
       type,
       encrypted_title: crypto.toBase64(titleBlob),
       encrypted_tags: crypto.toBase64(tagsBlob),
       encrypted_hostnames: crypto.toBase64(hostsBlob),
       encrypted_payload: crypto.toBase64(payloadBlob),
       favorite: extra.favorite,
-    });
+    };
+    if (folder) {
+      const folderBlob = await crypto.encryptString(folder, vaultKey);
+      createReq.encrypted_folder = crypto.toBase64(folderBlob);
+    }
+    const item = await api.createItem(createReq);
     items = [item, ...items];
-    decrypted.set(item.id, { item, title, tags, hostnames, payload });
+    decrypted.set(item.id, { item, title, tags, hostnames, folder, payload });
     decrypted = new Map(decrypted);
     resetLockTimer();
     return item;
@@ -543,6 +661,11 @@ function createVaultStore() {
       urlHostnames?: string[];
       favorite?: boolean;
       archived?: boolean;
+      // folder mirrors the server's two-input shape: a non-empty
+      // string is the new folder name (encrypted on send); an empty
+      // string CLEARS the folder (sends clear_folder=true);
+      // undefined leaves it as-is.
+      folder?: string;
     },
   ): Promise<VaultItem> {
     if (!vaultKey) throw new Error('vault must be unlocked first');
@@ -560,6 +683,15 @@ function createVaultStore() {
       const blob = await crypto.encryptStringList(patch.urlHostnames, vaultKey);
       req.encrypted_hostnames = crypto.toBase64(blob);
     }
+    if (patch.folder !== undefined) {
+      const trimmed = patch.folder.trim();
+      if (trimmed === '') {
+        req.clear_folder = true;
+      } else {
+        const blob = await crypto.encryptString(trimmed, vaultKey);
+        req.encrypted_folder = crypto.toBase64(blob);
+      }
+    }
     if (patch.payload !== undefined) {
       const blob = await crypto.encryptItemPayload(patch.payload, vaultKey);
       req.encrypted_payload = crypto.toBase64(blob);
@@ -575,6 +707,7 @@ function createVaultStore() {
       title: patch.title !== undefined ? patch.title : prior?.title ?? null,
       tags: patch.tags !== undefined ? patch.tags : prior?.tags ?? [],
       hostnames: patch.urlHostnames !== undefined ? patch.urlHostnames : prior?.hostnames ?? [],
+      folder: patch.folder !== undefined ? patch.folder.trim() : prior?.folder ?? '',
       payload: patch.payload !== undefined ? patch.payload : prior?.payload ?? null,
     });
     decrypted = new Map(decrypted);
@@ -623,6 +756,25 @@ function createVaultStore() {
     return Array.from(seen).sort((a, b) => a.localeCompare(b));
   }
 
+  /**
+   * allFolders returns the union of every decrypted folder label
+   * across all loaded items. Empty / null folders are filtered out
+   * (those are the "no folder" rows that show up in the All view).
+   * Case-preserved so the user sees "Work" rather than "work" in
+   * the sidebar, but deduplication is case-insensitive so the same
+   * label typed two different ways doesn't appear twice.
+   */
+  function allFolders(): string[] {
+    const seen = new Map<string, string>();
+    for (const d of decrypted.values()) {
+      const f = (d.folder ?? '').trim();
+      if (!f) continue;
+      const key = f.toLowerCase();
+      if (!seen.has(key)) seen.set(key, f);
+    }
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+  }
+
   return {
     get status() { return status; },
     get account() { return account; },
@@ -630,8 +782,14 @@ function createVaultStore() {
     get decrypted() { return decrypted; },
     get loading() { return loading; },
     get error() { return error; },
+    get remainingLockSeconds() { return remainingLockSeconds(); },
+    get lockTimeoutSeconds() { return lockTimeoutSeconds(); },
+    get pendingSecretKey() { return pendingSecretKey; },
     isUnlocked,
     allTags,
+    allFolders,
+    acknowledgeKit,
+    decryptPayloadBytes,
     refreshStatus,
     refreshAccount,
     setup,

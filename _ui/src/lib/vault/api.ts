@@ -38,6 +38,8 @@ export interface VaultItem {
   encrypted_tags?: string;
   /** base64-encoded ciphertext of the JSON-encoded hostname array */
   encrypted_hostnames?: string;
+  /** base64-encoded ciphertext of the user-chosen folder name (single string). Absent = no folder. */
+  encrypted_folder?: string;
   /** base64-encoded ciphertext of the full item payload (fields + notes) */
   encrypted_payload: string;
   favorite?: boolean;
@@ -63,6 +65,8 @@ export interface CreateVaultItemRequest {
   encrypted_title: string;
   encrypted_tags?: string;
   encrypted_hostnames?: string;
+  /** base64 ciphertext of the folder name; omit for "no folder" */
+  encrypted_folder?: string;
   encrypted_payload: string;
   favorite?: boolean;
 }
@@ -79,6 +83,11 @@ export interface UpdateVaultItemRequest {
   encrypted_title?: string;
   encrypted_tags?: string;
   encrypted_hostnames?: string;
+  /** Set to a non-empty ciphertext to assign a folder. Omit to leave as-is. */
+  encrypted_folder?: string;
+  /** True drops any current folder. Processed after `encrypted_folder`, so
+   *  callers should send exactly one of the two — see the Go side. */
+  clear_folder?: boolean;
   encrypted_payload?: string;
   favorite?: boolean;
   archived?: boolean;

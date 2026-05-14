@@ -134,8 +134,11 @@ type CreateVaultItemRequest struct {
 	EncryptedTitle     []byte        `json:"encrypted_title"`
 	EncryptedTags      []byte        `json:"encrypted_tags,omitempty"`
 	EncryptedHostnames []byte        `json:"encrypted_hostnames,omitempty"`
-	EncryptedPayload   []byte        `json:"encrypted_payload"`
-	Favorite           bool          `json:"favorite,omitempty"`
+	// EncryptedFolder is optional; empty means "no folder". See
+	// VaultItem.EncryptedFolder for the rationale.
+	EncryptedFolder  []byte `json:"encrypted_folder,omitempty"`
+	EncryptedPayload []byte `json:"encrypted_payload"`
+	Favorite         bool   `json:"favorite,omitempty"`
 }
 
 // UpdateVaultItemRequest is the payload for editing an item. Every
@@ -159,9 +162,16 @@ type UpdateVaultItemRequest struct {
 	EncryptedTitle     []byte         `json:"encrypted_title,omitempty"`
 	EncryptedTags      []byte         `json:"encrypted_tags,omitempty"`
 	EncryptedHostnames []byte         `json:"encrypted_hostnames,omitempty"`
-	EncryptedPayload   []byte         `json:"encrypted_payload,omitempty"`
-	Favorite           *bool          `json:"favorite,omitempty"`
-	Archived           *bool          `json:"archived,omitempty"`
+	// EncryptedFolder: "" (nil slice) = leave as-is; a non-empty
+	// AEAD ciphertext replaces the stored folder. To CLEAR the
+	// folder, the client sends ClearFolder=true (the empty-bytes
+	// convention can't distinguish "skip" from "clear" because
+	// every other ciphertext field uses len(x)==0 to mean "skip").
+	EncryptedFolder  []byte `json:"encrypted_folder,omitempty"`
+	ClearFolder      bool   `json:"clear_folder,omitempty"`
+	EncryptedPayload []byte `json:"encrypted_payload,omitempty"`
+	Favorite         *bool  `json:"favorite,omitempty"`
+	Archived         *bool  `json:"archived,omitempty"`
 }
 
 // vault returned by *Service.VaultCoord is the read-side handle on
@@ -545,6 +555,12 @@ func (vs *VaultService) CreateItem(ctx context.Context, userID string, req *Crea
 	if err := validateCiphertext("encrypted_hostnames", req.EncryptedHostnames, false, 8*1024); err != nil {
 		return nil, err
 	}
+	// Folder name AEAD ciphertext. Optional; cap at 1 KiB to match
+	// the title cap — folder names are short labels, not free-form
+	// notes, so the same bound applies.
+	if err := validateCiphertext("encrypted_folder", req.EncryptedFolder, false, 1024); err != nil {
+		return nil, err
+	}
 	if err := validateCiphertext("encrypted_payload", req.EncryptedPayload, true, 1<<20); err != nil {
 		return nil, err
 	}
@@ -567,6 +583,7 @@ func (vs *VaultService) CreateItem(ctx context.Context, userID string, req *Crea
 		EncryptedTitle:     append([]byte(nil), req.EncryptedTitle...),
 		EncryptedTags:      append([]byte(nil), req.EncryptedTags...),
 		EncryptedHostnames: append([]byte(nil), req.EncryptedHostnames...),
+		EncryptedFolder:    append([]byte(nil), req.EncryptedFolder...),
 		EncryptedPayload:   append([]byte(nil), req.EncryptedPayload...),
 		Favorite:           req.Favorite,
 		CreatedAt:          now,
@@ -680,6 +697,21 @@ func (vs *VaultService) UpdateItem(ctx context.Context, userID, itemID string, r
 				return err
 			}
 			existing.EncryptedHostnames = append([]byte(nil), req.EncryptedHostnames...)
+		}
+		// Folder is patched via TWO inputs:
+		//  - len(EncryptedFolder) > 0 → set to this new ciphertext
+		//  - ClearFolder == true     → drop any current folder
+		// We process ClearFolder AFTER the set so a single request
+		// can't both set and clear in one go (deterministic outcome
+		// for a buggy client).
+		if len(req.EncryptedFolder) > 0 {
+			if err := validateCiphertext("encrypted_folder", req.EncryptedFolder, true, 1024); err != nil {
+				return err
+			}
+			existing.EncryptedFolder = append([]byte(nil), req.EncryptedFolder...)
+		}
+		if req.ClearFolder {
+			existing.EncryptedFolder = nil
 		}
 		if len(req.EncryptedPayload) > 0 {
 			if err := validateCiphertext("encrypted_payload", req.EncryptedPayload, true, 1<<20); err != nil {

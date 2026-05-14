@@ -37,11 +37,16 @@
   --color-brand-700: #14253c;
   --color-brand-800: #0f1c2e;
   --color-brand-900: #0a1320;
+  --color-brand-950: #060b14;
 
   /* Teal — "selected / active" highlight. Used everywhere we previously
      reached for a warm orange (file tree selection, tab indicators,
      "you" row, capability picker chips, etc.). Cooler tone reads as
-     calmer next to the navy navbar and the warm-grey dark surfaces. */
+     calmer next to the navy navbar and the warm-grey dark surfaces.
+     The 950 step is used for dark-mode tinted backgrounds
+     (`dark:bg-accent-950/30` on selected vault rows etc.) — Tailwind
+     drops utilities referencing undefined tokens silently, so every
+     palette needs its 950 explicitly defined here. */
   --color-accent-50:  #e5f5f4;
   --color-accent-100: #c2e9e6;
   --color-accent-200: #84d3cd;
@@ -52,6 +57,7 @@
   --color-accent-700: #095e5c;
   --color-accent-800: #074645;
   --color-accent-900: #052f2e;
+  --color-accent-950: #031f1e;
 
   /* Vermilion — destructive/primary call-to-action. Used in just a few
      places where we want a true red punch (Render Preview, etc.). Kept
@@ -67,6 +73,7 @@
   --color-vermilion-700: #9f1828;
   --color-vermilion-800: #77121e;
   --color-vermilion-900: #4f0c14;
+  --color-vermilion-950: #37080d;
 
   /* Cool neutral — info pills, dark-mode card surfaces. */
   --color-cool-50:  #edf2f4;
@@ -79,13 +86,23 @@
   --color-cool-700: #404956;
   --color-cool-800: #2a313b;
   --color-cool-900: #181c22;
+  --color-cool-950: #0d1015;
 
   /* Warm neutral — anchored on #403D39 (warm-600) and #1a1a1a (warm-900).
      Used as the dark-mode surface palette: warmer than slate-* and pairs
      naturally with the burnt-orange accent (#EB5E28). The dark theme
-     prefers these over slate to avoid the cold "GitHub dark" look. The
-     deepest tone is pushed to near-black #1a1a1a so card surfaces sit
-     comfortably below the navbar without competing with it. */
+     prefers these over slate to avoid the cold "GitHub dark" look.
+     Scale runs 50…950 to match Tailwind v4 conventions:
+       - 900 (#1a1a1a) is the page/app background tier
+       - 950 (#0e0e0e) is the deepest "app canvas" tier used by
+         full-bleed surfaces (vault item editor / sidebar) where we
+         want the surface to read clearly recessed below the warm-900
+         page background.
+     If you find a class like `dark:bg-warm-950` not rendering, this
+     token block is the place to add the missing step. Tailwind drops
+     utilities that reference undefined custom colors silently — the
+     element falls back to its previous declaration (often `bg-white`).
+  */
   --color-warm-50:  #f4f3f2;
   --color-warm-100: #e3e1de;
   --color-warm-200: #c4c0ba;
@@ -96,11 +113,55 @@
   --color-warm-700: #2d2b29;
   --color-warm-800: #222120;
   --color-warm-900: #1a1a1a;
+  --color-warm-950: #0e0e0e;
 }
 
 html,
 body {
   @apply h-full w-full;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Form-element color inheritance (dark mode fix).
+
+   <input>, <textarea>, and <select> do NOT inherit `color` from their
+   ancestor by browser default — each one gets a built-in black-ish
+   default (e.g. `-webkit-text-fill-color: black` on some Chromiums,
+   `CanvasText` on Firefox). That's fine on a white background but
+   illegible on the warm-950 dark surfaces the vault uses
+   (`dark:bg-warm-950` etc.), which is why vault password / search /
+   tag inputs rendered as black-on-near-black in dark mode.
+
+   Forcing `color: inherit` on these elements means they pick up the
+   App-level `text-slate-100` in dark mode (App.svelte:64) and
+   `text-slate-800` in light mode automatically. Existing components
+   that already specify `dark:text-...` on the input still win
+   because of the cascade specificity of utility classes.
+
+   `::placeholder` doesn't inherit either; we tone it down so it
+   reads as muted rather than the same color as live input text. */
+input,
+textarea,
+select {
+  color: inherit;
+}
+input::placeholder,
+textarea::placeholder {
+  color: rgb(148 163 184); /* slate-400 — works on both themes */
+  opacity: 1;
+}
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: rgb(100 116 139); /* slate-500 */
+}
+
+/* Safari/iOS quirk: -webkit-text-fill-color overrides `color`
+   inside <input>/<textarea>. Reset it so our inherit takes effect.
+   Without this, autofilled credentials show in the platform's
+   yellow-on-yellow regardless of our dark theme. */
+input,
+textarea {
+  -webkit-text-fill-color: inherit;
 }
 
 /* Scrollbar styling */

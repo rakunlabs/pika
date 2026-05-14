@@ -196,7 +196,7 @@
 
 <div>
   <h2 class="text-base font-semibold mb-1 flex items-center gap-2">
-    <Lock size={16} class="text-accent-600" /> Personal Vault
+    <Lock size={16} class="text-accent-600 dark:text-accent-400" /> Personal Vault
   </h2>
   <p class="text-xs text-slate-500 dark:text-slate-400 mb-4">
     Manage your end-to-end encrypted personal vault. The server cannot read these settings — every cryptographic operation runs in your browser.
@@ -215,7 +215,7 @@
   {:else}
     <div class="space-y-6">
       <!-- Auto-lock -->
-      <div class="bg-white dark:bg-warm-950 border border-slate-200 dark:border-warm-700 rounded p-4">
+      <div class="bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded p-4">
         <h3 class="text-sm font-semibold mb-1">Auto-lock</h3>
         <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">
           The vault locks automatically after this many minutes of inactivity.
@@ -227,7 +227,7 @@
             min="1"
             max="1440"
             bind:value={lockMinutes}
-            class="w-28 px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-700 bg-white dark:bg-warm-950 focus:outline-none focus:ring-2 focus:ring-accent-500"
+            class="w-28 px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500"
           />
           <span class="text-sm text-slate-500 dark:text-slate-400">minutes</span>
           <button
@@ -239,7 +239,7 @@
       </div>
 
       <!-- Trusted device -->
-      <div class="bg-white dark:bg-warm-950 border border-slate-200 dark:border-warm-700 rounded p-4">
+      <div class="bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded p-4">
         <h3 class="text-sm font-semibold mb-1 flex items-center gap-1.5">
           <ShieldCheck size={14} /> Trusted device
         </h3>
@@ -263,7 +263,7 @@
             </div>
             <button
               onclick={revokeTrust}
-              class="px-3 py-1.5 text-xs rounded bg-slate-100 dark:bg-warm-800 hover:bg-slate-200 dark:hover:bg-warm-700 cursor-pointer"
+              class="px-3 py-1.5 text-xs rounded border border-slate-300 dark:border-warm-600 bg-slate-100 dark:bg-warm-700 hover:bg-slate-200 dark:hover:bg-warm-600 text-slate-700 dark:text-slate-100 cursor-pointer"
             >
               Revoke trust
             </button>
@@ -279,28 +279,33 @@
         {/if}
       </div>
 
-      <!-- Rotate master password -->
-      <div class="bg-white dark:bg-warm-950 border border-slate-200 dark:border-warm-700 rounded p-4">
+      <!-- Rotate master password. Border tinted with the accent
+           teal (and a thicker left-stripe) so this card and the
+           Emergency Kit card below clearly stand out as
+           "cryptographic operation" affordances — different intent
+           from the read-only Auto-lock / Trusted-device cards
+           above, and lighter weight than the red Destroy panel. -->
+      <div class="bg-white dark:bg-warm-800 border border-accent-300 dark:border-accent-700 border-l-4 border-l-accent-500 dark:border-l-accent-400 rounded p-4">
         <h3 class="text-sm font-semibold mb-1 flex items-center gap-1.5"><RotateCw size={14} /> Change master password</h3>
         <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">
           Re-wraps the vault key with a new password. Items are not re-encrypted; this is a fast, O(1) operation regardless of vault size.
         </p>
         {#if !showRotate}
-          <button onclick={() => (showRotate = true)} class="px-3 py-1.5 text-xs rounded bg-slate-100 dark:bg-warm-800 hover:bg-slate-200 dark:hover:bg-warm-700 cursor-pointer">
+          <button onclick={() => (showRotate = true)} class="px-3 py-1.5 text-xs rounded border border-slate-300 dark:border-warm-600 bg-slate-100 dark:bg-warm-700 hover:bg-slate-200 dark:hover:bg-warm-600 text-slate-700 dark:text-slate-100 cursor-pointer">
             Change password
           </button>
         {:else}
           <form onsubmit={(e) => { e.preventDefault(); doRotate(); }} class="space-y-2">
             <input type="password" bind:value={rotateOldPw} required placeholder="Current master password"
-              class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-700 bg-white dark:bg-warm-950" autocomplete="current-password" />
+              class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500" autocomplete="current-password" />
             <textarea bind:value={rotateSecretKey} required rows="2" placeholder="Secret Key" spellcheck="false"
-              class="w-full px-3 py-2 text-sm font-mono rounded border border-slate-300 dark:border-warm-700 bg-white dark:bg-warm-950"></textarea>
+              class="w-full px-3 py-2 text-sm font-mono rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500"></textarea>
             <input type="password" bind:value={rotateNewPw} required minlength="8" placeholder="New master password (≥ 8 chars)"
-              class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-700 bg-white dark:bg-warm-950" autocomplete="new-password" />
+              class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500" autocomplete="new-password" />
             <input type="password" bind:value={rotateConfirmPw} required placeholder="Confirm new password"
-              class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-700 bg-white dark:bg-warm-950" autocomplete="new-password" />
+              class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500" autocomplete="new-password" />
             <select bind:value={rotatePreset}
-              class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-700 bg-white dark:bg-warm-950">
+              class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500">
               <option value="fast">Fast preset</option>
               <option value="default">Default preset</option>
               <option value="strong">Strong preset</option>
@@ -311,7 +316,7 @@
                 {busy ? 'Working...' : 'Confirm rotate'}
               </button>
               <button type="button" onclick={() => (showRotate = false)}
-                class="px-3 py-1.5 text-xs rounded hover:bg-slate-100 dark:hover:bg-warm-800 cursor-pointer">
+                class="px-3 py-1.5 text-xs rounded hover:bg-slate-100 dark:hover:bg-warm-700 text-slate-700 dark:text-slate-200 cursor-pointer">
                 Cancel
               </button>
             </div>
@@ -319,8 +324,10 @@
         {/if}
       </div>
 
-      <!-- Regenerate kit -->
-      <div class="bg-white dark:bg-warm-950 border border-slate-200 dark:border-warm-700 rounded p-4">
+      <!-- Regenerate kit. Same accent border treatment as the
+           Rotate card so the two "do a crypto thing" cards visually
+           group together. -->
+      <div class="bg-white dark:bg-warm-800 border border-accent-300 dark:border-accent-700 border-l-4 border-l-accent-500 dark:border-l-accent-400 rounded p-4">
         <h3 class="text-sm font-semibold mb-1 flex items-center gap-1.5"><KeyRound size={14} /> Emergency Kit</h3>
         <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">
           Regenerate the kit ID and re-render the printout. The Secret Key itself is unchanged.
@@ -333,24 +340,24 @@
             kitID={regeneratedKitId}
           />
           <button onclick={() => { regeneratedKey = null; regeneratedKitId = null; showKit = false; kitOldPw = kitSecretKey = ''; }}
-            class="mt-3 px-3 py-1.5 text-xs rounded bg-slate-100 dark:bg-warm-800 hover:bg-slate-200 dark:hover:bg-warm-700 cursor-pointer">Done</button>
+            class="mt-3 px-3 py-1.5 text-xs rounded border border-slate-300 dark:border-warm-600 bg-slate-100 dark:bg-warm-700 hover:bg-slate-200 dark:hover:bg-warm-600 text-slate-700 dark:text-slate-100 cursor-pointer">Done</button>
         {:else if !showKit}
-          <button onclick={() => (showKit = true)} class="px-3 py-1.5 text-xs rounded bg-slate-100 dark:bg-warm-800 hover:bg-slate-200 dark:hover:bg-warm-700 cursor-pointer">
+          <button onclick={() => (showKit = true)} class="px-3 py-1.5 text-xs rounded border border-slate-300 dark:border-warm-600 bg-slate-100 dark:bg-warm-700 hover:bg-slate-200 dark:hover:bg-warm-600 text-slate-700 dark:text-slate-100 cursor-pointer">
             Regenerate kit
           </button>
         {:else}
           <form onsubmit={(e) => { e.preventDefault(); doRegenerateKit(); }} class="space-y-2">
             <input type="password" bind:value={kitOldPw} required placeholder="Master password"
-              class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-700 bg-white dark:bg-warm-950" autocomplete="current-password" />
+              class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500" autocomplete="current-password" />
             <textarea bind:value={kitSecretKey} required rows="2" placeholder="Secret Key" spellcheck="false"
-              class="w-full px-3 py-2 text-sm font-mono rounded border border-slate-300 dark:border-warm-700 bg-white dark:bg-warm-950"></textarea>
+              class="w-full px-3 py-2 text-sm font-mono rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500"></textarea>
             <div class="flex gap-2">
               <button type="submit" disabled={busy}
                 class="px-3 py-1.5 text-xs rounded bg-accent-600 text-white font-medium hover:bg-accent-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
                 {busy ? 'Working...' : 'Regenerate'}
               </button>
               <button type="button" onclick={() => (showKit = false)}
-                class="px-3 py-1.5 text-xs rounded hover:bg-slate-100 dark:hover:bg-warm-800 cursor-pointer">
+                class="px-3 py-1.5 text-xs rounded hover:bg-slate-100 dark:hover:bg-warm-700 text-slate-700 dark:text-slate-200 cursor-pointer">
                 Cancel
               </button>
             </div>
@@ -358,8 +365,11 @@
         {/if}
       </div>
 
-      <!-- Reset / destroy -->
-      <div class="bg-red-50 dark:bg-red-950/20 border border-red-300 dark:border-red-800 rounded p-4">
+      <!-- Reset / destroy. The `/40` opacity on the dark surface
+           keeps the red tint legible without screaming — the
+           previous `/20` was so subtle that the warning panel
+           blended into the page background in dark mode. -->
+      <div class="bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800 rounded p-4">
         <h3 class="text-sm font-semibold mb-1 flex items-center gap-1.5 text-red-700 dark:text-red-400">
           <ShieldOff size={14} /> Destroy vault
         </h3>
@@ -378,17 +388,17 @@
         {:else}
           <form onsubmit={(e) => { e.preventDefault(); doReset(); }} class="space-y-2">
             <p class="text-xs text-red-700 dark:text-red-300">
-              Type <code class="font-mono bg-red-100 dark:bg-red-900/40 px-1 rounded">delete my vault</code> to confirm:
+              Type <code class="font-mono bg-red-100 dark:bg-red-900/60 text-red-800 dark:text-red-200 px-1 rounded">delete my vault</code> to confirm:
             </p>
             <input type="text" bind:value={resetConfirm} required
-              class="w-full px-3 py-2 text-sm rounded border border-red-300 dark:border-red-700 bg-white dark:bg-warm-950" />
+              class="w-full px-3 py-2 text-sm rounded border border-red-300 dark:border-red-700 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100" />
             <div class="flex gap-2">
               <button type="submit" disabled={busy || resetConfirm !== 'delete my vault'}
                 class="px-3 py-1.5 text-xs rounded bg-red-600 text-white font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
                 {busy ? 'Working...' : 'Destroy vault permanently'}
               </button>
               <button type="button" onclick={() => { showReset = false; resetConfirm = ''; }}
-                class="px-3 py-1.5 text-xs rounded hover:bg-slate-100 dark:hover:bg-warm-800 cursor-pointer">
+                class="px-3 py-1.5 text-xs rounded hover:bg-slate-100 dark:hover:bg-warm-700 text-slate-700 dark:text-slate-200 cursor-pointer">
                 Cancel
               </button>
             </div>
@@ -396,16 +406,26 @@
         {/if}
       </div>
 
-      <!-- Stats -->
-      <div class="bg-slate-50 dark:bg-warm-900/50 border border-slate-200 dark:border-warm-700 rounded p-4">
+      <!-- Stats. The previous variant used `text-slate-500` for the
+           dt labels with no dark: override, so the labels collapsed
+           into the background in dark mode. The bg also dropped to
+           50% which made the card barely distinguishable from the
+           page; bumped to a solid warm-900 panel surface. -->
+      <div class="bg-slate-50 dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded p-4">
         <h3 class="text-sm font-semibold mb-3">Vault info</h3>
         <dl class="grid grid-cols-2 gap-2 text-xs">
-          <dt class="text-slate-500">Items</dt><dd>{status.item_count}</dd>
-          <dt class="text-slate-500">KDF</dt><dd>argon2id, {account?.kdf.memory ? (account.kdf.memory / 1024).toFixed(0) : 0} MiB, {account?.kdf.iterations ?? '?'} iters</dd>
-          <dt class="text-slate-500">Wrap version</dt><dd>v{account?.wrapped_vault_key_version ?? '?'}</dd>
-          <dt class="text-slate-500">Created</dt><dd>{account?.created_at ? new Date(account.created_at).toLocaleString() : ''}</dd>
-          <dt class="text-slate-500">Last update</dt><dd>{account?.updated_at ? new Date(account.updated_at).toLocaleString() : ''}</dd>
-          <dt class="text-slate-500">Kit ID</dt><dd class="font-mono break-all">{account?.recovery_kit_id ?? ''}</dd>
+          <dt class="text-slate-500 dark:text-slate-400">Items</dt>
+          <dd class="text-slate-700 dark:text-slate-200">{status.item_count}</dd>
+          <dt class="text-slate-500 dark:text-slate-400">KDF</dt>
+          <dd class="text-slate-700 dark:text-slate-200">argon2id, {account?.kdf.memory ? (account.kdf.memory / 1024).toFixed(0) : 0} MiB, {account?.kdf.iterations ?? '?'} iters</dd>
+          <dt class="text-slate-500 dark:text-slate-400">Wrap version</dt>
+          <dd class="text-slate-700 dark:text-slate-200">v{account?.wrapped_vault_key_version ?? '?'}</dd>
+          <dt class="text-slate-500 dark:text-slate-400">Created</dt>
+          <dd class="text-slate-700 dark:text-slate-200">{account?.created_at ? new Date(account.created_at).toLocaleString() : ''}</dd>
+          <dt class="text-slate-500 dark:text-slate-400">Last update</dt>
+          <dd class="text-slate-700 dark:text-slate-200">{account?.updated_at ? new Date(account.updated_at).toLocaleString() : ''}</dd>
+          <dt class="text-slate-500 dark:text-slate-400">Kit ID</dt>
+          <dd class="font-mono break-all text-slate-700 dark:text-slate-200">{account?.recovery_kit_id ?? ''}</dd>
         </dl>
       </div>
     </div>

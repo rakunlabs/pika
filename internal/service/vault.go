@@ -221,14 +221,21 @@ type VaultItem struct {
 	EncryptedTitle     []byte        `json:"encrypted_title"`
 	EncryptedTags      []byte        `json:"encrypted_tags,omitempty"`
 	EncryptedHostnames []byte        `json:"encrypted_hostnames,omitempty"`
-	EncryptedPayload   []byte        `json:"encrypted_payload"`
-	Favorite           bool          `json:"favorite,omitempty"`
-	Archived           bool          `json:"archived,omitempty"`
-	DeletedAt          *time.Time    `json:"deleted_at,omitempty"`
-	LastUsedAt         *time.Time    `json:"last_used_at,omitempty"`
-	CreatedAt          time.Time     `json:"created_at"`
-	UpdatedAt          time.Time     `json:"updated_at"`
-	Version            int64         `json:"version"`
+	// EncryptedFolder is the AEAD ciphertext of the user-chosen
+	// folder name (e.g. "Personal", "Work"). Empty means "no
+	// folder" — items default to the unfiltered list. We encrypt it
+	// because folder names can leak intent ("Banking", "Affair") as
+	// readily as item titles can. Kept as a flat string (single
+	// level) for now; no parent/child hierarchy.
+	EncryptedFolder  []byte     `json:"encrypted_folder,omitempty"`
+	EncryptedPayload []byte     `json:"encrypted_payload"`
+	Favorite         bool       `json:"favorite,omitempty"`
+	Archived         bool       `json:"archived,omitempty"`
+	DeletedAt        *time.Time `json:"deleted_at,omitempty"`
+	LastUsedAt       *time.Time `json:"last_used_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	Version          int64      `json:"version"`
 }
 
 // VaultItemVersion is a snapshot of one prior revision of a vault item.

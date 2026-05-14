@@ -8,13 +8,22 @@
   interface Props {
     onCreated: (id: string) => void;
     onClose: () => void;
+    /** Pre-fill the folder field. The sidebar passes the currently
+     *  selected folder so creating a new item from inside a folder
+     *  lands in that folder by default. Optional — empty/undefined
+     *  means "no folder pre-fill". */
+    defaultFolder?: string;
   }
-  let { onCreated, onClose }: Props = $props();
+  let { onCreated, onClose, defaultFolder = '' }: Props = $props();
 
   let step = $state<'pick' | 'name'>('pick');
   let chosenType = $state<VaultItemType | null>(null);
   let title = $state('');
+  // svelte-ignore state_referenced_locally
+  let folder = $state(defaultFolder);
   let busy = $state(false);
+
+  const folderSuggestions = $derived(vaultStore.allFolders());
 
   // Order matters here — it's the layout the SPA renders. Server-side
   // KnownVaultItemTypes is the source of truth for what's accepted; if
@@ -50,6 +59,7 @@
       const hostnames = extractHostnames(payload);
       const item = await vaultStore.createItem(chosenType, cleanTitle, payload, {
         urlHostnames: hostnames,
+        folder: folder.trim() || undefined,
       });
       onCreated(item.id);
     } catch (e: any) {
@@ -66,7 +76,7 @@
   <!-- aria-modal lives on the backdrop; the inner wrapper just opts -->
   <!-- out of the click bubble. -->
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
-  <div class="bg-white dark:bg-warm-900 rounded-lg shadow-xl w-[640px] max-h-[90vh] flex flex-col" onclick={(e) => e.stopPropagation()} role="document">
+  <div class="bg-white dark:bg-warm-800 rounded-lg shadow-xl w-[640px] max-h-[90vh] flex flex-col" onclick={(e) => e.stopPropagation()} role="document">
     <div class="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-warm-700">
       <h2 class="text-sm font-semibold">
         {#if step === 'pick'}Choose item type{:else}Name your {chosenType ? typeLabel(chosenType).toLowerCase() : 'item'}{/if}
@@ -98,13 +108,36 @@
             The title is encrypted before it reaches the server, so it
             can be as descriptive as you like.
           </p>
-          <input
-            type="text"
-            bind:value={title}
-            required
-            placeholder="e.g. GitHub, Production DB, ..."
-            class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-700 bg-white dark:bg-warm-950 focus:outline-none focus:ring-2 focus:ring-accent-500"
-          />
+          <div>
+            <label class="block text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-1" for="new-item-title">Title</label>
+            <input
+              id="new-item-title"
+              type="text"
+              bind:value={title}
+              required
+              placeholder="e.g. GitHub, Production DB, ..."
+              class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500"
+            />
+          </div>
+          <div>
+            <label class="block text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-1" for="new-item-folder">
+              Folder <span class="ml-1 normal-case tracking-normal text-[10px] text-slate-400">(optional)</span>
+            </label>
+            <input
+              id="new-item-folder"
+              type="text"
+              list="new-item-folder-list"
+              bind:value={folder}
+              autocomplete="off"
+              placeholder="No folder"
+              class="w-full px-3 py-1.5 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500"
+            />
+            <datalist id="new-item-folder-list">
+              {#each folderSuggestions as f (f)}
+                <option value={f}></option>
+              {/each}
+            </datalist>
+          </div>
           <div class="flex gap-2 justify-end">
             <button
               type="button"

@@ -91,7 +91,7 @@
       type="text"
       readonly
       value={value}
-      class="flex-1 px-3 py-2 text-sm font-mono rounded border border-slate-300 dark:border-warm-700 bg-slate-50 dark:bg-warm-950 focus:outline-none"
+      class="flex-1 px-3 py-2 text-sm font-mono rounded border border-slate-300 dark:border-warm-600 bg-slate-50 dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none"
     />
     <button
       type="button"
@@ -124,7 +124,7 @@
     <div class="space-y-2 text-sm">
       <label class="flex items-center justify-between gap-3">
         <span>Length</span>
-        <input type="number" min="8" max="128" bind:value={length} class="w-20 px-2 py-1 rounded border border-slate-300 dark:border-warm-700 bg-white dark:bg-warm-950" />
+        <input type="number" min="8" max="128" bind:value={length} class="w-20 px-2 py-1 rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100" />
       </label>
       <label class="flex items-center gap-2 cursor-pointer">
         <input type="checkbox" bind:checked={useLower} /> Lowercase letters
@@ -146,11 +146,11 @@
     <div class="space-y-2 text-sm">
       <label class="flex items-center justify-between gap-3">
         <span>Words</span>
-        <input type="number" min="3" max="16" bind:value={wordCount} class="w-20 px-2 py-1 rounded border border-slate-300 dark:border-warm-700 bg-white dark:bg-warm-950" />
+        <input type="number" min="3" max="16" bind:value={wordCount} class="w-20 px-2 py-1 rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100" />
       </label>
       <label class="flex items-center justify-between gap-3">
         <span>Separator</span>
-        <input type="text" maxlength="3" bind:value={separator} class="w-20 px-2 py-1 rounded border border-slate-300 dark:border-warm-700 bg-white dark:bg-warm-950 font-mono" />
+        <input type="text" maxlength="3" bind:value={separator} class="w-20 px-2 py-1 rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 font-mono" />
       </label>
       <label class="flex items-center gap-2 cursor-pointer">
         <input type="checkbox" bind:checked={capitalize} /> Capitalize each word

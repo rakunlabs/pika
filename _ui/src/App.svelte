@@ -25,8 +25,16 @@
  //     (kept at App level so navigating between pages doesn't pause
  //     the timer's input-driven reset)
  //   - lock() runs when the document becomes hidden (tab switch /
- //     window minimized) or the window loses focus (Alt+Tab to
- //     another app) — the "real coffee-break" trigger.
+ //     window minimized) — the "real coffee-break" trigger.
+ //
+ // We intentionally do NOT listen to window 'blur'. That event fires
+ // for any focus departure — native alert()/confirm()/prompt(), file
+ // pickers, print dialogs, the address bar, devtools — and would
+ // lock the vault on essentially every interactive modal. The
+ // visibilitychange path already covers tab-switch and minimize,
+ // which is the actual threat model. Longer absences are handled by
+ // the idle auto-lock timer (session_lock_seconds).
+ //
  // Within-app navigation does NOT lock the vault; lock() is a no-op
  // when already locked so installing these unconditionally is safe.
  $effect(() => {
@@ -35,13 +43,10 @@
   const onVisibility = () => {
    if (document.hidden) vaultStore.lock();
   };
-  const onBlur = () => vaultStore.lock();
   document.addEventListener('visibilitychange', onVisibility);
-  window.addEventListener('blur', onBlur);
   return () => {
    stopWatcher();
    document.removeEventListener('visibilitychange', onVisibility);
-   window.removeEventListener('blur', onBlur);
   };
  });
 </script>
