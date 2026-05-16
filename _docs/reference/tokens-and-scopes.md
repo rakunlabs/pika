@@ -110,7 +110,7 @@ Tokens used against the admin API (`/api/v1/...`) check **capabilities**, not sc
 | `files.write`        | Create, update, delete configurations and variants.                          |
 | `raw.read`           | Browse and download raw mount contents.                                      |
 | `raw.write`          | Upload, delete, rename, copy, move raw mount contents.                       |
-| `settings.manage`    | View and modify server settings, admin secret, backup/restore, key rotation. |
+| `settings.manage`    | View and modify server settings, backup/restore, server encryption-key lifecycle. |
 | `tokens.manage`      | Create, edit, revoke API access tokens.                                      |
 | `users.manage`       | Create, edit, delete, kick users (built-in auth only).                       |
 | `permissions.manage` | Define permission bundles and assign them (built-in auth only).              |

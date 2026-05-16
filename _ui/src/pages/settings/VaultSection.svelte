@@ -165,6 +165,24 @@
     }
   }
 
+  // ── Lock-on-hidden grace window ─────────────────────────────
+  //
+  // Per-device preference: how long to wait after the tab becomes
+  // hidden before we lock the vault. The mapping mirrors the store:
+  //   -1  → never lock when hidden (idle TTL still applies)
+  //    0  → lock instantly (legacy behavior)
+  //   >0  → grace period in seconds
+  // Stored in localStorage so it persists across sessions; not
+  // synced to the server because it's a device-trust setting, not
+  // a vault-secrets one.
+  let hiddenGraceChoice = $state<number>(vaultStore.hiddenGraceSeconds);
+
+  function saveHiddenGrace(value: number) {
+    hiddenGraceChoice = value;
+    vaultStore.setHiddenGraceSeconds(value);
+    addToast('Tab-hide behavior updated', 'success', 2000);
+  }
+
   // ── Reset vault ─────────────────────────────────────────────
   let showReset = $state(false);
   let resetConfirm = $state('');
@@ -236,6 +254,50 @@
             class="ml-auto px-3 py-1.5 text-xs rounded bg-accent-600 text-white font-medium hover:bg-accent-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >Save</button>
         </div>
+      </div>
+
+      <!-- Lock when tab is hidden -->
+      <!-- This setting controls what happens when you switch away
+           from this browser tab. The default (60 s grace) was a
+           response to user feedback: instant-lock made the vault
+           unusable when copying TOTP codes into other apps or
+           briefly checking another tab. -->
+      <div class="bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded p-4">
+        <h3 class="text-sm font-semibold mb-1">Lock when tab is hidden</h3>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">
+          Wait this long after switching tabs or minimizing the window before locking the vault.
+          Coming back inside the grace window cancels the pending lock.
+          The auto-lock above still applies after total inactivity, no matter what you pick here.
+          This setting is per-device and isn't synced to the server.
+        </p>
+        <div class="flex flex-wrap items-center gap-1.5">
+          {#each [
+            { value: 0, label: 'Instant' },
+            { value: 30, label: '30 seconds' },
+            { value: 60, label: '1 minute' },
+            { value: 300, label: '5 minutes' },
+            { value: 900, label: '15 minutes' },
+            { value: -1, label: 'Never' },
+          ] as opt (opt.value)}
+            <button
+              type="button"
+              onclick={() => saveHiddenGrace(opt.value)}
+              class="px-3 py-1.5 text-xs rounded border cursor-pointer
+                {hiddenGraceChoice === opt.value
+                  ? 'bg-accent-600 border-accent-600 text-white font-medium'
+                  : 'border-slate-300 dark:border-warm-600 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700'}"
+              aria-pressed={hiddenGraceChoice === opt.value}
+            >
+              {opt.label}
+            </button>
+          {/each}
+        </div>
+        {#if hiddenGraceChoice === -1}
+          <p class="mt-2 text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
+            <AlertTriangle size={12} class="shrink-0 mt-0.5" />
+            <span>Tab-hide locking is disabled on this device. Anyone with access to this browser can read your vault while the auto-lock timer is still running.</span>
+          </p>
+        {/if}
       </div>
 
       <!-- Trusted device -->

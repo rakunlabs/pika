@@ -16,6 +16,12 @@ var (
 	ErrUnauthorized     = errors.New("unauthorized")
 	ErrForbidden        = errors.New("forbidden")
 	ErrConflict         = errors.New("conflict")
+	// ErrInternal is the sentinel for "the server is misconfigured /
+	// in an unexpected state and there's nothing the caller can do
+	// about it". The HTTP layer maps any error chain wrapping this
+	// to 500. Distinct from ErrBadRequest so handlers can differentiate
+	// "user supplied bad input" from "boot wiring missing".
+	ErrInternal = errors.New("internal server error")
 )
 
 // Storage defines the top-level storage interface.

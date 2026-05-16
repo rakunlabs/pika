@@ -18,7 +18,6 @@ The most common variables. All env vars use the `PIKA_` prefix and `_` for nesti
 | `PIKA_SERVER_PUBLIC_PORT`    | _(disabled)_       | Public, unauthenticated `/data/*` and `/raw/*` port. |
 | `PIKA_SERVER_BASE_PATH`      | `/`                | Base URL path — set when running behind a sub-path.  |
 | `PIKA_STORAGE_BW_PATH`       | `data/pika`        | Embedded BadgerDB directory.                         |
-| `PIKA_SECRET_ENCRYPTION_KEY` |                    | Encryption key — setting this enables encryption.    |
 | `PIKA_LOG_LEVEL`             | `info`             | `debug`, `info`, `warn`, or `error`.                 |
 | `PIKA_CLUSTER_ENABLED`       | `false`            | Enable clustering.                                   |
 | `PIKA_CLUSTER_DNS_ADDR`      |                    | DNS name resolving to all peer IPs.                  |
@@ -52,11 +51,9 @@ storage:
   bw:
     path: /data/pika
 
-secret:
-  # Setting this enables XChaCha20-Poly1305 encryption at rest.
-  # Hashed with SHA-256 to derive a 32-byte key — the exact string
-  # does not matter, but you must keep it: lose it, lose your data.
-  encryption_key: "any-non-empty-string"
+# At-rest encryption (XChaCha20-Poly1305) is always on. The master
+# key is supplied through the web UI on every restart — there is
+# no `secret.encryption_key` field. See guide/encryption.md.
 
 cluster:
   enabled: false
@@ -80,7 +77,7 @@ telemetry:
 ```
 
 ::: tip
-Most production deployments only set a handful of these. The Docker Compose example in [Installation](./installation) uses just `PIKA_LOG_LEVEL` and `PIKA_SECRET_ENCRYPTION_KEY`.
+Most production deployments only set a handful of these. The Docker Compose example in [Installation](./installation) uses just `PIKA_LOG_LEVEL`. The at-rest encryption key is entered through the UI after every start; see [Encryption](./encryption).
 :::
 
 ## Public port

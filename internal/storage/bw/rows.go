@@ -717,9 +717,14 @@ func vaultItemVersionRowFromService(userID string, v *service.VaultItemVersion) 
 // settingsRow is a singleton — there's only ever one row, keyed by the
 // fixed string "default", matching the SQLite layout.
 type settingsRow struct {
-	ID                  string                               `bw:"id,pk"`
-	External            map[string]external.External         `bw:"external"`
-	AdminSecretHash     string                               `bw:"admin_secret_hash"`
+	ID       string                       `bw:"id,pk"`
+	External map[string]external.External `bw:"external"`
+	// EncryptionVerifier carries the at-rest verifier ciphertext for
+	// the server encryption key. Stored as raw bytes (no base64) since
+	// bw handles []byte natively. Empty/nil means the server has not
+	// been initialized yet — the first POST /api/v1/key/initialize
+	// fills it.
+	EncryptionVerifier  []byte                               `bw:"encryption_verifier"`
 	RawMounts           []service.RawMountEntry              `bw:"raw_mounts"`
 	FTPShares           []service.FTPShareEntry              `bw:"ftp_shares"`
 	FTPUsers            []service.FTPUserEntry               `bw:"ftp_users"`
@@ -734,4 +739,10 @@ type settingsRow struct {
 	ForwardAuth         *service.ForwardAuthSettings         `bw:"forward_auth"`
 	Auth                *service.AuthSettings                `bw:"auth"`
 	UserSync            *service.UserSyncSettings            `bw:"user_sync"`
+	Vault               *service.VaultSettings               `bw:"vault"`
+	// SensitivePayload mirrors service.Settings.SensitivePayload —
+	// the encrypted blob holding all secret-bearing values that the
+	// secret.Storage wrapper unpacks during Get. bw stores it as raw
+	// bytes; nothing in the bw layer interprets the contents.
+	SensitivePayload []byte `bw:"sensitive_payload"`
 }

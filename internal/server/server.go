@@ -26,6 +26,7 @@ import (
 	"github.com/rakunlabs/pika/internal/server/api"
 	"github.com/rakunlabs/pika/internal/server/authx"
 	"github.com/rakunlabs/pika/internal/server/compat"
+	"github.com/rakunlabs/pika/internal/server/lockgate"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -73,6 +74,18 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	// inherit. No-op when cluster is disabled.
 	if cl.Enabled() {
 		server.Use(cl.Middleware())
+	}
+
+	// Lock gate: 503 every non-allowlisted request while the at-rest
+	// encryption key is locked. Sits at the top of the chain so the
+	// auth + capability middlewares (mounted on the protected group
+	// below) never see a request the server can't safely handle.
+	// The allowlist explicitly carves out /healthz, /api/v1/info,
+	// /api/v1/key/{status,initialize,unlock}, and the auth manager's
+	// /login/* + /logout + /api/v1/me/* routes so an admin can
+	// always log in and unlock from a fresh start.
+	if encStore != nil {
+		server.Use(lockgate.Middleware(encStore.KeyManager(), cfg.Server.BasePath))
 	}
 
 	mData := server.Group(cfg.Server.BasePath)

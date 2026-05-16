@@ -33,8 +33,19 @@ type Config struct {
 }
 
 type Secret struct {
-	// EncryptionKey is the encryption key (any string, hashed with SHA-256 to derive 32 bytes).
-	// When set (non-empty), encryption is enabled automatically.
+	// EncryptionKey is DEPRECATED.
+	//
+	// Pika no longer reads the at-rest encryption key from
+	// configuration or environment. After every restart an
+	// administrator must unlock the server through the web UI (or
+	// POST /api/v1/key/unlock) — the key is held in memory for the
+	// process lifetime and zeroed on lock/restart.
+	//
+	// This field is kept in the config struct so existing
+	// PIKA_SECRET_ENCRYPTION_KEY env vars don't break startup;
+	// cmd/pika emits a deprecation warning on boot when it sees a
+	// non-empty value but otherwise ignores it. The field will be
+	// removed in a future release.
 	EncryptionKey string `cfg:"encryption_key" log:"-"`
 }
 

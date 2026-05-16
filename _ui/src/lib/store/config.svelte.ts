@@ -4,6 +4,7 @@ import type {
   PatchTokenRequest, ViewMode
 } from '@/lib/types/config';
 import { addToast } from '@/lib/store/toast.svelte';
+import { appStore } from '@/lib/store/store.svelte';
 import { basePath } from '@/lib/basepath';
 import axios from 'axios';
 
@@ -789,6 +790,39 @@ function createConfigStore() {
     }
   }
 
+  // saveVaultSettings flips the deployment-level personal-vault
+  // feature flag. The server stores the value in the Settings row;
+  // the next /api/v1/info response reflects the new state and the
+  // SPA's vault link disappears (or reappears) accordingly.
+  async function saveVaultSettings(
+    patch: import('@/lib/types/config').VaultSettings,
+  ): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', {
+        action: 'set',
+        vault: patch,
+      });
+      if (settings) {
+        settings = { ...settings, vault: patch };
+      } else {
+        settings = { vault: patch };
+      }
+      // Refresh /api/v1/info so the navbar / route gate
+      // (appStore.info.vault_enabled) updates immediately.
+      await appStore.loadInfo();
+      addToast(
+        patch.disabled
+          ? 'Personal vault disabled for this deployment.'
+          : 'Personal vault enabled for this deployment.',
+        'success',
+      );
+    } catch (error: any) {
+      const msg = error.response?.data?.message || 'Failed to save vault settings';
+      addToast(msg, 'alert');
+      throw error;
+    }
+  }
+
   async function savePublicServerSettings(patch: {
     public_port?: import('@/lib/types/config').PublicPortSettings,
     compat?: import('@/lib/types/config').CompatSettings,
@@ -921,23 +955,6 @@ function createConfigStore() {
     await axios.patch(`/api/v1/tokens/${id}`, req);
     await loadTokens();
     addToast('Token updated', 'success');
-  }
-
-  // Admin secret operations
-  async function fetchAdminSecretStatus(): Promise<{ configured: boolean }> {
-    try {
-      const response = await axios.get('/api/v1/admin-secret/status');
-      return response.data;
-    } catch {
-      return { configured: false };
-    }
-  }
-
-  async function setAdminSecret(currentSecret: string, newSecret: string): Promise<void> {
-    await axios.put('/api/v1/admin-secret', {
-      current_secret: currentSecret,
-      new_secret: newSecret,
-    });
   }
 
   // Create operations
@@ -1237,6 +1254,7 @@ function createConfigStore() {
     saveFTPShares,
     saveFTPUsers,
     saveServeSettings,
+    saveVaultSettings,
     savePublicServerSettings,
     saveHooks,
     saveUserSync,
@@ -1250,10 +1268,6 @@ function createConfigStore() {
     createToken,
     deleteToken,
     patchToken,
-
-    // Admin secret operations
-    fetchAdminSecretStatus,
-    setAdminSecret,
 
     // Create operations
     createNewFolder,

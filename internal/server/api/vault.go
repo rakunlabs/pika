@@ -74,7 +74,7 @@ func (a *api) getMyVaultStatus(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusOK).SendJSON(&service.VaultStatus{})
 	}
@@ -95,7 +95,7 @@ func (a *api) getMyVaultAccount(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}
@@ -118,7 +118,7 @@ func (a *api) setupMyVault(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}
@@ -151,7 +151,7 @@ func (a *api) rotateMyVaultMasterPassword(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}
@@ -178,7 +178,7 @@ func (a *api) unlockMyVaultCheck(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}
@@ -213,7 +213,7 @@ func (a *api) regenerateMyVaultRecoveryKit(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}
@@ -234,7 +234,7 @@ func (a *api) setMyVaultSessionLock(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}
@@ -262,7 +262,7 @@ func (a *api) resetMyVault(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}
@@ -299,7 +299,7 @@ func (a *api) listMyVaultItems(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}
@@ -339,7 +339,7 @@ func (a *api) getMyVaultItem(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}
@@ -361,7 +361,7 @@ func (a *api) createMyVaultItem(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}
@@ -390,7 +390,7 @@ func (a *api) updateMyVaultItem(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}
@@ -425,7 +425,7 @@ func (a *api) softDeleteMyVaultItem(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}
@@ -457,7 +457,7 @@ func (a *api) restoreMyVaultItem(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}
@@ -480,7 +480,7 @@ func (a *api) touchMyVaultItem(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}
@@ -503,7 +503,7 @@ func (a *api) listMyVaultItemVersions(c *ada.Context) error {
 	if userID == "" {
 		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
 	}
-	coord := a.svc.VaultCoord()
+	coord := a.svc.VaultCoordFor(ctx)
 	if coord == nil {
 		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
 	}

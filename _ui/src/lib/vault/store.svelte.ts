@@ -191,6 +191,101 @@ function createVaultStore() {
     };
   }
 
+  // ─── Hidden-tab grace period ────────────────────────────────
+  //
+  // Background: prior to this change, the App-level visibility
+  // listener locked the vault the instant `document.hidden` flipped
+  // true. That made the vault unusable in real workflows where the
+  // user briefly tabs away to copy a TOTP into another window or
+  // pastes a password into a native client.
+  //
+  // The grace period gives the user N seconds to come back. If they
+  // do, we cancel the pending lock and restart the activity timer.
+  // If they don't, the vault locks exactly as before.
+  //
+  // The setting is per-DEVICE (localStorage) rather than per-account
+  // because "lock when I tab away" is a device-trust question, not
+  // a vault-secrets question — the same user might want instant
+  // lock on a shared workstation and 5 minutes on their personal
+  // laptop. We don't sync it to the server.
+  //
+  // -1 means "never lock when hidden" — the idle timer still
+  //  applies, so a truly forgotten tab still locks eventually.
+  //  0  means "lock instantly on hidden" (legacy behavior).
+  //  >0 is the grace period in seconds.
+  const HIDDEN_GRACE_KEY = 'pika.vault.hidden_grace_seconds';
+  const DEFAULT_HIDDEN_GRACE_SECONDS = 60;
+
+  function loadHiddenGraceSeconds(): number {
+    try {
+      const raw = localStorage.getItem(HIDDEN_GRACE_KEY);
+      if (raw === null) return DEFAULT_HIDDEN_GRACE_SECONDS;
+      const n = Number.parseInt(raw, 10);
+      // -1 (never), 0 (instant), or any positive seconds value.
+      if (!Number.isFinite(n)) return DEFAULT_HIDDEN_GRACE_SECONDS;
+      if (n < -1) return DEFAULT_HIDDEN_GRACE_SECONDS;
+      return n;
+    } catch {
+      return DEFAULT_HIDDEN_GRACE_SECONDS;
+    }
+  }
+
+  let hiddenGraceSeconds = $state<number>(loadHiddenGraceSeconds());
+  let hiddenLockTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function setHiddenGraceSeconds(value: number): void {
+    const clamped = Number.isFinite(value) ? Math.max(-1, Math.floor(value)) : DEFAULT_HIDDEN_GRACE_SECONDS;
+    hiddenGraceSeconds = clamped;
+    try {
+      localStorage.setItem(HIDDEN_GRACE_KEY, String(clamped));
+    } catch {
+      // localStorage may be unavailable; the in-memory value still
+      // takes effect for the current session.
+    }
+  }
+
+  /**
+   * notifyVisibilityChange is called by the App-level
+   * visibilitychange listener. When the document becomes hidden we
+   * either lock immediately (grace = 0), schedule a delayed lock
+   * (grace > 0), or do nothing (grace = -1, "never"). When the
+   * document becomes visible again we cancel any pending grace
+   * lock and restart the activity timer.
+   *
+   * Idempotent — safe to call when the vault is already locked or
+   * when called twice in a row with the same `hidden` value.
+   */
+  function notifyVisibilityChange(hidden: boolean): void {
+    if (hidden) {
+      if (!vaultKey) return;
+      if (hiddenGraceSeconds < 0) {
+        // "Never lock when hidden" — leave the idle timer alone.
+        return;
+      }
+      if (hiddenGraceSeconds === 0) {
+        lock();
+        return;
+      }
+      // Schedule a delayed lock. If the user comes back before it
+      // fires, notifyVisibilityChange(false) will cancel it.
+      if (hiddenLockTimer) clearTimeout(hiddenLockTimer);
+      hiddenLockTimer = setTimeout(() => {
+        hiddenLockTimer = null;
+        lock();
+      }, hiddenGraceSeconds * 1000);
+    } else {
+      if (hiddenLockTimer) {
+        clearTimeout(hiddenLockTimer);
+        hiddenLockTimer = null;
+      }
+      // If the vault is still unlocked, give the user a fresh idle
+      // window starting from "now" rather than letting the original
+      // (pre-hidden) deadline tick down — they just came back, treat
+      // the return as activity.
+      if (vaultKey) resetLockTimer();
+    }
+  }
+
   // ─── Status / Account ───────────────────────────────────────
 
   async function refreshStatus(): Promise<void> {
@@ -433,6 +528,12 @@ function createVaultStore() {
     if (lockTimer) {
       clearTimeout(lockTimer);
       lockTimer = null;
+    }
+    if (hiddenLockTimer) {
+      // Lock-on-hidden may already have fired; clearing a finished
+      // timer is a no-op so this is safe either way.
+      clearTimeout(hiddenLockTimer);
+      hiddenLockTimer = null;
     }
     if (tickInterval) {
       clearInterval(tickInterval);
@@ -784,6 +885,7 @@ function createVaultStore() {
     get error() { return error; },
     get remainingLockSeconds() { return remainingLockSeconds(); },
     get lockTimeoutSeconds() { return lockTimeoutSeconds(); },
+    get hiddenGraceSeconds() { return hiddenGraceSeconds; },
     get pendingSecretKey() { return pendingSecretKey; },
     isUnlocked,
     allTags,
@@ -804,6 +906,8 @@ function createVaultStore() {
     purgeItem,
     restoreItem,
     installActivityWatcher,
+    notifyVisibilityChange,
+    setHiddenGraceSeconds,
     trustDevice,
     untrustDevice,
     isDeviceTrusted,

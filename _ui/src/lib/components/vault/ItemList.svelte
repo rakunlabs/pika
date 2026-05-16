@@ -3,6 +3,7 @@
     Search, Star, Archive, Trash2,
     KeyRound, CreditCard, UserSquare2, FileText, Terminal, Plug, Database, Server, FileBadge, ShieldCheck,
     Plus, Lock, Clock, Folder, FolderOpen, Inbox, ChevronRight, ChevronDown, X,
+    MoreVertical, FolderInput, FolderMinus, Pencil, Check,
   } from 'lucide-svelte';
   import { vaultStore } from '@/lib/vault/store.svelte';
   import { typeLabel, vaultItemAccent } from '@/lib/vault/templates';
@@ -261,7 +262,150 @@
     if (all.length <= TAGS_PER_ROW) return { visible: all, extra: 0 };
     return { visible: all.slice(0, TAGS_PER_ROW), extra: all.length - TAGS_PER_ROW };
   }
+
+  // ─── Move-to-folder & rename-folder UX ───────────────────────────
+  //
+  // Folders are just an encrypted string slot per item; the UI lets
+  // the user reorganize WITHOUT opening the full editor:
+  //
+  //  - Per-row kebab → "Move to folder…" popover with the existing
+  //    folder list, plus "(No folder)" and an inline "New folder"
+  //    creator. Each pick fires a single updateItem({ folder }) call.
+  //
+  //  - Per-folder-header kebab → inline "Rename folder" input. A
+  //    rename loops through every item in that bucket and issues
+  //    one updateItem({ folder: newName }) per item. We do them
+  //    sequentially to avoid hammering the server with N parallel
+  //    encryption requests; the bucket is small in practice.
+  //
+  // Both surfaces use the same `openMenu` token state so opening
+  // one auto-closes the other. A `svelte:window onclick` at the
+  // root closes everything when the user clicks outside.
+  type OpenMenu =
+    | { kind: 'row'; itemId: string }
+    | { kind: 'header'; folderKey: string }
+    | { kind: 'rename'; folderKey: string }
+    | null;
+  let openMenu = $state<OpenMenu>(null);
+
+  // The currently-typed name for either (a) the inline "New folder"
+  // input inside a row's move popover or (b) the inline rename input
+  // on a folder header. Re-used — only one popover is open at a
+  // time so a single string suffices.
+  let folderDraft = $state('');
+
+  // Tracks an in-flight bulk rename so we can disable the input and
+  // show a small spinner — important because rename = N round-trips
+  // and the user shouldn't be able to fire it twice.
+  let renameInFlight = $state(false);
+
+  function closeMenus() {
+    openMenu = null;
+    folderDraft = '';
+  }
+
+  function openRowMenu(e: MouseEvent, itemId: string) {
+    e.stopPropagation();
+    if (openMenu?.kind === 'row' && openMenu.itemId === itemId) {
+      closeMenus();
+    } else {
+      openMenu = { kind: 'row', itemId };
+      folderDraft = '';
+    }
+  }
+
+  function openHeaderMenu(e: MouseEvent, folderKey: string) {
+    e.stopPropagation();
+    if (openMenu?.kind === 'header' && openMenu.folderKey === folderKey) {
+      closeMenus();
+    } else {
+      openMenu = { kind: 'header', folderKey };
+      folderDraft = '';
+    }
+  }
+
+  function startRename(folderKey: string, currentName: string) {
+    openMenu = { kind: 'rename', folderKey };
+    folderDraft = currentName;
+  }
+
+  /**
+   * Move a single item to `folder`. Empty string clears the folder.
+   * No-op when the target is identical to the current value (avoids
+   * a useless server round-trip + version bump).
+   */
+  async function moveItemToFolder(item: VaultItem, folder: string) {
+    const target = folder.trim();
+    const current = decryptedFolder(item);
+    if (target === current) {
+      closeMenus();
+      return;
+    }
+    try {
+      await vaultStore.updateItem(
+        item.id,
+        { expected_version: item.version },
+        { folder: target },
+      );
+    } catch (err) {
+      // Surface to the console; the store also exposes `error` but
+      // we don't have a toast system in the sidebar. The list will
+      // simply fail to reflect the change.
+      console.error('moveItemToFolder failed', err);
+    } finally {
+      closeMenus();
+    }
+  }
+
+  /**
+   * Rename every item currently in `folderKey` to `newName`. An
+   * empty `newName` clears the folder for all items in the bucket
+   * (effectively merging them into the (No folder) bucket).
+   *
+   * Sequential on purpose — vault items each carry their own
+   * version + ciphertext so a parallel firehose would burn CPU on
+   * Argon2/AEAD with no real wall-clock benefit for typical
+   * folders (< 50 items).
+   */
+  async function renameFolder(folderKey: string, newName: string) {
+    const target = newName.trim();
+    const bucket = grouped.groups.find((g) => g.key === folderKey);
+    if (!bucket || bucket.pseudo) {
+      closeMenus();
+      return;
+    }
+    if (target.toLowerCase() === bucket.name.toLowerCase()) {
+      closeMenus();
+      return;
+    }
+    renameInFlight = true;
+    try {
+      for (const item of bucket.items) {
+        await vaultStore.updateItem(
+          item.id,
+          { expected_version: item.version },
+          { folder: target },
+        );
+      }
+    } catch (err) {
+      console.error('renameFolder failed', err);
+    } finally {
+      renameInFlight = false;
+      closeMenus();
+    }
+  }
+
+  // Available folder labels for the move popover. We exclude the
+  // item's own current folder from the list (showing it would just
+  // be a no-op) but always offer "(No folder)" so the user can
+  // unfile an item in one click.
+  function moveTargets(item: VaultItem): string[] {
+    const current = decryptedFolder(item).toLowerCase();
+    return vaultStore.allFolders().filter((f) => f.toLowerCase() !== current);
+  }
 </script>
+
+<svelte:window onclick={closeMenus} onkeydown={(e) => { if (e.key === 'Escape') closeMenus(); }} />
 
 <!-- Sidebar surface mirrors Settings.svelte's sidebar tier
      (`bg-slate-50 dark:bg-warm-800`) so navigating from Settings
@@ -414,34 +558,125 @@
     {:else}
       {#each grouped.groups as group (group.key)}
         {@const isCollapsed = collapsed.has(group.key)}
+        {@const isRenaming = openMenu?.kind === 'rename' && openMenu.folderKey === group.key}
+        {@const isHeaderMenuOpen = openMenu?.kind === 'header' && openMenu.folderKey === group.key}
         <div class="border-b border-slate-100 dark:border-warm-800 last:border-b-0">
           <!-- Folder header. The chevron + folder icon + name + count
                pattern matches what 1Password and Bitwarden use in
                their grouped views. Click anywhere on the row to
-               toggle. -->
-          <button
-            class="w-full flex items-center gap-1.5 px-2.5 py-2 text-xs cursor-pointer hover:bg-slate-100 dark:hover:bg-warm-700 group"
-            onclick={() => toggleCollapsed(group.key)}
-            aria-expanded={!isCollapsed}
-            aria-controls="folder-body-{group.key}"
-          >
-            {#if isCollapsed}
-              <ChevronRight size={12} class="shrink-0 text-slate-400" />
-            {:else}
-              <ChevronDown size={12} class="shrink-0 text-slate-400" />
-            {/if}
-            {#if group.pseudo}
-              <Folder size={13} class="shrink-0 opacity-50" />
-            {:else if isCollapsed}
-              <Folder size={13} class="shrink-0 text-accent-600 dark:text-accent-400" />
-            {:else}
+               toggle. The kebab on the right (only on real folders,
+               not the (No folder) pseudo-bucket) opens a small
+               header menu with "Rename" — there's no "Delete folder"
+               because folders aren't first-class entities; deleting
+               every item in a bucket is what removes it. -->
+          {#if isRenaming}
+            <!-- Inline rename form replaces the header row entirely
+                 so the user has the full width to type. Submitting
+                 fires renameFolder() which updates every item in the
+                 bucket. We swallow click events so they don't bubble
+                 to svelte:window's closeMenus. -->
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <form
+              class="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-100 dark:bg-warm-700"
+              onclick={(e) => e.stopPropagation()}
+              onsubmit={(e) => { e.preventDefault(); renameFolder(group.key, folderDraft); }}
+            >
               <FolderOpen size={13} class="shrink-0 text-accent-600 dark:text-accent-400" />
-            {/if}
-            <span class="flex-1 text-left font-medium uppercase tracking-wider text-[11px] text-slate-600 dark:text-slate-300 truncate {group.pseudo ? 'italic font-normal text-slate-500' : ''}">
-              {group.name}
-            </span>
-            <span class="text-[10px] tabular-nums text-slate-400">{group.items.length}</span>
-          </button>
+              <!-- svelte-ignore a11y_autofocus -->
+              <input
+                type="text"
+                bind:value={folderDraft}
+                placeholder={group.name}
+                disabled={renameInFlight}
+                autofocus
+                onkeydown={(e) => { if (e.key === 'Escape') closeMenus(); }}
+                class="flex-1 min-w-0 px-1.5 py-0.5 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-accent-500"
+              />
+              <button
+                type="submit"
+                disabled={renameInFlight || !folderDraft.trim()}
+                class="p-1 rounded text-accent-600 dark:text-accent-400 hover:bg-white dark:hover:bg-warm-800 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Save"
+                aria-label="Save folder name"
+              >
+                <Check size={12} />
+              </button>
+              <button
+                type="button"
+                onclick={closeMenus}
+                disabled={renameInFlight}
+                class="p-1 rounded text-slate-500 hover:bg-white dark:hover:bg-warm-800 cursor-pointer"
+                title="Cancel"
+                aria-label="Cancel rename"
+              >
+                <X size={12} />
+              </button>
+            </form>
+          {:else}
+            <div class="relative flex items-center hover:bg-slate-100 dark:hover:bg-warm-700 group/folder">
+              <button
+                class="flex-1 min-w-0 flex items-center gap-1.5 px-2.5 py-2 text-xs cursor-pointer"
+                onclick={() => toggleCollapsed(group.key)}
+                aria-expanded={!isCollapsed}
+                aria-controls="folder-body-{group.key}"
+              >
+                {#if isCollapsed}
+                  <ChevronRight size={12} class="shrink-0 text-slate-400" />
+                {:else}
+                  <ChevronDown size={12} class="shrink-0 text-slate-400" />
+                {/if}
+                {#if group.pseudo}
+                  <Folder size={13} class="shrink-0 opacity-50" />
+                {:else if isCollapsed}
+                  <Folder size={13} class="shrink-0 text-accent-600 dark:text-accent-400" />
+                {:else}
+                  <FolderOpen size={13} class="shrink-0 text-accent-600 dark:text-accent-400" />
+                {/if}
+                <span class="flex-1 min-w-0 text-left font-medium uppercase tracking-wider text-[11px] text-slate-600 dark:text-slate-300 truncate {group.pseudo ? 'italic font-normal text-slate-500' : ''}">
+                  {group.name}
+                </span>
+                <span class="text-[10px] tabular-nums text-slate-400">{group.items.length}</span>
+              </button>
+
+              <!-- Header kebab. Hidden on the (No folder) pseudo
+                   bucket since there's nothing to rename — that
+                   bucket is a derived view, not a stored entity. -->
+              {#if !group.pseudo}
+                <div class="relative shrink-0">
+                  <button
+                    type="button"
+                    onclick={(e) => openHeaderMenu(e, group.key)}
+                    class="p-1 mr-1 rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white dark:hover:bg-warm-800 cursor-pointer opacity-0 group-hover/folder:opacity-100 focus:opacity-100 {isHeaderMenuOpen ? 'opacity-100 bg-white dark:bg-warm-800' : ''}"
+                    aria-label="Folder actions"
+                    aria-haspopup="menu"
+                    aria-expanded={isHeaderMenuOpen}
+                  >
+                    <MoreVertical size={12} />
+                  </button>
+                  {#if isHeaderMenuOpen}
+                    <!-- svelte-ignore a11y_click_events_have_key_events -->
+                    <div
+                      role="menu"
+                      tabindex="-1"
+                      onclick={(e) => e.stopPropagation()}
+                      class="absolute right-0 top-full z-20 mt-0.5 min-w-[10rem] rounded-md border border-slate-200 dark:border-warm-600 bg-white dark:bg-warm-800 shadow-lg py-1 text-xs"
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onclick={() => startRename(group.key, group.name)}
+                        class="w-full flex items-center gap-2 px-3 py-1.5 text-left text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700 cursor-pointer"
+                      >
+                        <Pencil size={11} class="shrink-0 text-slate-400" />
+                        Rename folder
+                      </button>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          {/if}
 
           {#if !isCollapsed}
             <div id="folder-body-{group.key}">
@@ -450,64 +685,165 @@
                 {@const titleText = decryptedTitle(item)}
                 {@const tags = tagsForRow(item)}
                 {@const accent = vaultItemAccent(item.type)}
-                <!-- Selected row uses the same teal-tint formula as
-                     Settings.svelte's active nav entry
-                     (`bg-accent-50 dark:bg-accent-900/40` + accent
-                     text + accent border). Picking it over the
-                     prior `accent-950/30` means we no longer rely on
-                     the optional `accent-950` token — which means
-                     selection always renders, even if the token
-                     ever gets removed by mistake. -->
-                <button
-                  class="w-full flex items-start gap-2.5 pl-7 pr-3 py-2 text-left text-sm border-l-2 cursor-pointer
-                    {selectedId === item.id
-                      ? 'bg-accent-50 text-accent-700 border-accent-500 dark:bg-accent-900/40 dark:text-accent-300'
-                      : 'text-slate-700 dark:text-slate-200 border-transparent hover:bg-slate-100 dark:hover:bg-warm-700'}"
-                  onclick={() => onSelect(item.id)}
-                  aria-current={selectedId === item.id ? 'true' : undefined}
-                >
-                  <!-- Type-colored tile. The stem is supplied by
-                       vaultItemAccent() per the table in
-                       DESIGN_SYSTEM.md §11. Hardcoded class strings
-                       per type so Tailwind's JIT can keep them in
-                       the build. -->
-                  <div class="shrink-0 mt-0.5 w-8 h-8 rounded-md flex items-center justify-center {accent.tile}">
-                    <Icon size={16} />
-                  </div>
-
-                  <div class="flex-1 min-w-0">
-                    <!-- First line: title + favorite badge -->
-                    <div class="flex items-center gap-1.5">
-                      <span class="truncate font-medium {titleText === '(unreadable)' ? 'italic text-red-500' : ''}">
-                        {titleText || '(untitled)'}
-                      </span>
-                      {#if item.favorite}
-                        <Star size={11} fill="currentColor" class="shrink-0 text-amber-500" />
-                      {/if}
+                {@const isRowMenuOpen = openMenu?.kind === 'row' && openMenu.itemId === item.id}
+                {@const targets = isRowMenuOpen ? moveTargets(item) : []}
+                {@const currentFolder = decryptedFolder(item)}
+                <!-- Row container. We wrap the click-to-select button
+                     and a sibling kebab button together so the kebab
+                     can sit on top without nesting interactive
+                     elements. The kebab fades in on row hover. -->
+                <div class="relative flex items-stretch border-l-2 group/row
+                  {selectedId === item.id
+                    ? 'bg-accent-50 border-accent-500 dark:bg-accent-900/40'
+                    : 'border-transparent hover:bg-slate-100 dark:hover:bg-warm-700'}">
+                  <!-- Selected row uses the same teal-tint formula as
+                       Settings.svelte's active nav entry. -->
+                  <button
+                    class="flex-1 min-w-0 flex items-start gap-2.5 pl-7 pr-1 py-2 text-left text-sm cursor-pointer
+                      {selectedId === item.id
+                        ? 'text-accent-700 dark:text-accent-300'
+                        : 'text-slate-700 dark:text-slate-200'}"
+                    onclick={() => onSelect(item.id)}
+                    aria-current={selectedId === item.id ? 'true' : undefined}
+                  >
+                    <!-- Type-colored tile. The stem is supplied by
+                         vaultItemAccent() per the table in
+                         DESIGN_SYSTEM.md §11. -->
+                    <div class="shrink-0 mt-0.5 w-8 h-8 rounded-md flex items-center justify-center {accent.tile}">
+                      <Icon size={16} />
                     </div>
-                    <!-- Second line: type label + tag chips. We mix
-                         them in one row so tag-heavy items don't
-                         push the next row down disproportionately. -->
-                    <div class="flex items-center gap-1.5 mt-0.5 min-w-0">
-                      <span class="shrink-0 text-[10px] uppercase tracking-wider text-slate-400">
-                        {typeLabel(item.type)}
-                      </span>
-                      {#if tags.visible.length > 0}
-                        <span class="text-slate-300 dark:text-warm-700">·</span>
-                        <div class="flex items-center gap-1 min-w-0 overflow-hidden">
-                          {#each tags.visible as tag (tag)}
-                            <span class="shrink-0 px-1.5 py-px text-[10px] rounded bg-slate-100 dark:bg-warm-800 text-slate-600 dark:text-slate-300 truncate max-w-[6rem]">
-                              {tag}
-                            </span>
-                          {/each}
-                          {#if tags.extra > 0}
-                            <span class="shrink-0 text-[10px] text-slate-400">+{tags.extra}</span>
-                          {/if}
+
+                    <div class="flex-1 min-w-0">
+                      <!-- First line: title + favorite badge -->
+                      <div class="flex items-center gap-1.5">
+                        <span class="truncate font-medium {titleText === '(unreadable)' ? 'italic text-red-500' : ''}">
+                          {titleText || '(untitled)'}
+                        </span>
+                        {#if item.favorite}
+                          <Star size={11} fill="currentColor" class="shrink-0 text-amber-500" />
+                        {/if}
+                      </div>
+                      <!-- Second line: type label + tag chips. -->
+                      <div class="flex items-center gap-1.5 mt-0.5 min-w-0">
+                        <span class="shrink-0 text-[10px] uppercase tracking-wider text-slate-400">
+                          {typeLabel(item.type)}
+                        </span>
+                        {#if tags.visible.length > 0}
+                          <span class="text-slate-300 dark:text-warm-700">·</span>
+                          <div class="flex items-center gap-1 min-w-0 overflow-hidden">
+                            {#each tags.visible as tag (tag)}
+                              <span class="shrink-0 px-1.5 py-px text-[10px] rounded bg-slate-100 dark:bg-warm-800 text-slate-600 dark:text-slate-300 truncate max-w-[6rem]">
+                                {tag}
+                              </span>
+                            {/each}
+                            {#if tags.extra > 0}
+                              <span class="shrink-0 text-[10px] text-slate-400">+{tags.extra}</span>
+                            {/if}
+                          </div>
+                        {/if}
+                      </div>
+                    </div>
+                  </button>
+
+                  <!-- Per-row kebab — only "Move to folder" for now,
+                       but the popover is structured so additional
+                       actions (Favorite, Archive…) can slot in
+                       above the divider later. We hide the kebab
+                       in the trash view because moving a soft-
+                       deleted item between folders is meaningless. -->
+                  {#if view !== 'trash'}
+                    <div class="relative flex items-center shrink-0 pr-1.5">
+                      <button
+                        type="button"
+                        onclick={(e) => openRowMenu(e, item.id)}
+                        class="p-1 rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white dark:hover:bg-warm-800 cursor-pointer opacity-0 group-hover/row:opacity-100 focus:opacity-100 {isRowMenuOpen ? 'opacity-100 bg-white dark:bg-warm-800' : ''}"
+                        aria-label="Item actions"
+                        aria-haspopup="menu"
+                        aria-expanded={isRowMenuOpen}
+                      >
+                        <MoreVertical size={13} />
+                      </button>
+                      {#if isRowMenuOpen}
+                        <!-- Move-to-folder popover. We list every
+                             other folder + the (No folder) option
+                             + an inline "New folder…" creator. The
+                             checkmark on the current folder gives
+                             the user feedback about where the item
+                             currently lives without needing a
+                             separate label. -->
+                        <!-- svelte-ignore a11y_click_events_have_key_events -->
+                        <div
+                          role="menu"
+                          tabindex="-1"
+                          onclick={(e) => e.stopPropagation()}
+                          class="absolute right-0 top-full z-20 mt-0.5 w-56 rounded-md border border-slate-200 dark:border-warm-600 bg-white dark:bg-warm-800 shadow-lg py-1 text-xs"
+                        >
+                          <div class="px-3 py-1 text-[10px] uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                            <FolderInput size={11} /> Move to folder
+                          </div>
+                          <div class="max-h-60 overflow-y-auto">
+                            <!-- (No folder) — always available unless
+                                 the item is already there. -->
+                            {#if currentFolder !== ''}
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onclick={() => moveItemToFolder(item, '')}
+                                class="w-full flex items-center gap-2 px-3 py-1.5 text-left text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700 cursor-pointer"
+                              >
+                                <FolderMinus size={11} class="shrink-0 text-slate-400" />
+                                <span class="italic text-slate-500">(No folder)</span>
+                              </button>
+                            {/if}
+                            {#each targets as f (f)}
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onclick={() => moveItemToFolder(item, f)}
+                                class="w-full flex items-center gap-2 px-3 py-1.5 text-left text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700 cursor-pointer"
+                              >
+                                <Folder size={11} class="shrink-0 text-accent-600 dark:text-accent-400" />
+                                <span class="truncate flex-1">{f}</span>
+                              </button>
+                            {/each}
+                            {#if currentFolder !== '' || targets.length > 0}
+                              <div class="my-1 border-t border-slate-100 dark:border-warm-700"></div>
+                            {/if}
+                            <!-- Inline "new folder" creator. We bind
+                                 the same `folderDraft` state used by
+                                 rename — only one popover is open at
+                                 a time so the field can't collide. -->
+                            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                            <!-- svelte-ignore a11y_click_events_have_key_events -->
+                            <form
+                              class="px-2 py-1 flex items-center gap-1"
+                              onclick={(e) => e.stopPropagation()}
+                              onsubmit={(e) => { e.preventDefault(); if (folderDraft.trim()) moveItemToFolder(item, folderDraft); }}
+                            >
+                              <Plus size={11} class="shrink-0 text-slate-400" />
+                              <input
+                                type="text"
+                                bind:value={folderDraft}
+                                placeholder="New folder…"
+                                class="flex-1 min-w-0 px-1.5 py-0.5 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-accent-500"
+                                onkeydown={(e) => { if (e.key === 'Escape') closeMenus(); }}
+                              />
+                              <button
+                                type="submit"
+                                disabled={!folderDraft.trim()}
+                                class="p-0.5 rounded text-accent-600 dark:text-accent-400 hover:bg-slate-100 dark:hover:bg-warm-700 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                title="Create and move"
+                                aria-label="Create folder and move item"
+                              >
+                                <Check size={11} />
+                              </button>
+                            </form>
+                          </div>
                         </div>
                       {/if}
                     </div>
-                  </div>
-                </button>
+                  {/if}
+                </div>
               {/each}
             </div>
           {/if}

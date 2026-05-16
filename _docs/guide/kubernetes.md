@@ -93,7 +93,25 @@ The public port (9090) is exposed on the `pika` Service alongside the admin port
 
 ## Encryption key
 
-Set `PIKA_SECRET_ENCRYPTION_KEY` from a Kubernetes `Secret` for at-rest encryption:
+Pika no longer reads its at-rest master key from environment or
+config — see [Encryption](./encryption). On every pod restart an
+administrator must unlock the server through `POST /api/v1/key/unlock`
+or the web UI before any non-allowlisted request will succeed.
+
+Operationally this means:
+
+- **Rolling updates** require an unlock per pod. Plan
+  maintenance windows accordingly, or scale to zero and back so
+  only one unlock per upgrade is needed if your business model
+  tolerates the downtime.
+- **OOM / liveness restarts** also require manual unlock — keep
+  the runbook accessible to the on-call rotation.
+- **Headless auto-unseal** (Vault transit, KMS) is not currently
+  supported. If you need it, file an issue describing your
+  threat model.
+
+A `readinessProbe` against `/api/v1/key/status` can keep traffic off
+locked pods until they are unlocked:
 
 ```yaml
 - target:
@@ -101,14 +119,18 @@ Set `PIKA_SECRET_ENCRYPTION_KEY` from a Kubernetes `Secret` for at-rest encrypti
     name: pika
   patch: |
     - op: add
-      path: /spec/template/spec/containers/0/env/-
+      path: /spec/template/spec/containers/0/readinessProbe
       value:
-        name: PIKA_SECRET_ENCRYPTION_KEY
-        valueFrom:
-          secretKeyRef:
-            name: pika-encryption
-            key: key
+        httpGet:
+          path: /api/v1/key/status
+          port: 8080
+        initialDelaySeconds: 5
+        periodSeconds: 10
 ```
+
+Combine with a JSON-aware probe (e.g. an `ExecAction` running `curl`
++ `jq '.unlocked == true'`) if you need the readiness gate to wait
+for the unlock too rather than just for the endpoint to answer.
 
 ## External Secrets Operator
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"log/slog"
 
@@ -12,13 +11,13 @@ import (
 
 	"github.com/rakunlabs/pika/internal/cluster"
 	"github.com/rakunlabs/pika/internal/config"
-	_ "github.com/rakunlabs/pika/internal/rawfs/ftpfs"     // register FTP backend
-	_ "github.com/rakunlabs/pika/internal/rawfs/s3fs"      // register S3 backend
-	_ "github.com/rakunlabs/pika/internal/rawfs/sftpfs"    // register SFTP backend
+	_ "github.com/rakunlabs/pika/internal/rawfs/ftpfs"        // register FTP backend
+	_ "github.com/rakunlabs/pika/internal/rawfs/s3fs"         // register S3 backend
+	_ "github.com/rakunlabs/pika/internal/rawfs/sftpfs"       // register SFTP backend
 	_ "github.com/rakunlabs/pika/internal/rawfs/vercelblobfs" // register Vercel Blob backend
-	_ "github.com/rakunlabs/pika/internal/rawfs/webdavfs"    // register WebDAV backend
+	_ "github.com/rakunlabs/pika/internal/rawfs/webdavfs"     // register WebDAV backend
 	"github.com/rakunlabs/pika/internal/secret"
-	"github.com/rakunlabs/pika/internal/secret/crypto"
+	"github.com/rakunlabs/pika/internal/secret/keymgr"
 	"github.com/rakunlabs/pika/internal/server"
 	"github.com/rakunlabs/pika/internal/server/api"
 	"github.com/rakunlabs/pika/internal/service"
@@ -75,27 +74,44 @@ func run(ctx context.Context) error {
 	defer cl.Stop()
 
 	// //////////////////////////////////////
-	// Initialize encryption if enabled
-	var storeWrap service.Storage = store
-	var encStore *secret.Storage
+	// Initialize the at-rest encryption key manager.
+	//
+	// Lifecycle:
+	//   - Fresh install (no verifier on disk): the manager starts
+	//     uninitialized and the lockgate middleware is a no-op.
+	//     Pika serves requests in plaintext-at-rest mode until an
+	//     operator opts in via Settings → Server encryption key.
+	//   - Already-initialized install: the manager starts LOCKED
+	//     and the lockgate 503s every non-allowlisted request until
+	//     an admin unlocks via POST /api/v1/key/unlock or the UI.
+	//
+	// This replaces the prior PIKA_SECRET_ENCRYPTION_KEY env: the
+	// key is no longer stored on disk or in the process environment;
+	// once enabled, the operator types it after every restart.
+	mgr := keymgr.New()
+	encStore := secret.New(store, mgr)
+	var storeWrap service.Storage = encStore
 
+	// Deprecation warning for the legacy env.
 	if cfg.Secret.EncryptionKey != "" {
-		key := sha256.Sum256([]byte(cfg.Secret.EncryptionKey))
-
-		encryptor, err := crypto.NewChaCha20(key[:])
-		if err != nil {
-			return fmt.Errorf("init encryptor: %w", err)
-		}
-
-		encStore = secret.New(store, encryptor)
-		storeWrap = encStore
-
-		slog.Info("encryption enabled")
+		slog.Warn("PIKA_SECRET_ENCRYPTION_KEY is set but no longer honored; enable at-rest encryption from Settings → Server encryption key and unlock after each restart. Remove the env var to suppress this warning.")
 	}
 
 	// //////////////////////////////////////
 	// Initialize service
 	svc := service.New(storeWrap)
+	svc.SetKeyManager(mgr)
+
+	// Bootstrap-time hint: if the verifier is already on disk, mark
+	// the manager as initialized so the lockgate engages and the SPA
+	// renders the unlock screen immediately. Otherwise the system is
+	// fresh and serves normally until the operator opts in.
+	if st, err := svc.GetKeyStatus(ctx); err == nil && st.Initialized {
+		mgr.MarkInitialized()
+		slog.Info("server started; encryption enabled, awaiting unlock", "initialized", true)
+	} else {
+		slog.Info("server started; encryption not yet enabled (opt in via Settings → Server encryption key)", "initialized", false)
+	}
 
 	// //////////////////////////////////////
 	// Start server

@@ -8,6 +8,7 @@ import (
 
 	"github.com/rakunlabs/pika/internal/external"
 	"github.com/rakunlabs/pika/internal/hook"
+	"github.com/rakunlabs/pika/internal/secret/keymgr"
 )
 
 type Service struct {
@@ -52,6 +53,13 @@ type Service struct {
 	// chain skips registration when this is nil so the routes 404
 	// instead of 503-ing every call.
 	vault *VaultService
+
+	// keyManager owns the lifecycle of the at-rest server encryption
+	// key. Set by SetKeyManager at boot; nil-safe everywhere it's
+	// consumed (keyops.go gates each method on a non-nil check). The
+	// HTTP layer reads its state via GetKeyStatus to decide between
+	// the unlock screen and the normal app shell.
+	keyManager *keymgr.Manager
 }
 
 func New(store Storage) *Service {

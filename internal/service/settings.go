@@ -8,7 +8,6 @@ import (
 
 	"github.com/rakunlabs/pika/internal/external"
 	"github.com/rakunlabs/pika/internal/hook"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // RawMountEntry is a single raw mount configured via the UI.
@@ -133,8 +132,15 @@ type ExternalPermissionsSettings struct {
 }
 
 type Settings struct {
-	External            map[string]external.External `json:"external,omitempty"`
-	AdminSecretHash     string                       `json:"admin_secret_hash,omitempty"`
+	External map[string]external.External `json:"external,omitempty"`
+	// EncryptionVerifier is the ciphertext of a known plaintext used
+	// to detect a wrong server-encryption key on unlock. Written
+	// once at server initialization (POST /api/v1/key/initialize),
+	// re-encrypted on rotation. Kept inside Settings rather than its
+	// own table so the bootstrap path doesn't grow another schema
+	// dependency. The plaintext format is documented in
+	// service/keyops.go (verifierPlaintext()).
+	EncryptionVerifier  []byte                       `json:"encryption_verifier,omitempty"`
 	RawMounts           []RawMountEntry              `json:"raw_mounts,omitempty"`
 	FTPShares           []FTPShareEntry              `json:"ftp_shares,omitempty"`
 	FTPUsers            []FTPUserEntry               `json:"ftp_users,omitempty"`
@@ -149,6 +155,47 @@ type Settings struct {
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 	Auth                *AuthSettings                `json:"auth,omitempty"`
 	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
+	Vault               *VaultSettings               `json:"vault,omitempty"`
+
+	// SensitivePayload is the at-rest encrypted blob carrying the
+	// user-supplied secret values for fields above (S3 access keys,
+	// FTP passwords, hook webhook secrets, external-resource creds,
+	// SFTP host private keys, etc.). The wrapper layer
+	// (internal/secret) inflates this back into the typed fields
+	// during Get and re-seals on Set; consumers of *Settings see
+	// plaintext as before. The raw byte slot exists here so the
+	// row-conversion code in internal/storage/bw can route it to
+	// the underlying bucket without dragging the encryption layer
+	// into bw. Empty/nil while the server is locked or for fresh
+	// installs that haven't written a settings row yet.
+	SensitivePayload []byte `json:"sensitive_payload,omitempty"`
+}
+
+// VaultSettings configures the personal-vault feature at the
+// deployment level. The feature itself is shipped with every Pika
+// build; this struct only lets an administrator turn the SPA + API
+// surface on or off without redeploying.
+//
+// Why a "Disabled" flag instead of "Enabled":
+//
+//   - Backward compatibility. A pre-existing Settings row with no
+//     vault config decodes to Vault == nil, and downstream code
+//     treats nil as "default state". The default has been "vault
+//     available" for the entire history of the feature, so a flag
+//     whose zero value preserves that behaviour is "Disabled=false".
+//     Flipping to "Enabled=false" would silently disable the vault
+//     on every existing install during the upgrade.
+//
+// Disabling does NOT delete vault data. Every existing
+// vault_accounts / vault_items row stays where it is; flipping
+// Disabled=true just hides the routes from the API and the link
+// from the SPA so no new operations can run. Re-enabling restores
+// access to the same data with the same master password.
+type VaultSettings struct {
+	// Disabled hides the /vault feature from the UI and turns every
+	// /api/v1/me/vault/* endpoint into a 404. Existing data is
+	// preserved; this is a feature-flag, not a destructive action.
+	Disabled bool `json:"disabled"`
 }
 
 // FTPServeSettings configures the built-in FTP server (stored in DB).
@@ -241,6 +288,7 @@ type PatchSettings struct {
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 	Auth                *AuthSettings                `json:"auth,omitempty"`
 	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
+	Vault               *VaultSettings               `json:"vault,omitempty"`
 }
 
 type ActionKey string
@@ -361,6 +409,14 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 		settings.UserSync = patch.UserSync
 	}
 
+	// Handle vault settings update (if provided). The struct only
+	// carries a boolean today; we still update the whole pointer so
+	// future fields (e.g. per-deployment item-type allowlist) get
+	// the same patch-update treatment for free.
+	if patch.Vault != nil {
+		settings.Vault = patch.Vault
+	}
+
 	return s.UpdateSettings(ctx, settings)
 }
 
@@ -394,65 +450,4 @@ func (s *Service) UpdateSettings(ctx context.Context, settings *Settings) error 
 // SaveSettings persists a full Settings object — used by the auth migration path at boot.
 func (s *Service) SaveSettings(ctx context.Context, settings *Settings) error {
 	return s.store.Settings().Set(ctx, settings)
-}
-
-// SetAdminSecret hashes the provided plaintext secret with bcrypt and stores it in settings.
-// If a current secret is already set, currentSecret must match it.
-func (s *Service) SetAdminSecret(ctx context.Context, currentSecret, newSecret string) error {
-	if newSecret == "" {
-		return fmt.Errorf("new secret is required: %w", ErrBadRequest)
-	}
-
-	settings, err := s.Settings(ctx)
-	if err != nil {
-		return err
-	}
-
-	// If an admin secret is already configured, validate the current one.
-	if settings.AdminSecretHash != "" {
-		if currentSecret == "" {
-			return fmt.Errorf("current secret is required: %w", ErrBadRequest)
-		}
-		if err := bcrypt.CompareHashAndPassword([]byte(settings.AdminSecretHash), []byte(currentSecret)); err != nil {
-			return fmt.Errorf("invalid current secret: %w", ErrForbidden)
-		}
-	}
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(newSecret), bcrypt.DefaultCost)
-	if err != nil {
-		return fmt.Errorf("hashing admin secret: %w", err)
-	}
-
-	settings.AdminSecretHash = string(hash)
-
-	return s.UpdateSettings(ctx, settings)
-}
-
-// VerifyAdminSecret checks the provided plaintext against the stored bcrypt hash.
-// Returns ErrForbidden if the secret does not match, or ErrBadRequest if no secret is configured.
-func (s *Service) VerifyAdminSecret(ctx context.Context, secret string) error {
-	settings, err := s.Settings(ctx)
-	if err != nil {
-		return err
-	}
-
-	if settings.AdminSecretHash == "" {
-		return fmt.Errorf("admin secret is not configured: %w", ErrBadRequest)
-	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(settings.AdminSecretHash), []byte(secret)); err != nil {
-		return fmt.Errorf("invalid admin secret: %w", ErrForbidden)
-	}
-
-	return nil
-}
-
-// HasAdminSecret returns true if an admin secret has been configured.
-func (s *Service) HasAdminSecret(ctx context.Context) (bool, error) {
-	settings, err := s.Settings(ctx)
-	if err != nil {
-		return false, err
-	}
-
-	return settings.AdminSecretHash != "", nil
 }

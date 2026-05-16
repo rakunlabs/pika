@@ -291,8 +291,12 @@ Pika is configured via environment variables (prefixed with `PIKA_`) or a config
 | `PIKA_SERVER_PUBLIC_PORT`    |                    | Public data port (unauthenticated `/data/*`)     |
 | `PIKA_SERVER_BASE_PATH`      | `/`                | Base URL path                                    |
 | `PIKA_STORAGE_BW_PATH`       | `data/pika`        | BadgerDB data directory                          |
-| `PIKA_SECRET_ENCRYPTION_KEY` |                    | Encryption key — setting this enables encryption |
 | `PIKA_LOG_LEVEL`             | `info`             | Log level                                        |
+
+> The at-rest encryption master key is supplied through the web UI
+> (or `POST /api/v1/key/unlock`) on every restart — it is not
+> stored on disk or in the environment. See
+> [docs/guide/encryption.md](_docs/guide/encryption.md).
 
 ### Built-in Authentication
 
@@ -331,7 +335,7 @@ Under external authentication, pika can translate provider-supplied groups (or O
 | `files.write`        | Create, update, delete configurations and variants                          |
 | `raw.read`           | Browse and download raw mount contents                                      |
 | `raw.write`          | Upload, delete, rename, copy, move raw mount contents                       |
-| `settings.manage`    | View and modify server settings, admin secret, backup/restore, key rotation |
+| `settings.manage`    | View and modify server settings, backup/restore, server encryption-key lifecycle |
 | `tokens.manage`      | Create, edit, revoke API access tokens                                      |
 | `users.manage`       | Create, edit, delete, kick users (built-in auth only)                       |
 | `permissions.manage` | Define permission bundles and assign them (built-in auth only)              |

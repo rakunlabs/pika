@@ -1,4 +1,5 @@
 <script lang="ts">
+ import { onMount } from "svelte";
  import { configStore } from "@/lib/store/config.svelte";
  import { addToast } from "@/lib/store/toast.svelte";
  import { Eye, EyeOff, Lock, Download, Upload, Trash2, ShieldAlert, RefreshCw } from "lucide-svelte";
@@ -14,8 +15,11 @@
  type BackupMode = 'full' | 'since' | 'until';
 
  // ── Backup state ──
- let backupAdminSecret = $state('');
- let showBackupAdminSecret = $state(false);
+ //
+ // Auth: the backup endpoints are gated by CapSettingsManage at the
+ // server. We don't ask for an additional "admin secret" here —
+ // anyone holding settings.manage can already export the DB, so a
+ // second factor on the same surface added no real protection.
  let isExporting = $state(false);
  let isImporting = $state(false);
  let importFile = $state<File | null>(null);
@@ -42,10 +46,10 @@
  let sinceVersion = $state('');
  let untilVersion = $state('');
 
- // Current server-side DB version. Loaded after the user enters the
- // admin secret + clicks Refresh. We don't auto-fetch at mount because
- // the endpoint requires the secret — and the secret is also gating
- // this whole panel.
+ // Current server-side DB version. We auto-fetch at mount now that
+ // the endpoint just needs a session + capability (no extra secret
+ // to enter); the Refresh button stays for manual re-reads after
+ // someone else changes the DB.
  let currentDBVersion = $state<number | null>(null);
  let isLoadingVersion = $state(false);
 
@@ -62,15 +66,9 @@
  const HEADER_SIZE = 25;
 
  async function refreshVersion() {
- if (!backupAdminSecret.trim()) {
- addToast('Enter the admin secret first', 'alert');
- return;
- }
  isLoadingVersion = true;
  try {
- const { data } = await axios.get('/api/v1/backup/info', {
- params: { admin_secret: backupAdminSecret.trim() }
- });
+ const { data } = await axios.get('/api/v1/backup/info');
  currentDBVersion = data.db_version ?? 0;
  } catch (error: any) {
  const msg = error.response?.data?.message || error.response?.statusText || 'Failed to read version';
@@ -80,13 +78,15 @@
  }
  }
 
+ onMount(() => {
+  // Fetch the DB version immediately so the UI shows the current
+  // state without requiring a click. Errors are surfaced via the
+  // existing toast path in refreshVersion.
+  refreshVersion();
+ });
+
  // ── Backup handlers ──
  function handleExportBackup() {
- if (!backupAdminSecret.trim()) {
- addToast('Admin secret is required', 'alert');
- return;
- }
-
  if (backupMode === 'since' && !sinceVersion.trim()) {
  addToast('Provide a "since" version', 'alert');
  return;
@@ -116,7 +116,7 @@
  async function doExportBackup() {
  isExporting = true;
  try {
- const params: Record<string, string> = { admin_secret: backupAdminSecret.trim() };
+ const params: Record<string, string> = {};
  if (encryptionPassword.trim()) {
  params.encryption_password = encryptionPassword.trim();
  }
@@ -216,10 +216,6 @@
  }
 
  function handleImportBackup() {
- if (!backupAdminSecret.trim()) {
- addToast('Admin secret is required', 'alert');
- return;
- }
  if (!importFile) {
  addToast('Please select a .pikabw backup file', 'alert');
  return;
@@ -257,12 +253,11 @@
 
  isImporting = true;
  try {
- // Stream the file straight to the server. Auth + password ride on
- // headers so the body stays a clean octet-stream the API can pass
- // to Service.Restore without buffering.
+ // Stream the file straight to the server. The session cookie
+ // carries auth; the body stays a clean octet-stream the API can
+ // pass to Service.Restore without buffering.
  const headers: Record<string, string> = {
  'Content-Type': 'application/octet-stream',
- 'X-Admin-Secret': backupAdminSecret.trim(),
  };
  if (importEncryptionPassword.trim()) {
  headers['X-Encryption-Password'] = importEncryptionPassword.trim();
@@ -305,30 +300,11 @@
  </p>
  </div>
 
- <!-- Admin Secret + DB version (shared for both operations) -->
+ <!-- DB version display (shared for both operations). The admin
+      secret prompt that used to live here has been retired —
+      CapSettingsManage is the only auth needed to use this panel,
+      and the session cookie carries that automatically. -->
  <div class="mb-6 p-5 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm">
- <div class="mb-4">
- <label for="backup-admin-secret" class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">Admin Secret</label>
- <div class="relative">
- <input
- id="backup-admin-secret"
- type={showBackupAdminSecret ? 'text' : 'password'}
- bind:value={backupAdminSecret}
- placeholder="Enter your admin secret"
- class="w-full px-3 py-2 pr-9 text-sm border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
- />
- <button
- type="button"
- class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 dark:text-slate-500 bg-transparent border-none cursor-pointer hover:text-slate-600 dark:text-slate-300 transition-colors"
- onclick={() => showBackupAdminSecret = !showBackupAdminSecret}
- title={showBackupAdminSecret ? 'Hide' : 'Show'}
- >
- {#if showBackupAdminSecret}<EyeOff size={15} />{:else}<Eye size={15} />{/if}
- </button>
- </div>
- <p class="mt-1 text-[11px] text-slate-400 dark:text-slate-500">Required for all backup operations</p>
- </div>
-
  <div class="flex items-center justify-between gap-3 px-3 py-2 bg-slate-50 dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md">
  <div class="text-xs text-slate-500 dark:text-slate-400">
  <span class="font-medium text-slate-700 dark:text-slate-200">Current DB version:</span>
@@ -342,7 +318,7 @@
  type="button"
  class="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-600 dark:text-slate-300 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded hover:bg-slate-50 dark:bg-warm-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
  onclick={refreshVersion}
- disabled={isLoadingVersion || !backupAdminSecret.trim()}
+ disabled={isLoadingVersion}
  title="Read current DB version from the server"
  >
  <RefreshCw size={12} class={isLoadingVersion ? 'animate-spin' : ''} />
@@ -440,7 +416,7 @@
   <button
   class="flex items-center justify-center gap-2 w-full px-4 py-2.5 text-sm font-medium text-white bg-vermilion-500 rounded-md hover:bg-vermilion-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
   onclick={handleExportBackup}
-  disabled={isExporting || !backupAdminSecret.trim()}
+  disabled={isExporting}
   >
   <Download size={14} />
   {isExporting ? 'Exporting...' : encryptionPassword.trim() ? 'Download Encrypted Backup' : 'Download Backup'}
@@ -587,7 +563,7 @@
   class="flex items-center justify-center gap-2 w-full px-4 py-2.5 text-sm font-medium text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed
   {wipeBeforeRestore ? 'bg-red-600 hover:bg-red-700' : 'bg-vermilion-500 hover:bg-vermilion-600'} cursor-pointer"
   onclick={handleImportBackup}
- disabled={isImporting || !backupAdminSecret.trim() || !importFile || importFileDBVersion === null || (importFileIsEncrypted && !importEncryptionPassword.trim())}
+ disabled={isImporting || !importFile || importFileDBVersion === null || (importFileIsEncrypted && !importEncryptionPassword.trim())}
  >
  <Upload size={14} />
  {isImporting ? 'Restoring...' : wipeBeforeRestore ? 'Wipe & Restore' : 'Restore'}

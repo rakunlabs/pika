@@ -33,10 +33,13 @@ Token capabilities for admin operations are different from path scopes used on `
 | `GET`,`POST`,`DELETE`,`PATCH` | `/api/v1/tokens[/{id}]`           | `tokens.manage`        | API token CRUD.                                                       |
 | `POST`                  | `/api/v1/convert`                     | `files.read`           | Convert content between JSON / YAML / TOML.                          |
 | `GET`                   | `/api/v1/search?q=...`                | `files.read`           | Full-text search across configs (Server-Sent Events stream).         |
-| `POST`                  | `/api/v1/rotate`                      | `settings.manage`      | Encryption key rotation. Requires admin secret in the body.          |
+| `GET`                   | `/api/v1/key/status`                  | _(public)_             | Server encryption-key state (initialized / unlocked).                |
+| `POST`                  | `/api/v1/key/initialize`              | `settings.manage`      | Opt in to at-rest encryption (first-time setup of the server key).   |
+| `POST`                  | `/api/v1/key/unlock`                  | `settings.manage`      | Unlock the server after a restart by supplying the master key.       |
+| `POST`                  | `/api/v1/key/lock`                    | `settings.manage`      | Manually re-lock the server without restarting.                      |
+| `POST`                  | `/api/v1/key/rotate`                  | `settings.manage`      | Rotate the server encryption key (current → new).                    |
 | `POST`                  | `/api/v1/tls-generate`                | `settings.manage`      | Generate a TLS certificate / key pair.                               |
 | `POST`                  | `/api/v1/ssh-keygen`                  | `settings.manage`      | Generate an SSH key pair.                                            |
-| `GET`,`PUT`             | `/api/v1/admin-secret[/status]`       | `settings.manage`      | Read status / set the admin secret used for sensitive operations.    |
 | `GET`,`POST`            | `/api/v1/settings`                    | `settings.manage`      | Read / patch the entire settings document.                           |
 | `GET`,`POST`            | `/api/v1/backup[/info]`               | `settings.manage`      | Export / inspect / import a full backup archive.                     |
 | `GET`,`PUT`,`DELETE`    | `/api/v1/raw/{prefix}/{path}`         | `raw.read`/`write`     | Raw FS browsing (UI, session-auth side).                             |

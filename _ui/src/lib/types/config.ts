@@ -458,6 +458,16 @@ export interface Settings {
   external_permissions?: ExternalPermissionsSettings;
   forward_auth?: ForwardAuthSettings;
   user_sync?: UserSyncSettings;
+  vault?: VaultSettings;
+}
+
+// VaultSettings is the admin-level feature flag for the personal
+// vault. Disabled=true hides /vault from the SPA navigation and
+// turns every /api/v1/me/vault/* endpoint into a 404. Existing
+// vault data is preserved — flipping the flag back to false makes
+// it accessible again without any migration.
+export interface VaultSettings {
+  disabled?: boolean;
 }
 
 // User-sync settings: top-level array of sources (LDAP, future SCIM, etc.).

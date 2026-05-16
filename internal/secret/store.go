@@ -3,30 +3,53 @@ package secret
 import (
 	"context"
 	"io"
-	"log/slog"
-	"sync"
 
-	"github.com/rakunlabs/pika/internal/secret/crypto"
+	"github.com/rakunlabs/pika/internal/secret/keymgr"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
 // Storage wraps another storage with encryption support.
-// Currently delegates all operations to the backend directly.
-// Encryption at the column level would require native storage layer support.
-// The RotateKey method is retained for future use.
+//
+// Currently delegates all operations to the backend directly —
+// column-level encryption is the next phase. The wrapper still earns
+// its keep today by:
+//
+//   - Carrying the *keymgr.Manager reference through Tx() and the
+//     rotation handler so the entire system shares a single key
+//     authority.
+//   - Providing the future hook point for per-table Encrypt/Decrypt
+//     calls (PR-2).
+//
+// Until column encryption lands, all Get/Set methods are pure
+// passthroughs and the Manager's locked state has no effect on read
+// or write paths. The lockgate HTTP middleware enforces the
+// "server-locked → 503" semantics at the request boundary, which is
+// what users actually see.
 type Storage struct {
-	backend   service.Storage
-	encryptor crypto.Encryptor
-
-	mu sync.RWMutex
+	backend service.Storage
+	keymgr  *keymgr.Manager
 }
 
 // New creates a new encrypted storage wrapper.
-func New(backend service.Storage, encryptor crypto.Encryptor) *Storage {
+//
+// The Manager replaces the prior immutable crypto.Encryptor field;
+// callers no longer pass a key directly. The Manager starts locked
+// (no key in memory) and is unlocked at runtime via the
+// /api/v1/key/unlock HTTP endpoint. See internal/secret/keymgr for
+// the lifecycle.
+func New(backend service.Storage, mgr *keymgr.Manager) *Storage {
 	return &Storage{
-		backend:   backend,
-		encryptor: encryptor,
+		backend: backend,
+		keymgr:  mgr,
 	}
+}
+
+// KeyManager exposes the underlying lifecycle owner so service-layer
+// code (e.g. the key/unlock handler, the verifier writer) can drive
+// transitions without re-importing keymgr through indirect paths.
+// The api layer also reads State() through this for status responses.
+func (s *Storage) KeyManager() *keymgr.Manager {
+	return s.keymgr
 }
 
 func (s *Storage) Users() service.UserStorage {
@@ -62,7 +85,11 @@ func (s *Storage) FileVersions() service.FileVersionStorage {
 }
 
 func (s *Storage) Settings() service.SettingsStorage {
-	return s.backend.Settings()
+	// Wrap so the at-rest sensitive payload is decrypted on Get
+	// and re-encrypted on Set without consumers having to know the
+	// envelope exists. See settings_seal.go for the field-by-field
+	// extract/inject logic.
+	return &settingsStorageWrapper{backend: s.backend.Settings(), parent: s}
 }
 
 func (s *Storage) UserPreferences() service.UserPreferencesStorage {
@@ -93,12 +120,14 @@ func (s *Storage) VaultItemVersions() service.VaultItemVersionStorage {
 	return s.backend.VaultItemVersions()
 }
 
-// Tx executes a function within a transaction.
+// Tx executes a function within a transaction. The inner Storage
+// shares the same Manager pointer so any Encrypt/Decrypt call inside
+// a transaction sees the same key state as the outer scope.
 func (s *Storage) Tx(ctx context.Context, fn func(ctx context.Context, tx service.Storage) error) error {
 	return s.backend.Tx(ctx, func(ctx context.Context, tx service.Storage) error {
 		encTx := &Storage{
-			backend:   tx,
-			encryptor: s.encryptor,
+			backend: tx,
+			keymgr:  s.keymgr,
 		}
 		return fn(ctx, encTx)
 	})
@@ -130,20 +159,6 @@ func (s *Storage) Wipe() error {
 // Version forwards to the backend's monotonic version counter.
 func (s *Storage) Version() uint64 {
 	return s.backend.Version()
-}
-
-// RotateKey is retained for future use when column-level encryption is supported.
-// Currently a no-op placeholder.
-func (s *Storage) RotateKey(ctx context.Context, newEncryptor crypto.Encryptor) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	slog.Info("key rotation requested (currently no-op in SQL-backed storage)")
-
-	// Switch to new encryptor for future use
-	s.encryptor = newEncryptor
-
-	return nil
 }
 
 // Close closes the underlying storage.

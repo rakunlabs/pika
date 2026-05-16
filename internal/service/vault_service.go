@@ -78,9 +78,57 @@ func (s *Service) SetVaultService(v *VaultService) {
 }
 
 // VaultCoord returns the bound VaultService, or nil when the
-// deployment has the personal-vault feature disabled. Callers MUST
-// nil-check before invoking methods.
+// deployment has the personal-vault feature disabled at boot.
+// Callers MUST nil-check before invoking methods.
+//
+// Note: this is the build-time / boot-time gate (set when
+// cmd/pika does NOT call NewVaultService). The runtime admin
+// toggle goes through VaultEnabled() instead — handlers that
+// want to honor BOTH gates should use VaultCoordFor(ctx).
 func (s *Service) VaultCoord() *VaultService {
+	return s.vault
+}
+
+// VaultEnabled reports whether the personal-vault feature should
+// be served to clients right now. It combines:
+//
+//   - The boot-time gate (VaultCoord() != nil — set by cmd/pika
+//     calling SetVaultService).
+//   - The runtime admin toggle (Settings.Vault.Disabled), readable
+//     and writable from the Security panel.
+//
+// Returns false on a settings-read failure (fail-closed) so a
+// transient storage hiccup doesn't expose the API surface against
+// the admin's wishes; callers that need to distinguish "disabled"
+// from "couldn't tell" should call this themselves.
+//
+// Cheap enough to call from the request hot path — Settings() is
+// served from the singleton row that gets read on most requests
+// anyway. We deliberately don't cache the bool here because the
+// toggle should take effect immediately when the admin flips it.
+func (s *Service) VaultEnabled(ctx context.Context) bool {
+	if s.vault == nil {
+		return false
+	}
+	settings, err := s.Settings(ctx)
+	if err != nil || settings == nil {
+		return false
+	}
+	if settings.Vault != nil && settings.Vault.Disabled {
+		return false
+	}
+	return true
+}
+
+// VaultCoordFor returns the bound VaultService when the feature
+// is currently enabled, or nil when it is disabled at either gate
+// (boot-time or admin runtime toggle). HTTP handlers should
+// prefer this over VaultCoord() so the admin toggle takes effect
+// without needing a process restart.
+func (s *Service) VaultCoordFor(ctx context.Context) *VaultService {
+	if !s.VaultEnabled(ctx) {
+		return nil
+	}
 	return s.vault
 }
 

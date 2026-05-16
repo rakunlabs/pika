@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +17,6 @@ import (
 	"github.com/rakunlabs/pika/internal/rawfs"
 	"github.com/rakunlabs/pika/internal/rawfs/localfs"
 	"github.com/rakunlabs/pika/internal/secret"
-	"github.com/rakunlabs/pika/internal/secret/crypto"
 	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/serve/sftpserve"
 	"github.com/rakunlabs/pika/internal/serve/tftpserve"
@@ -216,20 +214,44 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// of searchHandler instead.
 	m.GET("/api/v1/search", api.searchHandler)
 
-	// Key rotation endpoint (requires admin_secret)
-	m.POST("/api/v1/rotate", m.Wrap(api.withPerm(service.CapSettingsManage, api.rotateKey)))
+	// Server-key lifecycle endpoints.
+	//
+	// Auth model:
+	//   - GET  /api/v1/key/status     — public probe (lives on mAuth
+	//       so the SPA can fetch it even before login; also on the
+	//       lockgate allowlist so a locked server still answers it).
+	//   - POST /api/v1/key/initialize — protected + CapSettingsManage.
+	//       Used AFTER the operator has logged in and decided to turn
+	//       on at-rest encryption. The fresh-install path is "log in
+	//       to the running plaintext server, then opt in to encryption
+	//       here". Service-level guard (one-shot verifier) still
+	//       refuses re-init.
+	//   - POST /api/v1/key/unlock     — protected + CapSettingsManage,
+	//       also lockgate-allowlisted so a logged-in admin can reach
+	//       it while the rest of the API 503s. Pre-locked-state
+	//       restart flow: admin logs in (auth still works) → unlock.
+	//   - POST /api/v1/key/lock       — protected + CapSettingsManage.
+	//   - POST /api/v1/key/rotate     — protected + CapSettingsManage.
+	//
+	// API-only automation (no UI session) is still supported: an API
+	// token holding settings.manage can call any of these. That
+	// covers the curl/post-restart scripted unlock case.
+	mAuth.GET("/api/v1/key/status", mAuth.Wrap(api.getKeyStatus))
+	m.POST("/api/v1/key/initialize", m.Wrap(api.withPerm(service.CapSettingsManage, api.postKeyInitialize)))
+	m.POST("/api/v1/key/unlock", m.Wrap(api.withPerm(service.CapSettingsManage, api.postKeyUnlock)))
+	m.POST("/api/v1/key/lock", m.Wrap(api.withPerm(service.CapSettingsManage, api.postKeyLock)))
+	m.POST("/api/v1/key/rotate", m.Wrap(api.withPerm(service.CapSettingsManage, api.postKeyRotate)))
+
 	m.POST("/api/v1/tls-generate", m.Wrap(api.withPerm(service.CapSettingsManage, api.generateTLS)))
 	m.POST("/api/v1/ssh-keygen", m.Wrap(api.withPerm(service.CapSettingsManage, api.generateSSHKey)))
-
-	// Admin secret management endpoints
-	m.GET("/api/v1/admin-secret/status", m.Wrap(api.withPerm(service.CapSettingsManage, api.adminSecretStatus)))
-	m.PUT("/api/v1/admin-secret", m.Wrap(api.withPerm(service.CapSettingsManage, api.setAdminSecret)))
 
 	// Settings
 	m.GET("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.getSettings)))
 	m.POST("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.postSettings)))
 
-	// Backup & Restore (requires admin secret)
+	// Backup & Restore. CapSettingsManage is the only gate — anyone
+	// authorized to manage settings can already export the entire
+	// DB, so no additional admin-secret step is required.
 	m.GET("/api/v1/backup", m.Wrap(api.withPerm(service.CapSettingsManage, api.exportBackup)))
 	m.GET("/api/v1/backup/info", m.Wrap(api.withPerm(service.CapSettingsManage, api.getBackupInfo)))
 	m.POST("/api/v1/backup", m.Wrap(api.withPerm(service.CapSettingsManage, api.importBackup)))
@@ -283,6 +305,8 @@ func (a *api) errorHandler(c *ada.Context, err error) {
 		c.SetStatus(http.StatusForbidden)
 	case errors.Is(err, service.ErrConflict):
 		c.SetStatus(http.StatusConflict)
+	case errors.Is(err, service.ErrInternal):
+		c.SetStatus(http.StatusInternalServerError)
 	default:
 		c.SetStatus(http.StatusInternalServerError)
 	}
@@ -356,26 +380,26 @@ func (a *api) infoHandler(c *ada.Context) error {
 		subtitle = as.UI.Subtitle
 	}
 
-	// VaultEnabled mirrors a.svc.VaultCoord() != nil so the SPA can
-	// gate the /vault link in the navigation. The known item-type
-	// vocabulary is also surfaced here so the SPA's "new item"
-	// picker doesn't have to hard-code the list (and stays in sync
-	// when we add a new type server-side).
-	vaultEnabled := a.svc.VaultCoord() != nil
+	// VaultEnabled mirrors a.svc.VaultEnabled(ctx) so the SPA can
+	// gate the /vault link in the navigation. This combines the
+	// boot-time gate (cmd/pika wiring) with the admin runtime
+	// toggle in Settings → Security → Personal vault, so the link
+	// disappears the moment an admin flips the toggle.
+	vaultEnabled := a.svc.VaultEnabled(ctx)
 
 	resp := struct {
 		Info
-		Subtitle            string                  `json:"subtitle,omitempty"`
-		User                string                  `json:"user,omitempty"`
-		AuthEnabled         bool                    `json:"auth_enabled"`
-		BuiltinAuth         bool                    `json:"builtin_auth"`
-		IsSuperadmin        bool                    `json:"is_superadmin"`
-		Permissions         []string                `json:"permissions"`
-		Capabilities        []service.Capability    `json:"capabilities"`
-		SetupRequired       bool                    `json:"setup_required,omitempty"`
-		RawMounts           []MountInfo             `json:"raw_mounts,omitempty"`
-		VaultEnabled        bool                    `json:"vault_enabled"`
-		VaultItemTypes      []service.VaultItemType `json:"vault_item_types,omitempty"`
+		Subtitle       string                  `json:"subtitle,omitempty"`
+		User           string                  `json:"user,omitempty"`
+		AuthEnabled    bool                    `json:"auth_enabled"`
+		BuiltinAuth    bool                    `json:"builtin_auth"`
+		IsSuperadmin   bool                    `json:"is_superadmin"`
+		Permissions    []string                `json:"permissions"`
+		Capabilities   []service.Capability    `json:"capabilities"`
+		SetupRequired  bool                    `json:"setup_required,omitempty"`
+		RawMounts      []MountInfo             `json:"raw_mounts,omitempty"`
+		VaultEnabled   bool                    `json:"vault_enabled"`
+		VaultItemTypes []service.VaultItemType `json:"vault_item_types,omitempty"`
 	}{
 		Info:           a.info,
 		Subtitle:       subtitle,
@@ -1332,74 +1356,6 @@ func (a *api) convertFormat(c *ada.Context) error {
 		Content: string(converted),
 		Format:  req.To,
 	})
-}
-
-func (a *api) rotateKey(c *ada.Context) error {
-	if a.encStore == nil {
-		return errors.Join(fmt.Errorf("encryption is not enabled"), service.ErrBadRequest)
-	}
-
-	var req struct {
-		AdminSecret string `json:"admin_secret"`
-		NewKey      string `json:"new_key"`
-	}
-	if err := c.Bind(&req); err != nil {
-		return errors.Join(err, service.ErrBadRequest)
-	}
-
-	// Validate admin secret against the bcrypt hash stored in settings
-	if err := a.svc.VerifyAdminSecret(c.Request.Context(), req.AdminSecret); err != nil {
-		return err
-	}
-
-	// Validate new key
-	if req.NewKey == "" {
-		return errors.Join(fmt.Errorf("new_key is required"), service.ErrBadRequest)
-	}
-
-	// Hash the key with SHA-256 to get exactly 32 bytes
-	newKeyHash := sha256.Sum256([]byte(req.NewKey))
-
-	newEncryptor, err := crypto.NewChaCha20(newKeyHash[:])
-	if err != nil {
-		return errors.Join(err, service.ErrBadRequest)
-	}
-
-	// Perform rotation — re-encrypts all values
-	if err := a.encStore.RotateKey(c.Request.Context(), newEncryptor); err != nil {
-		return fmt.Errorf("key rotation failed: %w", err)
-	}
-
-	return c.SetStatus(http.StatusOK).SendJSON(response{Message: "key rotation completed"})
-}
-
-func (a *api) adminSecretStatus(c *ada.Context) error {
-	configured, err := a.svc.HasAdminSecret(c.Request.Context())
-	if err != nil {
-		return err
-	}
-
-	return c.SetStatus(http.StatusOK).SendJSON(struct {
-		Configured bool `json:"configured"`
-	}{
-		Configured: configured,
-	})
-}
-
-func (a *api) setAdminSecret(c *ada.Context) error {
-	var req struct {
-		CurrentSecret string `json:"current_secret"`
-		NewSecret     string `json:"new_secret"`
-	}
-	if err := c.Bind(&req); err != nil {
-		return errors.Join(err, service.ErrBadRequest)
-	}
-
-	if err := a.svc.SetAdminSecret(c.Request.Context(), req.CurrentSecret, req.NewSecret); err != nil {
-		return err
-	}
-
-	return c.SetStatus(http.StatusOK).SendJSON(response{Message: "admin secret updated"})
 }
 
 // searchHandler uses SSE to stream search results as they are found.

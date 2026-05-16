@@ -20,28 +20,20 @@ type backupInfoResponse struct {
 	DBVersion uint64 `json:"db_version"`
 }
 
-// getBackupInfo handles GET /api/v1/backup/info
+// getBackupInfo handles GET /api/v1/backup/info.
 //
-// Auth: same admin-secret gate as the export endpoint. Returning the
-// version doesn't leak data, but pinning it behind the same gate keeps
-// the surface uniform.
+// Auth: session/token + CapSettingsManage (enforced at the route).
+// We previously also required an "admin secret" body param here as
+// defence-in-depth, but the capability gate alone is sufficient —
+// anyone holding CapSettingsManage can already export the entire
+// DB, so a second factor on the same surface bought us nothing.
 func (a *api) getBackupInfo(c *ada.Context) error {
-	adminSecret := c.Request.URL.Query().Get("admin_secret")
-	if adminSecret == "" {
-		adminSecret = c.Request.Header.Get("X-Admin-Secret")
-	}
-	if adminSecret == "" {
-		return errors.Join(fmt.Errorf("admin_secret is required"), service.ErrBadRequest)
-	}
-	if err := a.svc.VerifyAdminSecret(c.Request.Context(), adminSecret); err != nil {
-		return err
-	}
 	return c.SetStatus(http.StatusOK).SendJSON(backupInfoResponse{
 		DBVersion: a.svc.Version(),
 	})
 }
 
-// exportBackup handles GET /api/v1/backup
+// exportBackup handles GET /api/v1/backup.
 //
 // Streams a `.pikabw` container (header + payload). Optional query/header
 // parameters:
@@ -49,25 +41,14 @@ func (a *api) getBackupInfo(c *ada.Context) error {
 //	since=<uint64>                — incremental backup (entries newer than)
 //	until=<uint64>                — point-in-time snapshot (entries up to)
 //	encryption_password=<string>  — encrypt payload with ChaCha20
-//	X-Admin-Secret                — auth (also accepted as ?admin_secret=)
-//	X-Encryption-Password         — auth-style header equivalent of the query param
+//	X-Encryption-Password         — header equivalent of the query param
+//
+// Auth: session/token + CapSettingsManage (enforced at the route).
 //
 // since and until are mutually exclusive. The DB version captured at
 // export time is returned in X-Pika-DB-Version (informational; the same
 // value is also embedded in the .pikabw header).
 func (a *api) exportBackup(c *ada.Context) error {
-	adminSecret := c.Request.URL.Query().Get("admin_secret")
-	if adminSecret == "" {
-		adminSecret = c.Request.Header.Get("X-Admin-Secret")
-	}
-	if adminSecret == "" {
-		return errors.Join(fmt.Errorf("admin_secret is required"), service.ErrBadRequest)
-	}
-
-	if err := a.svc.VerifyAdminSecret(c.Request.Context(), adminSecret); err != nil {
-		return err
-	}
-
 	encryptionPassword := c.Request.URL.Query().Get("encryption_password")
 	if encryptionPassword == "" {
 		encryptionPassword = c.Request.Header.Get("X-Encryption-Password")
@@ -105,14 +86,13 @@ func (a *api) exportBackup(c *ada.Context) error {
 	return nil
 }
 
-// importBackup handles POST /api/v1/backup
+// importBackup handles POST /api/v1/backup.
 //
 // Body MUST be the raw `.pikabw` stream (Content-Type:
 // application/octet-stream). Auth fields ride on headers/query so the
 // body can be streamed straight through to Service.Restore without
 // having to spool it through JSON.
 //
-//	X-Admin-Secret          — admin secret (or ?admin_secret=)
 //	X-Encryption-Password   — required when the backup header has the
 //	                          encrypted flag set (or ?encryption_password=)
 //	X-Pika-Wipe             — set to "true"/"1" to wipe the database
@@ -120,21 +100,12 @@ func (a *api) exportBackup(c *ada.Context) error {
 //	                          backup is validated (magic + decryption
 //	                          test if encrypted) BEFORE any wipe runs.
 //
+// Auth: session/token + CapSettingsManage (enforced at the route).
+//
 // Default behaviour is upsert (no wipe). The merge/replace modes from
 // the SQLite era are gone; the wipe flag is the closest equivalent of
 // the old "replace" mode.
 func (a *api) importBackup(c *ada.Context) error {
-	adminSecret := c.Request.URL.Query().Get("admin_secret")
-	if adminSecret == "" {
-		adminSecret = c.Request.Header.Get("X-Admin-Secret")
-	}
-	if adminSecret == "" {
-		return errors.Join(fmt.Errorf("admin_secret is required"), service.ErrBadRequest)
-	}
-	if err := a.svc.VerifyAdminSecret(c.Request.Context(), adminSecret); err != nil {
-		return err
-	}
-
 	encryptionPassword := c.Request.URL.Query().Get("encryption_password")
 	if encryptionPassword == "" {
 		encryptionPassword = c.Request.Header.Get("X-Encryption-Password")

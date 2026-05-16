@@ -56,7 +56,7 @@ func rowToSettings(r *settingsRow) *service.Settings {
 	_ = hook.Hook{} // keep import live (hooks slice is passed through verbatim)
 	return &service.Settings{
 		External:            ext,
-		AdminSecretHash:     r.AdminSecretHash,
+		EncryptionVerifier:  r.EncryptionVerifier,
 		RawMounts:           r.RawMounts,
 		FTPShares:           r.FTPShares,
 		FTPUsers:            r.FTPUsers,
@@ -71,6 +71,8 @@ func rowToSettings(r *settingsRow) *service.Settings {
 		ForwardAuth:         r.ForwardAuth,
 		Auth:                r.Auth,
 		UserSync:            r.UserSync,
+		Vault:               r.Vault,
+		SensitivePayload:    r.SensitivePayload,
 	}
 }
 
@@ -78,7 +80,7 @@ func settingsToRow(s *service.Settings) *settingsRow {
 	return &settingsRow{
 		ID:                  settingsSingletonID,
 		External:            s.External,
-		AdminSecretHash:     s.AdminSecretHash,
+		EncryptionVerifier:  s.EncryptionVerifier,
 		RawMounts:           s.RawMounts,
 		FTPShares:           s.FTPShares,
 		FTPUsers:            s.FTPUsers,
@@ -93,5 +95,7 @@ func settingsToRow(s *service.Settings) *settingsRow {
 		ForwardAuth:         s.ForwardAuth,
 		Auth:                s.Auth,
 		UserSync:            s.UserSync,
+		Vault:               s.Vault,
+		SensitivePayload:    s.SensitivePayload,
 	}
 }

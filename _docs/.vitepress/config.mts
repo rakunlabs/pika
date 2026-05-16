@@ -73,6 +73,7 @@ export default defineConfig({
           items: [
             { text: 'Authentication', link: '/guide/authentication' },
             { text: 'Encryption', link: '/guide/encryption' },
+            { text: 'Server key management', link: '/guide/server-key-management' },
             { text: 'Clustering', link: '/guide/clustering' },
             { text: 'Kubernetes', link: '/guide/kubernetes' },
           ],

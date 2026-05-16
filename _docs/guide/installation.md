@@ -31,8 +31,9 @@ services:
     restart: unless-stopped
     environment:
       PIKA_LOG_LEVEL: info
-      # Uncomment to enable encryption at rest. Lose this key, lose your data.
-      # PIKA_SECRET_ENCRYPTION_KEY: change-me
+      # At-rest encryption is enabled by default and the master key
+      # is supplied through the web UI on first start (and after
+      # every restart). See _docs/guide/encryption.md for details.
     volumes:
       - pika:/data
     ports:
