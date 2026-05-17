@@ -406,3 +406,97 @@ func extractSecretName(fullName string) string {
 	return fullName
 }
 
+// ── Provider ──────────────────────────────────────────────────────────
+// GCPProvider implements Provider for GCP Secret Manager. The signed-
+// JWT exchange that produces an access token is expensive, so the
+// resulting client is cached in Service and we route through Deps.
+
+type GCPProvider struct {
+	Config *GCP
+	Deps   Deps
+}
+
+func (p *GCPProvider) Kind() string { return "gcp" }
+
+func (p *GCPProvider) Capabilities() Capabilities {
+	return Capabilities{CanRead: true, CanList: true}
+}
+
+func (p *GCPProvider) Validate() error {
+	if p.Config == nil {
+		return fmt.Errorf("gcp: config is required")
+	}
+	if strings.TrimSpace(p.Config.ServiceAccountJSON) == "" {
+		return fmt.Errorf("gcp: service_account_json is required")
+	}
+	// Cheap structural check — full parsing happens at first call.
+	var probe map[string]any
+	if err := json.Unmarshal([]byte(p.Config.ServiceAccountJSON), &probe); err != nil {
+		return fmt.Errorf("gcp: service_account_json is not valid JSON: %w", err)
+	}
+	if _, ok := probe["project_id"]; !ok {
+		return fmt.Errorf("gcp: service_account_json missing project_id")
+	}
+	return nil
+}
+
+func (p *GCPProvider) Fetch(ctx context.Context, path string) ([]byte, error) {
+	client, err := p.Deps.GCPClient(p.Config)
+	if err != nil {
+		return nil, err
+	}
+	data, err := client.ReadSecret(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("reading GCP secret %q: %w", path, err)
+	}
+	return json.Marshal(data)
+}
+
+func (p *GCPProvider) List(ctx context.Context, _ string) ([]string, error) {
+	client, err := p.Deps.GCPClient(p.Config)
+	if err != nil {
+		return nil, err
+	}
+	return client.ListSecrets(ctx)
+}
+
+func (p *GCPProvider) Test(ctx context.Context) TestResult {
+	paths, err := p.List(ctx, "")
+	if err != nil {
+		return TestResult{OK: false, Message: err.Error()}
+	}
+	msg := fmt.Sprintf("Reachable. %d secret(s) discovered.", len(paths))
+	if len(paths) == 0 {
+		msg = "Reachable. No secrets discovered (check IAM scope on the service account)."
+	}
+	return TestResult{OK: true, Message: msg, Sample: capSample(paths, 10)}
+}
+
+func (p *GCPProvider) Read(ctx context.Context, path string) (*Entry, error) {
+	client, err := p.Deps.GCPClient(p.Config)
+	if err != nil {
+		return nil, err
+	}
+	data, err := client.ReadSecret(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := json.Marshal(data)
+	return &Entry{Data: data, Raw: raw, ContentType: "application/json"}, nil
+}
+
+func (p *GCPProvider) Write(ctx context.Context, path string, data map[string]any) error {
+	return fmt.Errorf("gcp: %w", ErrNotSupported)
+}
+
+func (p *GCPProvider) Delete(ctx context.Context, path string) error {
+	return fmt.Errorf("gcp: %w", ErrNotSupported)
+}
+
+func (p *GCPProvider) ListVersions(ctx context.Context, path string) ([]Version, error) {
+	return nil, fmt.Errorf("gcp: %w", ErrNotSupported)
+}
+
+func (p *GCPProvider) ReadVersion(ctx context.Context, path, version string) (*Entry, error) {
+	return nil, fmt.Errorf("gcp: %w", ErrNotSupported)
+}

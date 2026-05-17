@@ -125,6 +125,7 @@ type sealedExt struct {
 	K8sKubeconfig   string            `json:"k8s_kubeconfig,omitempty"`
 	AWSSecretKey    string            `json:"aws_secret_key,omitempty"`
 	GCPSAJSON       string            `json:"gcp_service_account_json,omitempty"`
+	GCPParamSAJSON  string            `json:"gcp_parameter_service_account_json,omitempty"`
 	AzureSecret     string            `json:"azure_client_secret,omitempty"`
 }
 
@@ -222,6 +223,10 @@ func extractSecrets(s *service.Settings) *sensitivePayload {
 			if ext.GCP != nil {
 				se.GCPSAJSON = ext.GCP.ServiceAccountJSON
 				ext.GCP.ServiceAccountJSON = ""
+			}
+			if ext.GCPParameter != nil {
+				se.GCPParamSAJSON = ext.GCPParameter.ServiceAccountJSON
+				ext.GCPParameter.ServiceAccountJSON = ""
 			}
 			if ext.Azure != nil {
 				se.AzureSecret = ext.Azure.ClientSecret
@@ -360,6 +365,9 @@ func injectSecrets(s *service.Settings, p *sensitivePayload) {
 		}
 		if ext.GCP != nil {
 			ext.GCP.ServiceAccountJSON = se.GCPSAJSON
+		}
+		if ext.GCPParameter != nil {
+			ext.GCPParameter.ServiceAccountJSON = se.GCPParamSAJSON
 		}
 		if ext.Azure != nil {
 			ext.Azure.ClientSecret = se.AzureSecret
@@ -557,8 +565,8 @@ func isEmptyPayload(p *sensitivePayload) bool {
 			// Map fields can't use struct equality; check field by field.
 			if e.VaultToken != "" || e.VaultRoleSecret != "" ||
 				e.K8sKubeconfig != "" || e.AWSSecretKey != "" ||
-				e.GCPSAJSON != "" || e.AzureSecret != "" ||
-				len(e.HTTPHeaderAuth) > 0 {
+				e.GCPSAJSON != "" || e.GCPParamSAJSON != "" ||
+				e.AzureSecret != "" || len(e.HTTPHeaderAuth) > 0 {
 				return false
 			}
 		}

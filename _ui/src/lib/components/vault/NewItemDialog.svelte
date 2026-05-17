@@ -4,6 +4,7 @@
   import { templateFor, typeLabel, extractHostnames } from '@/lib/vault/templates';
   import type { VaultItemType } from '@/lib/vault/api';
   import { addToast } from '@/lib/store/toast.svelte';
+  import { backdropClose } from '@/lib/actions/backdropClose';
 
   interface Props {
     onCreated: (id: string) => void;
@@ -70,13 +71,10 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onclick={onClose} role="dialog" tabindex="-1" aria-modal="true" onkeydown={(e) => { if (e.key === 'Escape') onClose(); }}>
-  <!-- Inner panel: stopPropagation is for click bubbling only. -->
-  <!-- aria-modal lives on the backdrop; the inner wrapper just opts -->
-  <!-- out of the click bubble. -->
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
-  <div class="bg-white dark:bg-warm-800 rounded-lg shadow-xl w-[640px] max-h-[90vh] flex flex-col" onclick={(e) => e.stopPropagation()} role="document">
+<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" use:backdropClose={onClose} role="dialog" tabindex="-1" aria-modal="true" onkeydown={(e) => { if (e.key === 'Escape') onClose(); }}>
+  <!-- Inner panel. backdropClose tracks mousedown+mouseup on the
+       backdrop, so we don't need to stop click propagation here. -->
+  <div class="bg-white dark:bg-warm-800 rounded-lg shadow-xl w-[640px] max-h-[90vh] flex flex-col" role="document">
     <div class="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-warm-700">
       <h2 class="text-sm font-semibold">
         {#if step === 'pick'}Choose item type{:else}Name your {chosenType ? typeLabel(chosenType).toLowerCase() : 'item'}{/if}

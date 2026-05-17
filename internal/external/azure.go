@@ -253,3 +253,84 @@ func (a *AzureKeyVaultClient) listSecretsPage(ctx context.Context, reqURL string
 
 	return names, listResp.NextLink, nil
 }
+
+// ── Provider ──────────────────────────────────────────────────────────
+// AzureProvider exposes Azure Key Vault through the Provider interface.
+// The OAuth2 client-credentials token is cached inside the AzureKeyVault
+// Client, which itself lives in Service-managed cache (one per vault URL).
+
+type AzureProvider struct {
+	Config *Azure
+	Deps   Deps
+}
+
+func (p *AzureProvider) Kind() string { return "azure" }
+
+func (p *AzureProvider) Capabilities() Capabilities {
+	return Capabilities{CanRead: true, CanList: true}
+}
+
+func (p *AzureProvider) Validate() error {
+	if p.Config == nil {
+		return fmt.Errorf("azure: config is required")
+	}
+	if strings.TrimSpace(p.Config.VaultURL) == "" {
+		return fmt.Errorf("azure: vault_url is required")
+	}
+	if strings.TrimSpace(p.Config.TenantID) == "" || strings.TrimSpace(p.Config.ClientID) == "" || strings.TrimSpace(p.Config.ClientSecret) == "" {
+		return fmt.Errorf("azure: tenant_id, client_id and client_secret are required")
+	}
+	return nil
+}
+
+func (p *AzureProvider) Fetch(ctx context.Context, path string) ([]byte, error) {
+	client := p.Deps.AzureClient(p.Config)
+	data, err := client.ReadSecret(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("reading Azure secret %q: %w", path, err)
+	}
+	return json.Marshal(data)
+}
+
+func (p *AzureProvider) List(ctx context.Context, _ string) ([]string, error) {
+	client := p.Deps.AzureClient(p.Config)
+	return client.ListSecrets(ctx)
+}
+
+func (p *AzureProvider) Test(ctx context.Context) TestResult {
+	paths, err := p.List(ctx, "")
+	if err != nil {
+		return TestResult{OK: false, Message: err.Error()}
+	}
+	msg := fmt.Sprintf("Reachable. %d secret(s) discovered.", len(paths))
+	if len(paths) == 0 {
+		msg = "Reachable. No secrets discovered."
+	}
+	return TestResult{OK: true, Message: msg, Sample: capSample(paths, 10)}
+}
+
+func (p *AzureProvider) Read(ctx context.Context, path string) (*Entry, error) {
+	client := p.Deps.AzureClient(p.Config)
+	data, err := client.ReadSecret(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := json.Marshal(data)
+	return &Entry{Data: data, Raw: raw, ContentType: "application/json"}, nil
+}
+
+func (p *AzureProvider) Write(ctx context.Context, path string, data map[string]any) error {
+	return fmt.Errorf("azure: %w", ErrNotSupported)
+}
+
+func (p *AzureProvider) Delete(ctx context.Context, path string) error {
+	return fmt.Errorf("azure: %w", ErrNotSupported)
+}
+
+func (p *AzureProvider) ListVersions(ctx context.Context, path string) ([]Version, error) {
+	return nil, fmt.Errorf("azure: %w", ErrNotSupported)
+}
+
+func (p *AzureProvider) ReadVersion(ctx context.Context, path, version string) (*Entry, error) {
+	return nil, fmt.Errorf("azure: %w", ErrNotSupported)
+}

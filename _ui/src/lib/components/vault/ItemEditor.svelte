@@ -11,6 +11,7 @@
   import type { VaultItemField, VaultItemPayload } from '@/lib/vault/crypto';
   import { renderMarkdown } from '@/lib/vault/markdown';
   import { addToast } from '@/lib/store/toast.svelte';
+  import { backdropClose } from '@/lib/actions/backdropClose';
   import TOTPDisplay from './TOTPDisplay.svelte';
   import PasswordGenerator from './PasswordGenerator.svelte';
 
@@ -1159,10 +1160,8 @@
 
 <!-- Password generator overlay (edit mode only) -->
 {#if generatorFor}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onclick={() => (generatorFor = null)} role="dialog" tabindex="-1" onkeydown={(e) => { if (e.key === 'Escape') generatorFor = null; }} aria-modal="true">
-    <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-    <div class="bg-white dark:bg-warm-800 rounded-lg shadow-xl p-4 w-96" onclick={(e) => e.stopPropagation()}>
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" use:backdropClose={() => (generatorFor = null)} role="dialog" tabindex="-1" onkeydown={(e) => { if (e.key === 'Escape') generatorFor = null; }} aria-modal="true">
+    <div class="bg-white dark:bg-warm-800 rounded-lg shadow-xl p-4 w-96">
       <div class="flex items-center justify-between mb-3">
         <h3 class="text-sm font-semibold">Password generator</h3>
         <button onclick={() => (generatorFor = null)} class="text-slate-400 hover:text-slate-600 cursor-pointer" aria-label="Close">

@@ -1,6 +1,7 @@
 package external
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -287,10 +288,16 @@ type kubeAPIResponse struct {
 }
 
 // doRequest performs an authenticated HTTP request to the Kubernetes API.
-func (kc *KubeClient) doRequest(ctx context.Context, method, path string) ([]byte, error) {
+// Pass a non-nil reqBody and contentType for write methods (PUT/POST/PATCH);
+// reads / deletes can leave both empty.
+func (kc *KubeClient) doRequest(ctx context.Context, method, path string, reqBody []byte, contentType string) ([]byte, error) {
 	url := kc.host + path
 
-	req, err := http.NewRequestWithContext(ctx, method, url, nil)
+	var bodyReader io.Reader
+	if reqBody != nil {
+		bodyReader = bytes.NewReader(reqBody)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
@@ -300,6 +307,9 @@ func (kc *KubeClient) doRequest(ctx context.Context, method, path string) ([]byt
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("Accept", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
 
 	resp, err := kc.httpClient.Do(req)
 	if err != nil {
@@ -312,7 +322,8 @@ func (kc *KubeClient) doRequest(ctx context.Context, method, path string) ([]byt
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	// 200 OK (GET, PUT), 201 Created (POST), 204 No Content (DELETE).
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusNoContent {
 		var apiResp kubeAPIResponse
 		if json.Unmarshal(body, &apiResp) == nil && apiResp.Message != "" {
 			return nil, fmt.Errorf("kubernetes API error (HTTP %d): %s", resp.StatusCode, apiResp.Message)
@@ -354,7 +365,7 @@ type kubeNamespaceList struct {
 // ReadSecret reads a Kubernetes Secret and returns its data as a map with base64-decoded values.
 func (kc *KubeClient) ReadSecret(ctx context.Context, namespace, name string) (map[string]any, error) {
 	path := fmt.Sprintf("/api/v1/namespaces/%s/secrets/%s", namespace, name)
-	body, err := kc.doRequest(ctx, http.MethodGet, path)
+	body, err := kc.doRequest(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("reading secret %s/%s: %w", namespace, name, err)
 	}
@@ -381,7 +392,7 @@ func (kc *KubeClient) ReadSecret(ctx context.Context, namespace, name string) (m
 // ReadConfigMap reads a Kubernetes ConfigMap and returns its data.
 func (kc *KubeClient) ReadConfigMap(ctx context.Context, namespace, name string) (map[string]any, error) {
 	path := fmt.Sprintf("/api/v1/namespaces/%s/configmaps/%s", namespace, name)
-	body, err := kc.doRequest(ctx, http.MethodGet, path)
+	body, err := kc.doRequest(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("reading configmap %s/%s: %w", namespace, name, err)
 	}
@@ -438,7 +449,7 @@ func (kc *KubeClient) ListResources(ctx context.Context, prefix string) ([]strin
 }
 
 func (kc *KubeClient) listNamespaces(ctx context.Context) ([]string, error) {
-	body, err := kc.doRequest(ctx, http.MethodGet, "/api/v1/namespaces")
+	body, err := kc.doRequest(ctx, http.MethodGet, "/api/v1/namespaces", nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("listing namespaces: %w", err)
 	}
@@ -457,7 +468,7 @@ func (kc *KubeClient) listNamespaces(ctx context.Context) ([]string, error) {
 
 func (kc *KubeClient) listSecrets(ctx context.Context, namespace string) ([]string, error) {
 	path := fmt.Sprintf("/api/v1/namespaces/%s/secrets", namespace)
-	body, err := kc.doRequest(ctx, http.MethodGet, path)
+	body, err := kc.doRequest(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("listing secrets in %s: %w", namespace, err)
 	}
@@ -476,7 +487,7 @@ func (kc *KubeClient) listSecrets(ctx context.Context, namespace string) ([]stri
 
 func (kc *KubeClient) listConfigMaps(ctx context.Context, namespace string) ([]string, error) {
 	path := fmt.Sprintf("/api/v1/namespaces/%s/configmaps", namespace)
-	body, err := kc.doRequest(ctx, http.MethodGet, path)
+	body, err := kc.doRequest(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("listing configmaps in %s: %w", namespace, err)
 	}
@@ -491,4 +502,277 @@ func (kc *KubeClient) listConfigMaps(ctx context.Context, namespace string) ([]s
 		names = append(names, item.Metadata.Name)
 	}
 	return names, nil
+}
+
+// WriteSecret creates or updates a Kubernetes Secret. data values are
+// taken as cleartext and base64-encoded for the wire (Kubernetes
+// Secret.data is always base64). We use PUT with apiVersion/kind/
+// metadata embedded so the request works whether or not the secret
+// already exists — kubectl-style server-side create-or-replace.
+//
+// Note: this is a *replace* (the Secret object's data map is set to
+// exactly the supplied values; keys not present in `data` disappear).
+// Browsers that want merge semantics should read-modify-write.
+func (kc *KubeClient) WriteSecret(ctx context.Context, namespace, name string, data map[string]string) error {
+	encoded := make(map[string]string, len(data))
+	for k, v := range data {
+		encoded[k] = base64.StdEncoding.EncodeToString([]byte(v))
+	}
+	body, err := json.Marshal(map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Secret",
+		"metadata":   map[string]string{"name": name, "namespace": namespace},
+		"type":       "Opaque",
+		"data":       encoded,
+	})
+	if err != nil {
+		return fmt.Errorf("marshaling secret: %w", err)
+	}
+	path := fmt.Sprintf("/api/v1/namespaces/%s/secrets/%s", namespace, name)
+	// Try PUT first (update). On 404 fall back to POST (create).
+	_, err = kc.doRequest(ctx, http.MethodPut, path, body, "application/json")
+	if err != nil && strings.Contains(err.Error(), "HTTP 404") {
+		createPath := fmt.Sprintf("/api/v1/namespaces/%s/secrets", namespace)
+		_, err = kc.doRequest(ctx, http.MethodPost, createPath, body, "application/json")
+	}
+	return err
+}
+
+// WriteConfigMap creates or updates a Kubernetes ConfigMap with
+// cleartext values (ConfigMap.data is plain strings, no encoding).
+// Replace semantics, same as WriteSecret.
+func (kc *KubeClient) WriteConfigMap(ctx context.Context, namespace, name string, data map[string]string) error {
+	body, err := json.Marshal(map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]string{"name": name, "namespace": namespace},
+		"data":       data,
+	})
+	if err != nil {
+		return fmt.Errorf("marshaling configmap: %w", err)
+	}
+	path := fmt.Sprintf("/api/v1/namespaces/%s/configmaps/%s", namespace, name)
+	_, err = kc.doRequest(ctx, http.MethodPut, path, body, "application/json")
+	if err != nil && strings.Contains(err.Error(), "HTTP 404") {
+		createPath := fmt.Sprintf("/api/v1/namespaces/%s/configmaps", namespace)
+		_, err = kc.doRequest(ctx, http.MethodPost, createPath, body, "application/json")
+	}
+	return err
+}
+
+// DeleteSecret removes a Kubernetes Secret. 404 is squashed (idempotent).
+func (kc *KubeClient) DeleteSecret(ctx context.Context, namespace, name string) error {
+	path := fmt.Sprintf("/api/v1/namespaces/%s/secrets/%s", namespace, name)
+	_, err := kc.doRequest(ctx, http.MethodDelete, path, nil, "")
+	if err != nil && strings.Contains(err.Error(), "HTTP 404") {
+		return nil
+	}
+	return err
+}
+
+// DeleteConfigMap removes a Kubernetes ConfigMap. 404 is squashed.
+func (kc *KubeClient) DeleteConfigMap(ctx context.Context, namespace, name string) error {
+	path := fmt.Sprintf("/api/v1/namespaces/%s/configmaps/%s", namespace, name)
+	_, err := kc.doRequest(ctx, http.MethodDelete, path, nil, "")
+	if err != nil && strings.Contains(err.Error(), "HTTP 404") {
+		return nil
+	}
+	return err
+}
+
+// ── Provider ──────────────────────────────────────────────────────────
+// KubernetesProvider implements Provider for Kubernetes Secrets and
+// ConfigMaps. The underlying KubeClient is cached per (kubeconfig
+// contents | path | in-cluster) by Service so repeated lookups don't
+// re-resolve TLS material.
+
+type KubernetesProvider struct {
+	Config *Kubernetes
+	Deps   Deps
+}
+
+func (p *KubernetesProvider) Kind() string { return "kubernetes" }
+
+func (p *KubernetesProvider) Capabilities() Capabilities {
+	// Kubernetes supports read/list/write/delete on Secret and
+	// ConfigMap (which are the only two resource types we expose).
+	// No version concept — when secret/configmap is updated it gets a
+	// new resourceVersion but that's a CAS token, not a history.
+	return Capabilities{CanRead: true, CanList: true, CanWrite: true, CanDelete: true}
+}
+
+// Validate: no fields are strictly required. An empty struct means
+// "in-cluster service account" which is a valid configuration on its
+// own. We only check that, when content/path is provided, it's non-
+// blank — empty strings smell like UI bugs (user toggled a mode but
+// never typed anything).
+func (p *KubernetesProvider) Validate() error {
+	if p.Config == nil {
+		return fmt.Errorf("kubernetes: config is required")
+	}
+	if p.Config.KubeconfigContent != "" && strings.TrimSpace(p.Config.KubeconfigContent) == "" {
+		return fmt.Errorf("kubernetes: kubeconfig_content cannot be whitespace-only")
+	}
+	if p.Config.Kubeconfig != "" && strings.TrimSpace(p.Config.Kubeconfig) == "" {
+		return fmt.Errorf("kubernetes: kubeconfig path cannot be whitespace-only")
+	}
+	return nil
+}
+
+func (p *KubernetesProvider) Fetch(ctx context.Context, path string) ([]byte, error) {
+	client, err := p.Deps.KubeClient(p.Config)
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes client: %w", err)
+	}
+
+	parts := strings.SplitN(path, "/", 3)
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid kubernetes path %q: expected namespace/type/name (e.g., default/secret/my-secret)", path)
+	}
+	namespace, resourceType, name := parts[0], parts[1], parts[2]
+
+	var data map[string]any
+	switch resourceType {
+	case "secret":
+		data, err = client.ReadSecret(ctx, namespace, name)
+	case "configmap":
+		data, err = client.ReadConfigMap(ctx, namespace, name)
+	default:
+		return nil, fmt.Errorf("unsupported kubernetes resource type %q: expected secret or configmap", resourceType)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("serializing kubernetes data: %w", err)
+	}
+	return jsonBytes, nil
+}
+
+func (p *KubernetesProvider) List(ctx context.Context, prefix string) ([]string, error) {
+	client, err := p.Deps.KubeClient(p.Config)
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes client: %w", err)
+	}
+	return client.ListResources(ctx, prefix)
+}
+
+func (p *KubernetesProvider) Test(ctx context.Context) TestResult {
+	paths, err := p.List(ctx, "")
+	if err != nil {
+		return TestResult{OK: false, Message: err.Error()}
+	}
+	msg := fmt.Sprintf("Reachable. %d resource(s) discovered.", len(paths))
+	if len(paths) == 0 {
+		msg = "Reachable. No resources discovered (check RBAC scope on the service account)."
+	}
+	return TestResult{OK: true, Message: msg, Sample: capSample(paths, 10)}
+}
+
+// parseKubePath splits the SPA-facing "namespace/type/name" path.
+// We tolerate extra trailing slashes but reject anything that isn't
+// the three-segment shape — that protects the client methods from
+// being called with bogus inputs.
+func (p *KubernetesProvider) parseKubePath(path string) (namespace, resourceType, name string, err error) {
+	parts := strings.SplitN(strings.Trim(path, "/"), "/", 3)
+	if len(parts) != 3 {
+		return "", "", "", fmt.Errorf("invalid kubernetes path %q: expected namespace/type/name (e.g., default/secret/my-secret)", path)
+	}
+	return parts[0], parts[1], parts[2], nil
+}
+
+// Read mirrors Fetch but returns a structured Entry (with the same
+// underlying data) so the browser can render keys and values without
+// re-parsing JSON.
+func (p *KubernetesProvider) Read(ctx context.Context, path string) (*Entry, error) {
+	client, err := p.Deps.KubeClient(p.Config)
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes client: %w", err)
+	}
+	namespace, kind, name, err := p.parseKubePath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var data map[string]any
+	switch kind {
+	case "secret":
+		data, err = client.ReadSecret(ctx, namespace, name)
+	case "configmap":
+		data, err = client.ReadConfigMap(ctx, namespace, name)
+	default:
+		return nil, fmt.Errorf("unsupported kubernetes resource type %q: expected secret or configmap", kind)
+	}
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := json.Marshal(data)
+	return &Entry{Data: data, Raw: raw, ContentType: "application/json"}, nil
+}
+
+// Write replaces the named Secret/ConfigMap. The map's values are
+// coerced to strings before being sent because both resource types
+// store strings — numbers / bools / nested objects don't have a
+// representation in Kubernetes Secret.data or ConfigMap.data and
+// would silently degrade if we passed them through as JSON.
+func (p *KubernetesProvider) Write(ctx context.Context, path string, data map[string]any) error {
+	client, err := p.Deps.KubeClient(p.Config)
+	if err != nil {
+		return fmt.Errorf("kubernetes client: %w", err)
+	}
+	namespace, kind, name, err := p.parseKubePath(path)
+	if err != nil {
+		return err
+	}
+	flat := make(map[string]string, len(data))
+	for k, v := range data {
+		switch t := v.(type) {
+		case string:
+			flat[k] = t
+		default:
+			b, _ := json.Marshal(t)
+			flat[k] = string(b)
+		}
+	}
+	switch kind {
+	case "secret":
+		return client.WriteSecret(ctx, namespace, name, flat)
+	case "configmap":
+		return client.WriteConfigMap(ctx, namespace, name, flat)
+	default:
+		return fmt.Errorf("unsupported kubernetes resource type %q", kind)
+	}
+}
+
+// Delete removes the named Secret/ConfigMap. Idempotent.
+func (p *KubernetesProvider) Delete(ctx context.Context, path string) error {
+	client, err := p.Deps.KubeClient(p.Config)
+	if err != nil {
+		return fmt.Errorf("kubernetes client: %w", err)
+	}
+	namespace, kind, name, err := p.parseKubePath(path)
+	if err != nil {
+		return err
+	}
+	switch kind {
+	case "secret":
+		return client.DeleteSecret(ctx, namespace, name)
+	case "configmap":
+		return client.DeleteConfigMap(ctx, namespace, name)
+	default:
+		return fmt.Errorf("unsupported kubernetes resource type %q", kind)
+	}
+}
+
+// ListVersions is not supported — Kubernetes Secrets/ConfigMaps don't
+// expose a version history. Returning ErrNotSupported lets the SPA
+// hide the version selector entirely.
+func (p *KubernetesProvider) ListVersions(ctx context.Context, path string) ([]Version, error) {
+	return nil, fmt.Errorf("kubernetes: %w", ErrNotSupported)
+}
+
+func (p *KubernetesProvider) ReadVersion(ctx context.Context, path, version string) (*Entry, error) {
+	return nil, fmt.Errorf("kubernetes: %w", ErrNotSupported)
 }

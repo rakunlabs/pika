@@ -3,20 +3,46 @@ package external
 import "github.com/rakunlabs/ok"
 
 type External struct {
-	Http       *ok.Config  `json:"http,omitempty"`
-	Vault      *Vault      `json:"vault,omitempty"`
-	Kubernetes *Kubernetes `json:"kubernetes,omitempty"`
-	Consul     *Consul     `json:"consul,omitempty"`
-	Etcd       *Etcd       `json:"etcd,omitempty"`
-	AWS        *AWS        `json:"aws,omitempty"`
-	GCP        *GCP        `json:"gcp,omitempty"`
-	Azure      *Azure      `json:"azure,omitempty"`
+	Http         *ok.Config    `json:"http,omitempty"`
+	Vault        *Vault        `json:"vault,omitempty"`
+	Kubernetes   *Kubernetes   `json:"kubernetes,omitempty"`
+	Consul       *Consul       `json:"consul,omitempty"`
+	Etcd         *Etcd         `json:"etcd,omitempty"`
+	AWS          *AWS          `json:"aws,omitempty"`
+	GCP          *GCP          `json:"gcp,omitempty"`
+	GCPParameter *GCPParameter `json:"gcp_parameter,omitempty"`
+	Azure        *Azure        `json:"azure,omitempty"`
 }
 
 // GCP configures a GCP Secret Manager external resource.
 type GCP struct {
 	// ServiceAccountJSON is the full JSON content of a service account key file.
 	ServiceAccountJSON string `json:"service_account_json"`
+}
+
+// GCPParameter configures a GCP Parameter Manager external resource.
+//
+// Unlike Secret Manager, Parameter Manager is location-scoped: every
+// parameter lives under projects/{p}/locations/{loc}/parameters/{name}.
+// "global" is the default location and what most operators want when
+// they don't care about regional isolation. Pika derives the project
+// ID from the service-account JSON (same shape as GCP Secret Manager).
+type GCPParameter struct {
+	// ServiceAccountJSON is the full JSON content of a service account
+	// key file with parametermanager.parameterAccessor (read) and
+	// parametermanager.parameterVersionRenderer (render) permissions.
+	ServiceAccountJSON string `json:"service_account_json"`
+	// Location is the GCP location to query (e.g. "global", "us-central1").
+	// Defaults to "global" when empty.
+	Location string `json:"location,omitempty"`
+}
+
+// GetLocation returns the configured location, defaulting to "global".
+func (g *GCPParameter) GetLocation() string {
+	if g.Location != "" {
+		return g.Location
+	}
+	return "global"
 }
 
 // Kubernetes configures a Kubernetes API external resource.

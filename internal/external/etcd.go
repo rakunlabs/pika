@@ -147,6 +147,40 @@ func (e *EtcdClient) ListSecrets(ctx context.Context, prefix string) ([]string, 
 	return result, nil
 }
 
+// WriteValue puts a single value at the given etcd key. The HTTP API
+// expects a base64-encoded key/value pair; we wrap the supplied bytes
+// as the value verbatim so callers can pass either a primitive string
+// or a marshalled JSON object.
+func (e *EtcdClient) WriteValue(ctx context.Context, key string, value []byte) error {
+	body, err := json.Marshal(map[string]string{
+		"key":   base64.StdEncoding.EncodeToString([]byte(key)),
+		"value": base64.StdEncoding.EncodeToString(value),
+	})
+	if err != nil {
+		return fmt.Errorf("etcd: marshaling put request: %w", err)
+	}
+	if _, err := e.doPost(ctx, "/v3/kv/put", body); err != nil {
+		return err
+	}
+	return nil
+}
+
+// DeleteKey removes a single etcd key. Idempotent at the etcd layer
+// (the response carries a "deleted" count we don't surface — caller
+// gets nil error either way).
+func (e *EtcdClient) DeleteKey(ctx context.Context, key string) error {
+	body, err := json.Marshal(map[string]string{
+		"key": base64.StdEncoding.EncodeToString([]byte(key)),
+	})
+	if err != nil {
+		return fmt.Errorf("etcd: marshaling delete request: %w", err)
+	}
+	if _, err := e.doPost(ctx, "/v3/kv/deleterange", body); err != nil {
+		return err
+	}
+	return nil
+}
+
 // doPost performs a POST request to the etcd gRPC-gateway.
 func (e *EtcdClient) doPost(ctx context.Context, path string, body []byte) ([]byte, error) {
 	reqURL := e.address + path
@@ -192,4 +226,99 @@ func prefixEnd(prefix string) []byte {
 	}
 	// All 0xFF — return "\x00" which means no upper bound
 	return []byte{0}
+}
+
+// ── Provider ──────────────────────────────────────────────────────────
+
+// EtcdProvider exposes etcd KV through the unified Provider interface.
+type EtcdProvider struct {
+	Config *Etcd
+}
+
+func (p *EtcdProvider) Kind() string { return "etcd" }
+
+func (p *EtcdProvider) Capabilities() Capabilities {
+	return Capabilities{CanRead: true, CanList: true, CanWrite: true, CanDelete: true}
+}
+
+func (p *EtcdProvider) Validate() error {
+	if p.Config == nil {
+		return fmt.Errorf("etcd: config is required")
+	}
+	if strings.TrimSpace(p.Config.Address) == "" {
+		return fmt.Errorf("etcd: address is required")
+	}
+	return nil
+}
+
+func (p *EtcdProvider) Fetch(ctx context.Context, path string) ([]byte, error) {
+	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password)
+	data, err := client.ReadSecret(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("reading etcd key at %q: %w", path, err)
+	}
+	return json.Marshal(data)
+}
+
+func (p *EtcdProvider) List(ctx context.Context, prefix string) ([]string, error) {
+	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password)
+	return client.ListSecrets(ctx, prefix)
+}
+
+func (p *EtcdProvider) Test(ctx context.Context) TestResult {
+	paths, err := p.List(ctx, "")
+	if err != nil {
+		return TestResult{OK: false, Message: err.Error()}
+	}
+	msg := fmt.Sprintf("Reachable. %d key(s) discovered.", len(paths))
+	if len(paths) == 0 {
+		msg = "Reachable. No keys discovered."
+	}
+	return TestResult{OK: true, Message: msg, Sample: capSample(paths, 10)}
+}
+
+// Read returns the parsed value at key. Mirrors ConsulProvider.Read.
+func (p *EtcdProvider) Read(ctx context.Context, path string) (*Entry, error) {
+	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password)
+	data, err := client.ReadSecret(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := json.Marshal(data)
+	return &Entry{Data: data, Raw: raw, ContentType: "application/json"}, nil
+}
+
+// Write — same value convention as ConsulProvider.Write: a single
+// "value" key is stored verbatim, anything richer is JSON-encoded.
+func (p *EtcdProvider) Write(ctx context.Context, path string, data map[string]any) error {
+	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password)
+	var payload []byte
+	if v, ok := data["value"]; ok && len(data) == 1 {
+		if s, ok := v.(string); ok {
+			payload = []byte(s)
+		} else {
+			b, _ := json.Marshal(v)
+			payload = b
+		}
+	} else {
+		b, err := json.Marshal(data)
+		if err != nil {
+			return fmt.Errorf("etcd: marshal value: %w", err)
+		}
+		payload = b
+	}
+	return client.WriteValue(ctx, path, payload)
+}
+
+func (p *EtcdProvider) Delete(ctx context.Context, path string) error {
+	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password)
+	return client.DeleteKey(ctx, path)
+}
+
+func (p *EtcdProvider) ListVersions(ctx context.Context, path string) ([]Version, error) {
+	return nil, fmt.Errorf("etcd: %w", ErrNotSupported)
+}
+
+func (p *EtcdProvider) ReadVersion(ctx context.Context, path, version string) (*Entry, error) {
+	return nil, fmt.Errorf("etcd: %w", ErrNotSupported)
 }

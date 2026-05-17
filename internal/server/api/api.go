@@ -13,6 +13,7 @@ import (
 
 	"github.com/rakunlabs/ada"
 	"github.com/rakunlabs/pika/internal/config"
+	"github.com/rakunlabs/pika/internal/external"
 	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/rawfs"
 	"github.com/rakunlabs/pika/internal/rawfs/localfs"
@@ -265,9 +266,22 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.POST("/api/v1/raw-copy", m.Wrap(api.withPerm(service.CapRawWrite, api.rawHandler.copyFile)))
 	m.POST("/api/v1/raw-move", m.Wrap(api.withPerm(service.CapRawWrite, api.rawHandler.moveFile)))
 
-	// External resource browsing — listing external paths exposes the shape
-	// of configured secret backends, so it's gated on settings management.
-	m.GET("/api/v1/external/*/paths", m.Wrap(api.withPerm(service.CapSettingsManage, api.listExternalPaths)))
+	// External resource browsing — every operation here exposes the
+	// shape of configured secret backends (or the secrets themselves
+	// when reading), so the whole namespace is gated on settings
+	// management. Resource name uses ada's {name} param syntax
+	// rather than `*` because middle-segment `*` wildcards in this
+	// router don't surface their captured segment via PathValue —
+	// the value would silently come back empty. Named params do.
+	m.GET("/api/v1/external/resources", m.Wrap(api.withPerm(service.CapSettingsManage, api.listExternalResources)))
+	m.GET("/api/v1/external/{name}/paths", m.Wrap(api.withPerm(service.CapSettingsManage, api.listExternalPaths)))
+	m.POST("/api/v1/external/{name}/test", m.Wrap(api.withPerm(service.CapSettingsManage, api.testExternalResource)))
+	m.POST("/api/v1/external/{name}/read", m.Wrap(api.withPerm(service.CapSettingsManage, api.readExternalEntry)))
+	m.POST("/api/v1/external/{name}/write", m.Wrap(api.withPerm(service.CapSettingsManage, api.writeExternalEntry)))
+	m.POST("/api/v1/external/{name}/delete", m.Wrap(api.withPerm(service.CapSettingsManage, api.deleteExternalEntry)))
+	m.POST("/api/v1/external/{name}/versions", m.Wrap(api.withPerm(service.CapSettingsManage, api.listExternalVersions)))
+	m.POST("/api/v1/external/{name}/version", m.Wrap(api.withPerm(service.CapSettingsManage, api.readExternalVersion)))
+	m.GET("/api/v1/external/{name}/search", m.Wrap(api.withPerm(service.CapSettingsManage, api.searchExternal)))
 
 	// User-sync endpoints (LDAP and future drivers). The endpoints
 	// inspect/run the scheduler that's owned by this api struct.
@@ -1077,7 +1091,7 @@ func SetWebDAVServer(rh *RawHandler, webdavSrv *webdavserve.Server, cancel conte
 }
 
 func (a *api) listExternalPaths(c *ada.Context) error {
-	resourceName := c.Request.PathValue("*")
+	resourceName := c.Request.PathValue("name")
 	prefix := c.Request.URL.Query().Get("prefix")
 
 	paths, err := a.svc.ListExternalPaths(c.Request.Context(), resourceName, prefix)
@@ -1086,6 +1100,171 @@ func (a *api) listExternalPaths(c *ada.Context) error {
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(paths)
+}
+
+// searchExternal walks the named resource looking for paths/values
+// that match the `q` query string. Query params:
+//
+//	q     — search term (required, non-empty)
+//	mode  — "name" (default) or "all" (also greps values)
+//	limit — max hits to return (default 200, hard cap inside service)
+//
+// Returns a JSON array of {path, type, snippet} objects so the SPA
+// can render mixed name/content hits in one list. The handler maps
+// query strings rather than a JSON body because search responses are
+// safe to cache by an intermediary on the q+mode combination, and a
+// GET makes that cacheability explicit (whereas POST always says
+// "uncachable" to proxies). The query never carries credentials —
+// those live in the resource configuration on the server.
+func (a *api) searchExternal(c *ada.Context) error {
+	resourceName := c.Request.PathValue("name")
+	q := c.Request.URL.Query().Get("q")
+	if strings.TrimSpace(q) == "" {
+		// Empty query is not an error — just nothing to return.
+		// Matches the SPA's behaviour where clearing the search box
+		// resets the result list without throwing.
+		return c.SetStatus(http.StatusOK).SendJSON([]service.ExternalSearchHit{})
+	}
+	mode := service.ExternalSearchMode(c.Request.URL.Query().Get("mode"))
+	if mode != service.ExternalSearchModeAll {
+		mode = service.ExternalSearchModeName
+	}
+	limit := 0
+	if raw := c.Request.URL.Query().Get("limit"); raw != "" {
+		// fmt.Sscanf swallows errors silently; if parsing fails
+		// limit stays 0 and the service applies its default.
+		fmt.Sscanf(raw, "%d", &limit)
+	}
+
+	hits, err := a.svc.SearchExternal(c.Request.Context(), resourceName, q, mode, limit)
+	if err != nil {
+		return err
+	}
+	if hits == nil {
+		// Always emit `[]` so SPA destructuring doesn't have to
+		// guard against null. Same convention as the rest of the
+		// external endpoints.
+		hits = []service.ExternalSearchHit{}
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(hits)
+}
+
+// testExternalResource runs a live connectivity check against the named
+// external resource. The SPA's External page calls this from its "Test"
+// action — the response body always has shape {ok, message, sample} so the
+// UI can render the outcome uniformly regardless of backend type.
+func (a *api) testExternalResource(c *ada.Context) error {
+	resourceName := c.Request.PathValue("name")
+
+	result, err := a.svc.TestExternal(c.Request.Context(), resourceName)
+	if err != nil {
+		return err
+	}
+
+	return c.SetStatus(http.StatusOK).SendJSON(result)
+}
+
+// listExternalResources powers the left pane of the External browser
+// page. Returns names, kinds and capability flags for every
+// configured resource. Does NOT touch the network.
+func (a *api) listExternalResources(c *ada.Context) error {
+	resources, err := a.svc.ListExternalResources(c.Request.Context())
+	if err != nil {
+		return err
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(resources)
+}
+
+// externalEntryReq is the shared request body for read/write/delete/
+// versions/version endpoints. Path-bearing operations all share this
+// shape so the SPA can use one helper. We use POST + JSON body
+// (rather than GET + query string) for two reasons: many backend
+// paths embed "/" (e.g. Kubernetes "namespace/secret/name", Vault
+// "myapp/db") and URL-encoding them through path segments fights the
+// router; and POST is uncached by every layer that might sit in
+// front, so secret payloads don't end up in proxy logs.
+type externalEntryReq struct {
+	Path    string         `json:"path"`
+	Data    map[string]any `json:"data,omitempty"`
+	Version string         `json:"version,omitempty"`
+}
+
+// translateNotSupported turns an external.ErrNotSupported into a 405
+// so the SPA can branch on it. Anything else is passed through to the
+// default error handler.
+func translateNotSupported(err error) error {
+	if errors.Is(err, external.ErrNotSupported) {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+	return err
+}
+
+func (a *api) readExternalEntry(c *ada.Context) error {
+	resourceName := c.Request.PathValue("name")
+	var req externalEntryReq
+	if err := c.Bind(&req); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+	entry, err := a.svc.ReadExternal(c.Request.Context(), resourceName, req.Path)
+	if err != nil {
+		return translateNotSupported(err)
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(entry)
+}
+
+func (a *api) writeExternalEntry(c *ada.Context) error {
+	resourceName := c.Request.PathValue("name")
+	var req externalEntryReq
+	if err := c.Bind(&req); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+	if err := a.svc.WriteExternal(c.Request.Context(), resourceName, req.Path, req.Data); err != nil {
+		return translateNotSupported(err)
+	}
+	return c.SendNoContent()
+}
+
+func (a *api) deleteExternalEntry(c *ada.Context) error {
+	resourceName := c.Request.PathValue("name")
+	var req externalEntryReq
+	if err := c.Bind(&req); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+	if err := a.svc.DeleteExternal(c.Request.Context(), resourceName, req.Path); err != nil {
+		return translateNotSupported(err)
+	}
+	return c.SendNoContent()
+}
+
+func (a *api) listExternalVersions(c *ada.Context) error {
+	resourceName := c.Request.PathValue("name")
+	var req externalEntryReq
+	if err := c.Bind(&req); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+	versions, err := a.svc.ListExternalVersions(c.Request.Context(), resourceName, req.Path)
+	if err != nil {
+		return translateNotSupported(err)
+	}
+	if versions == nil {
+		// Always emit [] over null so the SPA can iterate without
+		// a null-guard at every call site.
+		versions = []external.Version{}
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(versions)
+}
+
+func (a *api) readExternalVersion(c *ada.Context) error {
+	resourceName := c.Request.PathValue("name")
+	var req externalEntryReq
+	if err := c.Bind(&req); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+	entry, err := a.svc.ReadExternalVersion(c.Request.Context(), resourceName, req.Path, req.Version)
+	if err != nil {
+		return translateNotSupported(err)
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(entry)
 }
 
 func (a *api) postFolder(c *ada.Context) error {

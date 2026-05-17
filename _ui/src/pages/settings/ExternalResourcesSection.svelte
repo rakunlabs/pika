@@ -1,14 +1,17 @@
 <script lang="ts">
  import { configStore } from "@/lib/store/config.svelte";
+ import { keymgrStore } from "@/lib/store/keymgr.svelte";
  import { addToast } from "@/lib/store/toast.svelte";
  import { onMount } from "svelte";
- import { Plus, Trash2, Globe, X } from "lucide-svelte";
+ import { Plus, Trash2, Globe, X, Lock, AlertCircle, Pencil, Play, Loader2 } from "lucide-svelte";
  import type { ExternalResource } from "@/lib/types/config";
+ import ExternalResourceEditor from "@/lib/components/external/ExternalResourceEditor.svelte";
+ import { backdropClose } from "@/lib/actions/backdropClose";
 
  // ── External resource state ──
  let showAddExternal = $state(false);
  let newExtName = $state('');
- let newExtType = $state<'http' | 'vault' | 'kubernetes' | 'consul' | 'etcd' | 'aws' | 'gcp' | 'azure'>('http');
+ let newExtType = $state<'http' | 'vault' | 'kubernetes' | 'consul' | 'etcd' | 'aws' | 'gcp' | 'gcp-parameter' | 'azure'>('http');
  let newExtHttpUrl = $state('');
  // Header pairs for the HTTP external. Stored as a flat list because a
  // single header name (e.g., "Accept") can legitimately carry multiple
@@ -58,6 +61,9 @@
  let newExtAwsService = $state<'secretsmanager' | 'ssm'>('secretsmanager');
  // GCP fields
  let newExtGcpServiceAccountJson = $state('');
+ // GCP Parameter Manager fields
+ let newExtGcpParamServiceAccountJson = $state('');
+ let newExtGcpParamLocation = $state('global');
  // Azure fields
  let newExtAzureVaultUrl = $state('');
  let newExtAzureTenantId = $state('');
@@ -69,8 +75,22 @@
  settings?.external ? Object.entries(settings.external) : []
  );
 
+ // Encryption-key state mirrors the banner on the dedicated External
+ // page. Saving a resource that ships any credential field (Vault
+ // SecretID, AWS SecretKey, GCP SA JSON, Azure ClientSecret, K8s inline
+ // kubeconfig) goes through the seal layer; that layer fails closed
+ // when the key isn't initialized or the server is locked. The user
+ // needs to know that before filling out a 60-line form.
+ const keyStatus = $derived(keymgrStore.status);
+ const encryptionReady = $derived(
+ keyStatus !== null && keyStatus.initialized && keyStatus.unlocked
+ );
+
  onMount(() => {
  configStore.loadSettings();
+ // Same rationale as the External page: ensure the encryption-key
+ // banner is in sync when the user lands on the section.
+ keymgrStore.refreshStatus();
  });
 
  // ── External resource handlers ──
@@ -163,6 +183,17 @@
  resource.gcp = {
  service_account_json: newExtGcpServiceAccountJson.trim()
  };
+ } else if (newExtType === 'gcp-parameter') {
+ if (!newExtGcpParamServiceAccountJson.trim()) {
+ addToast('GCP service account JSON is required', 'alert');
+ return;
+ }
+ resource.gcp_parameter = {
+ service_account_json: newExtGcpParamServiceAccountJson.trim(),
+ ...(newExtGcpParamLocation.trim() && newExtGcpParamLocation.trim() !== 'global'
+ ? { location: newExtGcpParamLocation.trim() }
+ : {})
+ };
  } else if (newExtType === 'azure') {
  if (!newExtAzureVaultUrl.trim() || !newExtAzureTenantId.trim() || !newExtAzureClientId.trim() || !newExtAzureClientSecret.trim()) {
  addToast('Azure vault URL, tenant ID, client ID, and client secret are required', 'alert');
@@ -203,6 +234,8 @@
  newExtAwsSecretKey = '';
  newExtAwsService = 'secretsmanager';
  newExtGcpServiceAccountJson = '';
+ newExtGcpParamServiceAccountJson = '';
+ newExtGcpParamLocation = 'global';
  newExtAzureVaultUrl = '';
  newExtAzureTenantId = '';
  newExtAzureClientId = '';
@@ -222,6 +255,28 @@
  addToast('Failed to remove external resource', 'alert');
  }
  }
+
+ // Edit-in-modal state. Reusing ExternalResourceEditor here keeps a
+ // single source of truth for per-type form fields, masking, save
+ // semantics and the Test button. The Settings section is the *only*
+ // place where resource config lives now — the dedicated External
+ // page is purely a browser/CRUD-for-content surface.
+ let editName = $state<string | null>(null);
+
+ // Inline Test feedback. We don't bother spinning up a banner per row;
+ // toast is enough since the user is typically running it to confirm
+ // something worked, not to debug a deep failure.
+ let testingName = $state<string | null>(null);
+ async function handleTest(name: string) {
+ if (testingName) return;
+ testingName = name;
+ try {
+ const r = await configStore.testExternal(name);
+ addToast(r.ok ? `${name}: ${r.message || 'OK'}` : `${name}: ${r.message || 'Failed'}`, r.ok ? 'success' : 'alert');
+ } finally {
+ testingName = null;
+ }
+ }
 </script>
 
 <div>
@@ -238,6 +293,33 @@
  Add Resource
  </button>
  </div>
+
+ {#if !encryptionReady && keyStatus !== null}
+  <!-- Encryption-key gate. The seal layer (internal/secret) rejects
+       writes that carry secret values when the server-key isn't
+       live; HTTP-only / in-cluster K8s / token-less Consul still
+       work. Mirrors the banner on the dedicated External page so
+       both entry points warn the user before they fill the form. -->
+  <div class="mb-4 px-4 py-3 border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 rounded-md">
+   <div class="flex items-start gap-2">
+    {#if !keyStatus.initialized}
+     <AlertCircle size={16} class="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+     <div class="flex-1 min-w-0 text-xs text-amber-900 dark:text-amber-100">
+      <span class="font-medium">Server encryption key is not initialized.</span>
+      Resources that carry credentials (Vault, AWS, GCP, Azure, inline kubeconfig)
+      cannot be saved until you initialize the at-rest encryption key in the Key Rotation section below.
+      Resources without secrets (HTTP without auth, in-cluster Kubernetes, Consul/etcd without tokens) can still be added.
+     </div>
+    {:else}
+     <Lock size={16} class="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+     <div class="flex-1 min-w-0 text-xs text-amber-900 dark:text-amber-100">
+      <span class="font-medium">Server is locked.</span>
+      Resources with secret values cannot be saved until the server is unlocked.
+     </div>
+    {/if}
+   </div>
+  </div>
+ {/if}
 
  <!-- Add External Form -->
  {#if showAddExternal}
@@ -284,7 +366,11 @@
  </label>
  <label class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
  <input type="radio" bind:group={newExtType} value="gcp" class="text-accent-600" />
- GCP
+ GCP Secret
+ </label>
+ <label class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
+ <input type="radio" bind:group={newExtType} value="gcp-parameter" class="text-accent-600" />
+ GCP Parameter
  </label>
  <label class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
  <input type="radio" bind:group={newExtType} value="azure" class="text-accent-600" />
@@ -538,6 +624,20 @@
  class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10 resize-y"></textarea>
  <p class="mt-1 text-[11px] text-slate-400 dark:text-slate-500">Paste the full JSON content of a GCP service account key with Secret Manager access</p>
  </div>
+ {:else if newExtType === 'gcp-parameter'}
+ <div class="mb-4">
+ <label for="ext-gcp-param-sa-json" class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">Service Account JSON Key</label>
+ <textarea id="ext-gcp-param-sa-json" bind:value={newExtGcpParamServiceAccountJson} placeholder={'{"type": "service_account", "project_id": "...", ...}'}
+ rows="6"
+ class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10 resize-y"></textarea>
+ <p class="mt-1 text-[11px] text-slate-400 dark:text-slate-500">Service account needs <code>roles/parametermanager.parameterAccessor</code> on the parameters Pika should read.</p>
+ </div>
+ <div class="mb-4">
+ <label for="ext-gcp-param-location" class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">Location</label>
+ <input id="ext-gcp-param-location" type="text" bind:value={newExtGcpParamLocation} placeholder="global"
+ class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10" />
+ <p class="mt-1 text-[11px] text-slate-400 dark:text-slate-500">Defaults to <code>global</code>. Use a regional location (e.g. <code>us-central1</code>) only if your parameters are regional.</p>
+ </div>
  {:else if newExtType === 'azure'}
  <div class="mb-4">
  <label for="ext-azure-vault-url" class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">Vault URL</label>
@@ -595,8 +695,8 @@
  <div class="flex items-center gap-2">
  <span class="text-sm font-medium text-slate-800 dark:text-slate-100">{name}</span>
  <span class="px-1.5 py-0.5 text-[10px] font-medium rounded
- {resource.vault ? 'bg-amber-100 text-amber-700' : resource.aws ? 'bg-orange-100 text-orange-700' : resource.gcp ? 'bg-green-100 text-green-700' : resource.azure ? 'bg-sky-100 text-sky-700' : resource.consul ? 'bg-pink-100 text-pink-700' : resource.etcd ? 'bg-teal-100 text-teal-700' : 'bg-accent-100 text-brand-700'}">
- {resource.http ? 'HTTP' : resource.vault ? 'Vault' : resource.kubernetes ? 'Kubernetes' : resource.consul ? 'Consul' : resource.etcd ? 'etcd' : resource.aws ? (resource.aws.service === 'ssm' ? 'AWS SSM' : 'AWS Secrets Manager') : resource.gcp ? 'GCP Secret Manager' : resource.azure ? 'Azure Key Vault' : 'Unknown'}
+ {resource.vault ? 'bg-amber-100 text-amber-700' : resource.aws ? 'bg-orange-100 text-orange-700' : resource.gcp ? 'bg-green-100 text-green-700' : resource.gcp_parameter ? 'bg-emerald-100 text-emerald-700' : resource.azure ? 'bg-sky-100 text-sky-700' : resource.consul ? 'bg-pink-100 text-pink-700' : resource.etcd ? 'bg-teal-100 text-teal-700' : 'bg-accent-100 text-brand-700'}">
+ {resource.http ? 'HTTP' : resource.vault ? 'Vault' : resource.kubernetes ? 'Kubernetes' : resource.consul ? 'Consul' : resource.etcd ? 'etcd' : resource.aws ? (resource.aws.service === 'ssm' ? 'AWS SSM' : 'AWS Secrets Manager') : resource.gcp ? 'GCP Secret Manager' : resource.gcp_parameter ? 'GCP Parameter Manager' : resource.azure ? 'Azure Key Vault' : 'Unknown'}
  </span>
  </div>
  <div class="mt-1 space-y-0.5">
@@ -641,20 +741,67 @@
  <span class="text-xs font-mono text-slate-400 dark:text-slate-500">{resource.aws.region}</span>
  {:else if resource.gcp}
  <span class="text-xs text-slate-400 dark:text-slate-500">GCP Secret Manager (service account)</span>
+ {:else if resource.gcp_parameter}
+ <span class="text-xs text-slate-400 dark:text-slate-500">GCP Parameter Manager · location <span class="font-mono">{resource.gcp_parameter.location || 'global'}</span></span>
  {:else if resource.azure}
  <span class="text-xs font-mono text-slate-400 dark:text-slate-500">{resource.azure.vault_url}</span>
  {/if}
  </div>
  </div>
+ <div class="flex items-center gap-1 shrink-0">
  <button
- class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-red-500 hover:bg-red-50 rounded transition-colors shrink-0 cursor-pointer"
+ class="p-1.5 text-slate-500 dark:text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-950/30 rounded transition-colors cursor-pointer disabled:opacity-50"
+ onclick={() => handleTest(name)}
+ disabled={testingName === name}
+ title="Test connection"
+ >
+ {#if testingName === name}
+ <Loader2 size={14} class="animate-spin" />
+ {:else}
+ <Play size={14} />
+ {/if}
+ </button>
+ <button
+ class="p-1.5 text-slate-500 dark:text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-950/30 rounded transition-colors cursor-pointer"
+ onclick={() => (editName = name)}
+ title="Edit resource"
+ >
+ <Pencil size={14} />
+ </button>
+ <button
+ class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-red-500 hover:bg-red-50 rounded transition-colors cursor-pointer"
  onclick={() => handleRemoveExternal(name)}
  title="Remove resource"
  >
  <Trash2 size={14} />
  </button>
  </div>
+ </div>
  {/each}
  </div>
+ {/if}
+
+ <!-- Edit modal. ExternalResourceEditor handles every per-type form
+      field internally; we only own the modal chrome here. Re-keyed
+      on editName so picking a different resource forces a fresh
+      mount with the new initial state. -->
+ {#if editName !== null}
+  {@const editResource = settings?.external?.[editName]}
+  {#if editResource}
+   <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" use:backdropClose={() => (editName = null)} role="presentation">
+    <div class="bg-white dark:bg-warm-950 rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col" role="presentation">
+     {#key editName}
+      <ExternalResourceEditor
+       name={editName}
+       resource={editResource}
+       mode="edit"
+       onSaved={() => (editName = null)}
+       onDeleted={() => (editName = null)}
+       onCancel={() => (editName = null)}
+      />
+     {/key}
+    </div>
+   </div>
+  {/if}
  {/if}
 </div>

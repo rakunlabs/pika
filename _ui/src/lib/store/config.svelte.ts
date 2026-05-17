@@ -721,9 +721,17 @@ function createConfigStore() {
       await axios.post('/api/v1/settings', body);
       settings = updatedSettings;
       addToast('Settings saved', 'success');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to save settings:', error);
-      addToast('Failed to save settings', 'alert');
+      // Surface the backend's message instead of a generic toast.
+      // The server sends structured reasons that the user can act on,
+      // e.g. "settings: server is locked; cannot persist secret values"
+      // (encryption key not unlocked) or "external resource X: ..."
+      // (Provider.Validate rejection). Hiding those behind a generic
+      // "Failed to save settings" makes the SPA feel broken when the
+      // server is in fact reporting a precise, recoverable condition.
+      const msg = error?.response?.data?.message || 'Failed to save settings';
+      addToast(msg, 'alert');
       throw error;
     }
   }
@@ -927,6 +935,155 @@ function createConfigStore() {
     } catch {
       return [];
     }
+  }
+
+  // Search within a single external resource. Mode 'name' is a cheap
+  // BFS over List() results matching by substring; 'all' additionally
+  // Read()s each leaf and greps the value. Errors return an empty
+  // result rather than throwing so the UI can simply show "no hits"
+  // — failed search shouldn't kick the user back to a tree view.
+  async function searchExternal(
+    resourceName: string,
+    query: string,
+    mode: 'name' | 'all' = 'name',
+    limit: number = 200,
+  ): Promise<Array<{ path: string; type: 'name' | 'content'; snippet?: string }>> {
+    if (!query.trim()) return [];
+    try {
+      const response = await axios.get(
+        `/api/v1/external/${encodeURIComponent(resourceName)}/search`,
+        { params: { q: query, mode, limit } }
+      );
+      return response.data || [];
+    } catch {
+      return [];
+    }
+  }
+
+  // Live-probe an external resource using its configured credentials.
+  // Backend always returns 200 with {ok,message,sample}; an axios reject
+  // here only means the request itself never reached the handler (auth
+  // redirect, network, etc.) — surface it as a failed test result so the
+  // SPA can render a single error path.
+  async function testExternal(
+    resourceName: string
+  ): Promise<{ ok: boolean; message?: string; sample?: string[] }> {
+    try {
+      const response = await axios.post(`/api/v1/external/${encodeURIComponent(resourceName)}/test`);
+      return response.data || { ok: false, message: 'Empty response' };
+    } catch (error: any) {
+      const msg = error?.response?.data?.message || error?.message || 'Test failed';
+      return { ok: false, message: msg };
+    }
+  }
+
+  // Replace or insert a single external resource entry while preserving the
+  // rest of settings.external. Centralised here so the new External page,
+  // the existing Settings section, and any future caller all hit the same
+  // read-modify-write path (the backend stores `external` as a full map).
+  async function saveExternalResource(
+    name: string,
+    resource: import('@/lib/types/config').ExternalResource
+  ): Promise<void> {
+    const currentExternal = { ...(settings?.external || {}) };
+    currentExternal[name] = resource;
+    await saveSettings({ ...(settings || {}), external: currentExternal });
+  }
+
+  // Rename keeps the value, drops the old key. Used by the External page's
+  // edit mode when the user changes the resource name.
+  async function renameExternalResource(oldName: string, newName: string): Promise<void> {
+    if (oldName === newName) return;
+    const currentExternal = { ...(settings?.external || {}) };
+    if (!(oldName in currentExternal)) return;
+    if (newName in currentExternal) {
+      addToast(`Resource "${newName}" already exists`, 'alert');
+      throw new Error('duplicate external resource name');
+    }
+    currentExternal[newName] = currentExternal[oldName];
+    delete currentExternal[oldName];
+    await saveSettings({ ...(settings || {}), external: currentExternal });
+  }
+
+  async function removeExternalResource(name: string): Promise<void> {
+    const currentExternal = { ...(settings?.external || {}) };
+    if (!(name in currentExternal)) return;
+    delete currentExternal[name];
+    await saveSettings({ ...(settings || {}), external: currentExternal });
+  }
+
+  // ── External resource browser ───────────────────────────────────────
+  // The new External page consumes these. They go through the
+  // /api/v1/external/* surface (separate from /api/v1/settings) so
+  // a future split could narrow the capability gate without dragging
+  // the rest of settings.manage along.
+
+  async function listExternalResourceSummaries(): Promise<import('@/lib/types/config').ExternalResourceSummary[]> {
+    try {
+      const res = await axios.get('/api/v1/external/resources');
+      return res.data || [];
+    } catch {
+      return [];
+    }
+  }
+
+  async function readExternalEntry(
+    resource: string,
+    path: string,
+  ): Promise<import('@/lib/types/config').ExternalEntry> {
+    const res = await axios.post(
+      `/api/v1/external/${encodeURIComponent(resource)}/read`,
+      { path },
+    );
+    return res.data;
+  }
+
+  async function writeExternalEntry(
+    resource: string,
+    path: string,
+    data: Record<string, unknown>,
+  ): Promise<void> {
+    await axios.post(
+      `/api/v1/external/${encodeURIComponent(resource)}/write`,
+      { path, data },
+    );
+  }
+
+  async function deleteExternalEntry(resource: string, path: string): Promise<void> {
+    await axios.post(
+      `/api/v1/external/${encodeURIComponent(resource)}/delete`,
+      { path },
+    );
+  }
+
+  async function listExternalVersions(
+    resource: string,
+    path: string,
+  ): Promise<import('@/lib/types/config').ExternalVersion[]> {
+    try {
+      const res = await axios.post(
+        `/api/v1/external/${encodeURIComponent(resource)}/versions`,
+        { path },
+      );
+      return res.data || [];
+    } catch {
+      // Versions are best-effort: a backend that doesn't support them
+      // returns 400 (ErrNotSupported translation). Treat as "no
+      // versions" — the SPA renders single-version mode.
+      return [];
+    }
+  }
+
+  async function readExternalVersion(
+    resource: string,
+    path: string,
+    version: string,
+  ): Promise<import('@/lib/types/config').ExternalEntry> {
+    const res = await axios.post(
+      `/api/v1/external/${encodeURIComponent(resource)}/version`,
+      { path, version },
+    );
+    return res.data;
   }
 
   // Token operations
@@ -1262,6 +1419,17 @@ function createConfigStore() {
     runUserSync,
     testUserSync,
     listExternalPaths,
+    searchExternal,
+    testExternal,
+    saveExternalResource,
+    renameExternalResource,
+    removeExternalResource,
+    listExternalResourceSummaries,
+    readExternalEntry,
+    writeExternalEntry,
+    deleteExternalEntry,
+    listExternalVersions,
+    readExternalVersion,
 
     // Token operations
     loadTokens,

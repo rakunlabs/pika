@@ -276,3 +276,118 @@ func hmacSHA256(key, data []byte) []byte {
 	h.Write(data)
 	return h.Sum(nil)
 }
+
+// ── Provider ──────────────────────────────────────────────────────────
+// AWSProvider unifies Secrets Manager and SSM Parameter Store behind
+// the Provider interface. AWS clients are cheap to instantiate (no
+// shared connection pool, SigV4 is stateless), so we don't cache them.
+
+type AWSProvider struct {
+	Config *AWS
+}
+
+func (p *AWSProvider) Kind() string { return "aws" }
+
+func (p *AWSProvider) Capabilities() Capabilities {
+	// Our AWS client only implements read+list today. Write/Delete
+	// would require additional SigV4 endpoints (CreateSecret /
+	// DeleteSecret / PutParameter / DeleteParameter); when those land
+	// flip the flags here and the SPA exposes the buttons.
+	return Capabilities{CanRead: true, CanList: true}
+}
+
+func (p *AWSProvider) Validate() error {
+	if p.Config == nil {
+		return fmt.Errorf("aws: config is required")
+	}
+	if strings.TrimSpace(p.Config.Region) == "" {
+		return fmt.Errorf("aws: region is required")
+	}
+	if strings.TrimSpace(p.Config.AccessKey) == "" || strings.TrimSpace(p.Config.SecretKey) == "" {
+		return fmt.Errorf("aws: access_key and secret_key are required")
+	}
+	switch p.Config.Service {
+	case "", "secretsmanager", "ssm":
+		// "" defaults to secretsmanager downstream — accept it.
+	default:
+		return fmt.Errorf("aws: service must be \"secretsmanager\" or \"ssm\", got %q", p.Config.Service)
+	}
+	return nil
+}
+
+func (p *AWSProvider) Fetch(ctx context.Context, path string) ([]byte, error) {
+	client := NewAWSClient(p.Config.Region, p.Config.AccessKey, p.Config.SecretKey)
+
+	var data map[string]any
+	var err error
+	if p.Config.Service == "ssm" {
+		data, err = client.ReadSSMParameter(ctx, path)
+	} else {
+		data, err = client.ReadSecretsManagerSecret(ctx, path)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading AWS %s at %q: %w", p.Config.Service, path, err)
+	}
+	return json.Marshal(data)
+}
+
+func (p *AWSProvider) List(ctx context.Context, prefix string) ([]string, error) {
+	client := NewAWSClient(p.Config.Region, p.Config.AccessKey, p.Config.SecretKey)
+	if p.Config.Service == "ssm" {
+		return client.ListSSMParameters(ctx, prefix)
+	}
+	return client.ListSecretsManagerSecrets(ctx)
+}
+
+func (p *AWSProvider) Test(ctx context.Context) TestResult {
+	paths, err := p.List(ctx, "")
+	if err != nil {
+		return TestResult{OK: false, Message: err.Error()}
+	}
+	svc := p.Config.Service
+	if svc == "" {
+		svc = "secretsmanager"
+	}
+	msg := fmt.Sprintf("Reachable. %d %s entry/entries discovered.", len(paths), svc)
+	if len(paths) == 0 {
+		msg = fmt.Sprintf("Reachable. No %s entries discovered.", svc)
+	}
+	return TestResult{OK: true, Message: msg, Sample: capSample(paths, 10)}
+}
+
+func (p *AWSProvider) Read(ctx context.Context, path string) (*Entry, error) {
+	client := NewAWSClient(p.Config.Region, p.Config.AccessKey, p.Config.SecretKey)
+	var data map[string]any
+	var err error
+	if p.Config.Service == "ssm" {
+		data, err = client.ReadSSMParameter(ctx, path)
+	} else {
+		data, err = client.ReadSecretsManagerSecret(ctx, path)
+	}
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := json.Marshal(data)
+	return &Entry{Data: data, Raw: raw, ContentType: "application/json"}, nil
+}
+
+// Write / Delete / Versions are not implemented for AWS today —
+// we'd need to add CreateSecret / PutSecretValue / DeleteSecret /
+// PutParameter / DeleteParameter SigV4 wrappers. The Capabilities()
+// flag is the SPA's signal; these are stubs so the Provider
+// contract is fully satisfied.
+func (p *AWSProvider) Write(ctx context.Context, path string, data map[string]any) error {
+	return fmt.Errorf("aws: %w", ErrNotSupported)
+}
+
+func (p *AWSProvider) Delete(ctx context.Context, path string) error {
+	return fmt.Errorf("aws: %w", ErrNotSupported)
+}
+
+func (p *AWSProvider) ListVersions(ctx context.Context, path string) ([]Version, error) {
+	return nil, fmt.Errorf("aws: %w", ErrNotSupported)
+}
+
+func (p *AWSProvider) ReadVersion(ctx context.Context, path, version string) (*Entry, error) {
+	return nil, fmt.Errorf("aws: %w", ErrNotSupported)
+}

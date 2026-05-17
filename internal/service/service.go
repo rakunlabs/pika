@@ -27,6 +27,14 @@ type Service struct {
 	gcpMu      sync.RWMutex
 	gcpClients map[string]*external.GCPSecretManagerClient
 
+	// gcpParamClients caches GCP Parameter Manager clients keyed by
+	// "<service account JSON>|<location>". Parameter Manager is
+	// location-scoped, so the same service account can drive multiple
+	// clients (e.g. one for "global", one for "us-central1") and we
+	// want each to keep its own cached access token.
+	gcpParamMu      sync.RWMutex
+	gcpParamClients map[string]*external.GCPParameterManagerClient
+
 	// azureClients caches Azure Key Vault clients keyed by vault URL.
 	azureMu      sync.RWMutex
 	azureClients map[string]*external.AzureKeyVaultClient
@@ -67,8 +75,9 @@ func New(store Storage) *Service {
 		store:        store,
 		vaultClients: make(map[string]*external.VaultClient),
 		kubeClients:  make(map[string]*external.KubeClient),
-		gcpClients:   make(map[string]*external.GCPSecretManagerClient),
-		azureClients: make(map[string]*external.AzureKeyVaultClient),
+		gcpClients:      make(map[string]*external.GCPSecretManagerClient),
+		gcpParamClients: make(map[string]*external.GCPParameterManagerClient),
+		azureClients:    make(map[string]*external.AzureKeyVaultClient),
 	}
 }
 
@@ -88,6 +97,40 @@ func (s *Service) emitHook(event hook.Event) {
 	if s.hookDispatcher != nil {
 		s.hookDispatcher.Emit(event)
 	}
+}
+
+// ── external.Deps satisfaction ──
+//
+// The four exported wrappers below let *Service satisfy
+// external.Deps without renaming the long-standing private helpers
+// (getVaultClient/...) that the rest of the data path still calls.
+// They are intentionally trivial; if you find yourself adding logic
+// here, move it into the underlying private helper instead so both
+// call sites stay in sync.
+
+// VaultClient implements external.Deps.
+func (s *Service) VaultClient(ctx context.Context, v *external.Vault) *external.VaultClient {
+	return s.getVaultClient(ctx, v)
+}
+
+// KubeClient implements external.Deps.
+func (s *Service) KubeClient(k *external.Kubernetes) (*external.KubeClient, error) {
+	return s.getKubeClient(k)
+}
+
+// GCPClient implements external.Deps.
+func (s *Service) GCPClient(g *external.GCP) (*external.GCPSecretManagerClient, error) {
+	return s.getGCPClient(g)
+}
+
+// GCPParameterClient implements external.Deps.
+func (s *Service) GCPParameterClient(g *external.GCPParameter) (*external.GCPParameterManagerClient, error) {
+	return s.getGCPParameterClient(g)
+}
+
+// AzureClient implements external.Deps.
+func (s *Service) AzureClient(a *external.Azure) *external.AzureKeyVaultClient {
+	return s.getAzureClient(a)
 }
 
 // kubeClientCacheKey derives a stable cache key for a Kubernetes external resource.
@@ -195,6 +238,39 @@ func (s *Service) getGCPClient(gcp *external.GCP) (*external.GCPSecretManagerCli
 	}
 
 	s.gcpClients[key] = client
+	return client, nil
+}
+
+// getGCPParameterClient returns a cached or new GCP Parameter Manager
+// client. Cache key combines the service-account JSON and the
+// requested location: different locations need separate clients even
+// when they share credentials, because each client pins its own
+// location for every call.
+func (s *Service) getGCPParameterClient(g *external.GCPParameter) (*external.GCPParameterManagerClient, error) {
+	location := g.GetLocation()
+	key := g.ServiceAccountJSON + "|" + location
+
+	s.gcpParamMu.RLock()
+	client, exists := s.gcpParamClients[key]
+	s.gcpParamMu.RUnlock()
+
+	if exists {
+		return client, nil
+	}
+
+	s.gcpParamMu.Lock()
+	defer s.gcpParamMu.Unlock()
+
+	if client, exists = s.gcpParamClients[key]; exists {
+		return client, nil
+	}
+
+	client, err := external.NewGCPParameterManagerClient(g.ServiceAccountJSON, location)
+	if err != nil {
+		return nil, err
+	}
+
+	s.gcpParamClients[key] = client
 	return client, nil
 }
 

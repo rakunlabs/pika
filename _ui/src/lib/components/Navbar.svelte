@@ -1,7 +1,7 @@
 <script lang="ts">
  import { link, router } from 'svelte-spa-router';
  import { appStore } from '@/lib/store/store.svelte';
-  import { Blocks, Settings, User, Users, LogOut, HardDrive, FileSliders, Lock } from 'lucide-svelte';
+  import { Blocks, Settings, User, Users, LogOut, HardDrive, FileSliders, Lock, Globe } from 'lucide-svelte';
  import ThemeSwitcher from '@/lib/components/ThemeSwitcher.svelte';
 
  const info = $derived(appStore.info);
@@ -26,16 +26,25 @@
   }
 
   // Personal vault is per-user; no capability gate (every logged-in
-  // user owns their own vault). The link is only hidden when the
-  // feature is server-disabled.
-  if (vaultEnabled) {
-  items.push({ path: '/vault', label: 'Vault', icon: Lock });
-  }
+   // user owns their own vault). The link is only hidden when the
+   // feature is server-disabled.
+   if (vaultEnabled) {
+   items.push({ path: '/vault', label: 'Vault', icon: Lock });
+   }
 
- // Settings is always visible: even users without settings.manage can
- // reach the About section. Individual sections gate themselves inside
- // the Settings page based on their own capability.
- items.push({ path: '/settings', label: 'Settings', icon: Settings });
+   // External resources page: dedicated list/view/edit/test surface for
+   // configured external backends (Vault, K8s, Consul, etcd, AWS, GCP,
+   // Azure, HTTP). Same capability as the in-Settings section that
+   // also exposes the same data, so hide the nav entry for users who
+   // would only see a 403 banner anyway.
+   if (appStore.hasPermission('settings.manage')) {
+   items.push({ path: '/external', label: 'External', icon: Globe });
+   }
+
+  // Settings is always visible: even users without settings.manage can
+  // reach the About section. Individual sections gate themselves inside
+  // the Settings page based on their own capability.
+  items.push({ path: '/settings', label: 'Settings', icon: Settings });
 
  // Users page hosts both the Users tab (users.manage) and Permissions
  // tab (permissions.manage). Show the nav entry if the user has either.

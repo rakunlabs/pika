@@ -143,6 +143,14 @@ export interface GCPConfig {
   service_account_json: string;
 }
 
+// GCP Parameter Manager external resource configuration. Location
+// scopes the API to a regional endpoint (e.g. "global", "us-central1")
+// and defaults to "global" on the server when omitted.
+export interface GCPParameterConfig {
+  service_account_json: string;
+  location?: string;
+}
+
 // Azure Key Vault external resource configuration
 export interface AzureConfig {
   vault_url: string;
@@ -165,7 +173,49 @@ export interface ExternalResource {
   etcd?: EtcdConfig;
   aws?: AWSConfig;
   gcp?: GCPConfig;
+  gcp_parameter?: GCPParameterConfig;
   azure?: AzureConfig;
+}
+
+// Mirrors external.Capabilities — what the browser UI can do with a
+// given backend. Returned by /api/v1/external/resources for every
+// configured resource. The SPA hides/disables buttons based on these
+// flags so AWS doesn't show a "Save" button it would never accept.
+export interface ExternalCapabilities {
+  can_read: boolean;
+  can_list: boolean;
+  can_write: boolean;
+  can_delete: boolean;
+  can_versions: boolean;
+}
+
+// Summary record for the External browser left pane. Has no secret
+// fields; the SPA can render it without settings.manage having to
+// surface the full ExternalResource (which carries credentials).
+export interface ExternalResourceSummary {
+  name: string;
+  kind: string;
+  capabilities: ExternalCapabilities;
+}
+
+// A single entry returned by Provider.Read. Mirrors external.Entry.
+// data is the structured key/value payload the SPA renders as a
+// table; raw carries the verbatim bytes for "view as text/JSON"; and
+// content_type is informational.
+export interface ExternalEntry {
+  data?: Record<string, unknown>;
+  raw?: string; // base64-encoded by Go's json marshaller for []byte
+  content_type?: string;
+  version?: string;
+}
+
+// One Vault KV v2 version. id is the integer version as a string —
+// callers pass it back to /version unmodified.
+export interface ExternalVersion {
+  id: string;
+  created_at?: string;
+  deleted?: boolean;
+  destroyed?: boolean;
 }
 
 // S3 configuration for raw mounts

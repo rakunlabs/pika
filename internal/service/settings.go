@@ -321,6 +321,22 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 
 	switch patch.Action {
 	case ActionKeySet:
+		// Validate every incoming external resource through its
+		// Provider before persisting. This is the single chokepoint
+		// for "is this configuration well-formed" — both the SPA's
+		// Add/Edit flows and any direct API caller pass through here,
+		// so a misconfigured record can never reach storage.
+		// We pass *Service as Deps; Validate() does not call into
+		// Deps but the constructor accepts one for uniformity.
+		for name, ext := range patch.External {
+			provider, err := external.ResourceProvider(ext, s)
+			if err != nil {
+				return fmt.Errorf("external resource %q: %w: %w", name, err, ErrBadRequest)
+			}
+			if err := provider.Validate(); err != nil {
+				return fmt.Errorf("external resource %q: %w: %w", name, err, ErrBadRequest)
+			}
+		}
 		if settings.External == nil {
 			settings.External = make(map[string]external.External)
 		}
