@@ -831,23 +831,31 @@ function createConfigStore() {
     }
   }
 
-  async function savePublicServerSettings(patch: {
-    public_port?: import('@/lib/types/config').PublicPortSettings,
-    compat?: import('@/lib/types/config').CompatSettings,
-  }): Promise<void> {
+  // saveProxySettings mirrors saveVaultSettings: deployment-wide
+  // feature toggle that re-fetches /api/v1/info so the nav link
+  // appears or disappears immediately.
+  async function saveProxySettings(
+    patch: import('@/lib/types/config').ProxySettings,
+  ): Promise<void> {
     try {
       await axios.post('/api/v1/settings', {
         action: 'set',
-        ...patch
+        proxy: patch,
       });
       if (settings) {
-        settings = { ...settings, ...patch };
+        settings = { ...settings, proxy: patch };
       } else {
-        settings = { ...patch };
+        settings = { proxy: patch };
       }
-      addToast('Public server settings saved.', 'success');
+      await appStore.loadInfo();
+      addToast(
+        patch.disabled
+          ? 'Proxy feature disabled for this deployment.'
+          : 'Proxy feature enabled for this deployment.',
+        'success',
+      );
     } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to save public server settings';
+      const msg = error.response?.data?.message || 'Failed to save proxy feature flag';
       addToast(msg, 'alert');
       throw error;
     }
@@ -1412,7 +1420,7 @@ function createConfigStore() {
     saveFTPUsers,
     saveServeSettings,
     saveVaultSettings,
-    savePublicServerSettings,
+    saveProxySettings,
     saveHooks,
     saveUserSync,
     listUserSyncStatus,

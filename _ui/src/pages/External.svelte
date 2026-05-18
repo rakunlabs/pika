@@ -120,7 +120,11 @@
   let confirmDeletePath = $state<string | null>(null);
   let deleting = $state(false);
 
-  const canManage = $derived(appStore.hasPermission('settings.manage'));
+  // Browsing external resources requires external.read; writing entries
+  // additionally requires external.write. The backend enforces both
+  // independently; UI hides write affordances when canWrite is false.
+  const canManage = $derived(appStore.hasPermission('external.read'));
+  const canWrite = $derived(appStore.hasPermission('external.write'));
 
   // Resources filtered by the search box (matches name or kind).
   const visibleResources = $derived.by(() => {
@@ -293,6 +297,7 @@
 
   async function saveEntry() {
     if (!selectedResource || !selectedPath) return;
+    if (!canWrite) { addToast('Missing external.write permission', 'alert'); return; }
     // Build the data object differently for wrapper vs. structured
     // backends — the SPA-side shape has to match what the provider
     // contract on the server expects (consul.go:275, vault.go:Write).
@@ -348,6 +353,7 @@
   // ── Delete ────────────────────────────────────────────────────────
   async function performDelete(path: string) {
     if (!selectedResource) return;
+    if (!canWrite) { addToast('Missing external.write permission', 'alert'); return; }
     deleting = true;
     try {
       await configStore.deleteExternalEntry(selectedResource, path);
@@ -446,6 +452,7 @@
 
   async function createEntry() {
     if (!selectedResource) return;
+    if (!canWrite) { addToast('Missing external.write permission', 'alert'); return; }
     const path = newPath.trim();
     if (!path) {
       addToast('Path is required', 'alert');
@@ -542,7 +549,7 @@
       <ShieldOff size={32} class="mx-auto text-slate-400 mb-3" />
       <h2 class="text-lg font-semibold mb-2">Permission required</h2>
       <p class="text-sm text-slate-600 dark:text-slate-300">
-        You need the <code class="px-1 py-0.5 bg-slate-200 dark:bg-warm-800 rounded text-xs">settings.manage</code> capability to browse external resources.
+        You need the <code class="px-1 py-0.5 bg-slate-200 dark:bg-warm-800 rounded text-xs">external.read</code> capability to browse external resources.
       </p>
     </div>
   {:else}
@@ -623,7 +630,7 @@
           <div class="px-3 py-2 border-b border-slate-200 dark:border-warm-700 shrink-0 flex items-center justify-between">
             <span class="text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">Paths</span>
             <div class="flex items-center gap-1">
-              {#if currentResource?.capabilities.can_write}
+              {#if canWrite && currentResource?.capabilities.can_write}
                 <button
                   class="p-1 text-slate-500 dark:text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-950/30 rounded transition-colors cursor-pointer"
                   onclick={startCompose}
@@ -836,7 +843,7 @@
                           <FileText size={11} class="text-slate-400 shrink-0" />
                         {/if}
                         <span class="text-[11px] font-mono truncate flex-1">{displayName(prefix, child)}</span>
-                        {#if !isF && currentResource?.capabilities.can_delete}
+                        {#if !isF && canWrite && currentResource?.capabilities.can_delete}
                           <button
                             class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-red-500 transition-all cursor-pointer mr-1"
                             onclick={(e) => { e.stopPropagation(); confirmDeletePath = fullPath; }}
@@ -922,7 +929,7 @@
               <span class="text-sm font-mono text-slate-800 dark:text-slate-100 truncate flex-1">{selectedPath}</span>
               <div class="flex items-center gap-1 shrink-0">
                 {#if !editing}
-                  {#if currentResource?.capabilities.can_write}
+                  {#if canWrite && currentResource?.capabilities.can_write}
                     <button
                       class="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-white bg-accent-600 rounded hover:bg-accent-700 transition-colors cursor-pointer"
                       onclick={startEdit}
@@ -938,7 +945,7 @@
                   >
                     <RefreshCw size={12} />
                   </button>
-                  {#if currentResource?.capabilities.can_delete}
+                  {#if canWrite && currentResource?.capabilities.can_delete}
                     {#if confirmDeletePath === selectedPath}
                       <span class="text-[11px] text-slate-600 dark:text-slate-300">Delete?</span>
                       <button

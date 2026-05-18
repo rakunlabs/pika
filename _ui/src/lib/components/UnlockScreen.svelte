@@ -2,6 +2,7 @@
   import { Lock, Loader2, Eye, EyeOff } from 'lucide-svelte';
   import { keymgrStore } from '@/lib/store/keymgr.svelte';
   import { appStore } from '@/lib/store/store.svelte';
+  import ThemeSwitcher from '@/lib/components/ThemeSwitcher.svelte';
 
   // Full-screen takeover shown when the server's at-rest encryption
   // key is initialized (verifier on disk) but locked (no live key
@@ -92,7 +93,14 @@
       <span class="text-lg font-semibold">Pika</span>
     </div>
 
-    <div class="bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg p-6 shadow-sm">
+    <div class="relative bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg p-6 shadow-sm">
+      <!-- Theme switcher pinned top-right of the card. Same component &
+           placement as Login.svelte so users see a consistent toggle
+           across all pre-app screens (login, locked). Without it, anyone
+           landing on a locked dark-mode server at night couldn't escape
+           the bright form unless an admin first unlocked the app. -->
+      <ThemeSwitcher class="absolute top-3 right-3" />
+
       <h1 class="text-base font-semibold text-slate-800 dark:text-slate-100 mb-1 flex items-center gap-2">
         <Lock size={16} class="text-accent-600 dark:text-accent-400" />
         Server is locked
@@ -129,7 +137,7 @@
                 autocomplete="current-password"
                 autofocus
                 disabled={busy}
-                class="w-full pl-3 pr-10 py-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500 disabled:opacity-50"
+                class="w-full pl-3 pr-10 py-2 text-sm rounded border border-slate-300 dark:border-warm-500 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-accent-500 dark:focus:border-accent-500 focus:ring-2 focus:ring-accent-500/30 disabled:opacity-50"
                 placeholder="Enter server key"
               />
               <button

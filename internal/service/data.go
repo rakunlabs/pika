@@ -154,9 +154,41 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 	if visiting == nil {
 		visiting = map[string]bool{}
 	}
+	// If the request context carries a resolved capability set (i.e. it
+	// arrived through an authenticated UI endpoint like /render or
+	// /file GET, which both run through CapResolver middleware), gate
+	// external/mount fetches on the matching read capability. We DON'T
+	// apply this to the /data consumer endpoint: that path is token-
+	// authenticated, never goes through CapResolver, has nil caps in
+	// context, and is intentionally allowed to fan out into the
+	// inherited externals so the application that owns the config can
+	// actually read its own dependencies at runtime.
+	//
+	// Without this gate, a user with files.read but no external.read
+	// could read any backend by editing a config to inherit from it
+	// and hitting Render — a privilege escalation via inheritance.
+	caps := CapabilitiesFromContext(ctx)
+	checkCaps := caps != nil // only enforce when a resolver actually attached caps
+
 	for _, entry := range entries {
 		if entry.Source == "" && entry.Resource == "" && entry.Mount == "" {
 			continue
+		}
+
+		// Authorisation gate (UI requests only — see comment above).
+		// Resource entries need external.read; mount entries need
+		// raw.read. Internal sources fall under files.read which the
+		// caller already checked when accepting the render request,
+		// so we don't re-check those here.
+		if checkCaps {
+			if entry.Resource != "" && !caps.Has(CapExternalRead) {
+				return nil, fmt.Errorf("inherit from external %q requires %s capability: %w",
+					entry.Resource, CapExternalRead, ErrForbidden)
+			}
+			if entry.Mount != "" && !caps.Has(CapRawRead) {
+				return nil, fmt.Errorf("inherit from mount %q requires %s capability: %w",
+					entry.Mount, CapRawRead, ErrForbidden)
+			}
 		}
 
 		var sourceData []byte
@@ -228,17 +260,56 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 			}
 		}
 
-		// Rename the hardcoded "value" wrapper key used by non-JSON
-		// secret backends (GCP/Etcd/Consul) so the user's "Include paths"
-		// selection can pick it up under a meaningful key.
-		if len(entry.Paths) > 0 && (entry.Resource != "" || entry.Mount != "") {
-			renamed, ok := renameValueWrapperKey(sourceJSON, entry.Paths[0])
-			if ok {
-				sourceJSON = renamed
+		// Explicit format hint for external/mount sources.
+		//
+		// Providers differ in what Fetch returns:
+		//   - HTTP: raw response bytes (could be YAML/TOML/anything).
+		//   - Consul/etcd/GCP: JSON-marshalled map. If the upstream
+		//     value parsed as a JSON object the map is that object;
+		//     otherwise it's the synthetic {"value":"<raw-string>"}
+		//     wrapper.
+		//   - Vault/Kubernetes/AWS/Azure: JSON-marshalled map of the
+		//     structured payload (no wrapper).
+		//
+		// When the user picks Decode As, we must handle both shapes:
+		//
+		//   1. sourceJSON is already valid JSON (Consul wrapper or
+		//      otherwise) → try decodeWrappedValue first; if a wrapper
+		//      is detected, decode the inner string with the chosen
+		//      format. Non-wrapper JSON gets the user's format
+		//      ignored (overriding a successful structured parse with
+		//      a different decoder is almost always a mistake).
+		//   2. sourceJSON is not valid JSON (HTTP returning raw YAML
+		//      bytes) → ConvertFormat the whole payload with the
+		//      chosen decoder so the merge pipeline gets real
+		//      structure.
+		//
+		// Mount entries already get format autodetection above; an
+		// explicit hint here lets the user override the file-extension
+		// guess (e.g. a .txt file that actually holds YAML).
+		if entry.Format != "" && (entry.Resource != "" || entry.Mount != "") {
+			if decoded, ok := decodeWrappedValue(sourceJSON, entry.Format); ok {
+				sourceJSON = decoded
+			} else if !json.Valid(sourceJSON) {
+				// Raw non-JSON payload (the HTTP-provider case). Try
+				// to parse it directly with the requested decoder.
+				// Swallow errors quietly: an invalid YAML/TOML body
+				// is a user mistake the Render output will surface
+				// downstream when merge fails or returns empty.
+				if converted, convErr := ConvertFormat(sourceJSON, entry.Format, "json"); convErr == nil {
+					sourceJSON = converted
+				}
 			}
 		}
 
-		// Filter by paths if specified
+		// Filter by paths if specified. The pipeline is intentionally
+		// literal here: provider output → optional Format decode →
+		// paths filter applied verbatim. No "renames" or "value"
+		// magic — the user sees exactly the keys the source produced
+		// and picks among them with names they typed themselves. If
+		// the user wants the wrapper's literal "value" key they put
+		// "value" in Include Paths; if they decoded and now want
+		// "host", they type "host". Predictable.
 		if len(entry.Paths) > 0 {
 			filtered, err := filterByPaths(sourceJSON, entry.Paths)
 			if err != nil {

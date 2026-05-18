@@ -7,7 +7,6 @@ import (
 	"net"
 
 	"github.com/rakunlabs/ada"
-	"github.com/rakunlabs/into"
 
 	mcors "github.com/rakunlabs/ada/middleware/cors"
 	mlog "github.com/rakunlabs/ada/middleware/log"
@@ -25,10 +24,26 @@ import (
 	"github.com/rakunlabs/pika/internal/serve/webdavserve"
 	"github.com/rakunlabs/pika/internal/server/api"
 	"github.com/rakunlabs/pika/internal/server/authx"
-	"github.com/rakunlabs/pika/internal/server/compat"
 	"github.com/rakunlabs/pika/internal/server/lockgate"
+	"github.com/rakunlabs/pika/internal/server/proxy"
 	"github.com/rakunlabs/pika/internal/service"
 )
+
+// proxyMgrWrapper adapts *proxy.Manager to the api.ProxyReconciler
+// interface. The api package keeps the interface intentionally weak-
+// typed for Validate/Status (they return any) so it doesn't pull in
+// the proxy types directly.
+type proxyMgrWrapper struct{ m *proxy.Manager }
+
+func (w proxyMgrWrapper) Reconcile(servers []service.ProxyServer) error {
+	return w.m.Reconcile(servers)
+}
+
+func (w proxyMgrWrapper) Validate(s service.ProxyServer) (any, error) {
+	return w.m.Validate(s)
+}
+
+func (w proxyMgrWrapper) Status() any { return w.m.Status() }
 
 // cookieName returns the session cookie name, preferring the AuthSettings
 // value, then the config value, then the default "pika_session".
@@ -139,14 +154,15 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	// Protected group: require auth + resolve capabilities.
 	m.Use(mgr.Require(), mgr.CapMiddleware())
 
-	// publicServerStarter is a callback that creates and starts the public HTTP server.
-	// It is passed into the api layer so it can dynamically start/stop the public server
-	// when settings change via the UI.
-	publicServerStarter := func(settings *service.Settings, rh2 *api.RawHandler) (context.CancelFunc, error) {
-		return startPublicServer(ctx, cfg, svc, settings, rh2, cl)
-	}
+	// Proxy manager owns every user-built listener. It is created
+	// here so the api layer (which mutates settings) can reach it
+	// for the per-save Reconcile call. The main server port is
+	// reserved so a misconfigured graph can't knock the admin UI
+	// offline by binding the same socket.
+	proxyMgr := proxy.NewManager(ctx, proxy.ServiceFromService(svc), cfg.Server.Host, []string{cfg.Server.Port})
+	defer proxyMgr.Stop()
 
-	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, rh, publicServerStarter); err != nil {
+	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, rh, proxyMgrWrapper{proxyMgr}); err != nil {
 		return err
 	}
 
@@ -222,13 +238,19 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		return err
 	}
 
-	// Start public server if enabled in DB settings
-	if settings.PublicPort != nil && settings.PublicPort.Enabled && settings.PublicPort.Port != "" {
-		cancel, err := startPublicServer(ctx, cfg, svc, settings, rh, cl)
-		if err != nil {
-			return fmt.Errorf("init public server: %w", err)
-		}
-		api.SetPublicServer(rh, cancel)
+	// Spin up every enabled proxy server from settings. Reconcile is
+	// idempotent and tolerates compile failures (the bad server is
+	// recorded in Status() and skipped) so one broken graph doesn't
+	// keep the others offline. When the deployment-wide proxy flag
+	// is disabled we pass an empty list — the manager stops every
+	// running listener but keeps the persisted graphs intact, so
+	// flipping the flag back on later restores them verbatim.
+	initialServers := settings.ProxyServers
+	if !svc.ProxyEnabled(ctx) {
+		initialServers = nil
+	}
+	if err := proxyMgr.Reconcile(initialServers); err != nil {
+		slog.Error("proxy initial reconcile reported errors", "error", err)
 	}
 
 	// All routes are now registered, so the leader's HTTP handler is
@@ -244,46 +266,6 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	return server.StartWithContext(ctx, net.JoinHostPort(cfg.Server.Host, cfg.Server.Port))
 }
 
-// startPublicServer creates and starts the public (unauthenticated) HTTP server.
-// Returns a cancel function to stop it.
-//
-// When clustering is enabled the same read-local / write-forward middleware
-// is attached, so write requests on the public port (e.g. Consul KV compat
-// PUT/DELETE) get routed to the leader while reads continue to serve from
-// this node's local replica.
-func startPublicServer(ctx context.Context, cfg *config.Config, svc *service.Service, settings *service.Settings, rh *api.RawHandler, cl *cluster.Cluster) (context.CancelFunc, error) {
-	pubServer := ada.New()
-	pubServer.Use(
-		mrecover.Middleware(),
-		mserver.Middleware(config.Service),
-		mcors.Middleware(),
-		mrequestid.Middleware(),
-		mlog.Middleware(),
-		mtelemetry.Middleware(),
-	)
-
-	if cl.Enabled() {
-		pubServer.Use(cl.Middleware())
-	}
-
-	mPublic := pubServer.Group(cfg.Server.BasePath)
-	if err := api.HandlePublic(mPublic, svc, rh); err != nil {
-		return nil, err
-	}
-
-	compat.Register(pubServer.Mux, svc, settings.Compat)
-
-	publicAddr := net.JoinHostPort(cfg.Server.Host, settings.PublicPort.Port)
-	slog.Info("starting public data server", "address", publicAddr)
-
-	pubCtx, pubCancel := context.WithCancel(ctx)
-
-	go func() {
-		if err := pubServer.StartWithContext(pubCtx, publicAddr); err != nil {
-			slog.Error("public data server failed", "error", err)
-			into.CtxCancel()
-		}
-	}()
-
-	return pubCancel, nil
-}
+// (The standalone startPublicServer was retired with the Proxy
+// builder feature; every user-facing listener now goes through
+// proxy.Manager which spawns one ada server per configured graph.)

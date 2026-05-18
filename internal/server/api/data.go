@@ -22,13 +22,6 @@ func (a *api) getData(c *ada.Context) error {
 	return a.resolveAndWriteData(c, key)
 }
 
-// getDataPublic serves resolved configuration data without authentication.
-// Intended for the public port where no token is required.
-func (a *api) getDataPublic(c *ada.Context) error {
-	key := c.Request.PathValue("*")
-	return a.resolveAndWriteData(c, key)
-}
-
 // resolveAndWriteData is the shared logic for serving configuration data.
 // It resolves the file (with variant/version/format), sets Content-Type, and writes the response.
 func (a *api) resolveAndWriteData(c *ada.Context, key string) error {

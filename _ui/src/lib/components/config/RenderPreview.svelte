@@ -182,14 +182,19 @@
  tabindex="-1"
  >
  <div class="bg-white dark:bg-warm-900 rounded-lg shadow-xl w-full max-w-[900px] max-h-[85vh] flex flex-col overflow-hidden">
- <div class="flex items-center justify-between px-4 py-2 border-b border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900">
+ <!-- Header: title + action buttons. `flex-wrap` so narrow viewports
+      (or extra action buttons in the future) spill onto a second
+      row instead of crushing the title into the buttons. `gap-y-2`
+      gives the wrapped row a little breathing space without
+      affecting the normal single-line layout. The file name used
+      to live on this title too ("Rendered Configuration — foo");
+      removed because the active tab strip already shows it and
+      the duplication just stole horizontal room. -->
+ <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-2 border-b border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900">
  <h2 id="modal-title" class="text-sm font-semibold text-slate-800 dark:text-slate-200">
  Rendered Configuration
- {#if activeTab}
- <span class="font-normal text-slate-500 dark:text-slate-400">— {activeTab.name}</span>
- {/if}
  </h2>
- <div class="flex items-center gap-1.5">
+ <div class="flex items-center gap-1.5 flex-wrap">
  {#if canMask}
  <button
  class="flex items-center gap-1 px-2 py-1 border rounded text-xs cursor-pointer transition-all duration-150
@@ -269,11 +274,35 @@
  </div>
 
   <div class="flex items-center justify-between px-4 py-1.5 border-t border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900">
- <span class="text-[11px] text-slate-500 dark:text-slate-400">
+  <!-- Inheritance summary line. Entries can be one of three kinds —
+       internal (source), external (resource + optional path), or
+       raw mount (mount + optional path). The previous version only
+       printed entry.source, so external/mount entries rendered as
+       an empty <strong> and the footer looked like "Inheriting from:"
+       with nothing after the colon — exactly the symptom that made
+       working inheritance look broken from the UI side. -->
+  <span class="text-[11px] text-slate-500 dark:text-slate-400">
  {#if activeTab?.meta.inherits?.length}
  Inheriting from:
  {#each activeTab.meta.inherits as entry, i}
- <strong class="text-brand-500">{entry.source}</strong>{#if entry.inject}<span class="text-emerald-500 ml-0.5">->{entry.inject}</span>{/if}{#if i < activeTab.meta.inherits.length - 1}<span class="text-slate-400 dark:text-slate-500">,</span>{/if}
+ {@const label =
+   entry.mount
+     ? (entry.path ? `${entry.mount}/${entry.path}` : entry.mount)
+     : entry.resource
+       ? (entry.path ? `${entry.resource}:${entry.path}` : entry.resource)
+       : (entry.source || '(empty)')}
+ {@const kind = entry.mount ? 'mount' : entry.resource ? 'ext' : 'src'}
+ <span class="ml-1 inline-flex items-baseline gap-1">
+   <span class="px-1 py-px text-[9px] font-medium uppercase tracking-wider rounded
+     {kind === 'mount'
+       ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-200'
+       : kind === 'ext'
+         ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-200'
+         : 'bg-slate-100 text-slate-600 dark:bg-warm-700 dark:text-warm-200'}">{kind}</span>
+   <strong class="text-brand-500 dark:text-brand-300 font-mono">{label}</strong>
+   {#if entry.format}<span class="text-slate-400 dark:text-warm-400">as {entry.format}</span>{/if}
+   {#if entry.inject}<span class="text-emerald-500">-&gt;{entry.inject}</span>{/if}
+ </span>{#if i < activeTab.meta.inherits.length - 1}<span class="text-slate-400 dark:text-slate-500">,</span>{/if}
  {/each}
  {:else}
  No inheritance configured

@@ -385,8 +385,15 @@
 
 <div class="flex flex-col h-full bg-[#1e1e1e]">
  {#if activeTab}
- <!-- Editor toolbar -->
- <div class="flex items-center justify-between px-3 py-1.5 bg-[#252526] border-b border-[#3c3c3c] text-xs text-gray-400 dark:text-slate-500 shrink-0">
+ <!-- Editor toolbar.
+      `flex-wrap` + gap-y so the left (format / convert) and right
+      (view / mask / reload / save) groups drop onto separate rows
+      on narrow viewports instead of squashing into each other. The
+      previous version used a `| <path>` suffix to label the file —
+      removed because the active tab strip just above already
+      shows the file path, and the duplicated label was the main
+      thing pushing the toolbar wide enough to overflow. -->
+ <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-3 py-1.5 bg-[#252526] border-b border-[#3c3c3c] text-xs text-gray-400 dark:text-slate-500 shrink-0">
  <div class="flex items-center gap-2 min-w-0">
  <span class="px-1.5 py-0.5 bg-brand-500 text-white rounded text-[10px] font-semibold shrink-0">{activeTab.format.toUpperCase()}</span>
  {#if activeTab.format !== 'raw' && !isHexMode}
@@ -404,10 +411,8 @@
  {/each}
  </div>
  {/if}
- <span class="text-gray-600 dark:text-slate-300 shrink-0">|</span>
- <span class="text-gray-500 dark:text-slate-400 overflow-hidden text-ellipsis whitespace-nowrap" title={activeTab.path}>{activeTab.path}</span>
  </div>
- <div class="flex items-center gap-1.5 shrink-0">
+ <div class="flex flex-wrap items-center gap-1.5">
  <!-- View mode toggle: Text / Hex -->
  <div class="flex items-center rounded border border-[#3c3c3c] overflow-hidden shrink-0">
  <button

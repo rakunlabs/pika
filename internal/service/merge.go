@@ -61,30 +61,30 @@ func mergeJSON(base, overlay []byte) ([]byte, error) {
 	return json.Marshal(merged)
 }
 
-// renameValueWrapperKey detects the {"value": <scalar>} wrapper shape used
-// by non-JSON external secret backends (GCP Secret Manager, Etcd, Consul KV)
-// and renames the wrapper key to the user-supplied newKey.
+// decodeWrappedValue handles the "inherit a Consul/etcd/HTTP payload as
+// yaml/json/toml" case. When a non-JSON external backend returns a plain
+// string, the upstream client wraps it as {"value": "<raw-string>"} so
+// every downstream layer sees a uniform object shape. That wrapper is
+// great for the browser UI but useless for inheritance — the user wrote
+// a real YAML/JSON document into the secret and wants it merged
+// structurally, not as a single opaque string under "value".
 //
-// Returns (renamedJSON, true) if the input matched the wrapper shape;
-// otherwise returns (data, false) and the caller should keep the original.
+// Contract: if data is exactly {"value": <string>} AND format is one of
+// "json"/"yaml"/"toml", the inner string is decoded with the matching
+// converter and the decoded JSON is returned. Returns (decoded, true) on
+// success. On any other input shape (object value, multiple keys, empty
+// format) returns (data, false) and the caller keeps the original.
 //
-// A "wrapper" is a top-level JSON object that contains a single key "value"
-// whose value is not an object — i.e., the synthetic envelope generated when
-// the underlying secret payload was a plain string/number/bool/array instead
-// of a JSON object. If newKey contains dots, only the first segment is used
-// because path filtering also splits on dots.
-func renameValueWrapperKey(data []byte, newKey string) ([]byte, bool) {
-	newKey = strings.TrimSpace(newKey)
-	if newKey == "" || newKey == "value" {
+// This is intentionally narrow: it only triggers on the synthetic
+// wrapper. If the provider already returned a real JSON object the
+// user's "format" hint is ignored — overriding a successful parse with
+// a different decoder would be surprising and almost always a mistake.
+func decodeWrappedValue(data []byte, format string) ([]byte, bool) {
+	format = strings.ToLower(strings.TrimSpace(format))
+	if format == "" || format == "raw" {
 		return data, false
 	}
-	// Use the first dot-segment so that an Include-paths entry like
-	// "db.password" still produces a top-level "db" key that filterByPaths
-	// can descend into (it can't, but at least the rename matches the filter).
-	if idx := strings.Index(newKey, "."); idx >= 0 {
-		newKey = newKey[:idx]
-	}
-	if newKey == "" || newKey == "value" || strings.Contains(newKey, "*") {
+	if format != "json" && format != "yaml" && format != "toml" {
 		return data, false
 	}
 
@@ -95,23 +95,18 @@ func renameValueWrapperKey(data []byte, newKey string) ([]byte, bool) {
 	if len(obj) != 1 {
 		return data, false
 	}
-	val, has := obj["value"]
-	if !has {
-		return data, false
-	}
-	// Only rename when the wrapped value is a scalar/array — i.e. the
-	// shape produced by the {"value": <plain>} fallback. If "value" is
-	// itself an object, the user might legitimately want the literal
-	// "value" key, so leave it alone.
-	if _, isObj := val.(map[string]any); isObj {
+	raw, ok := obj["value"].(string)
+	if !ok {
+		// Wrapper shape requires a string scalar — if it's a number,
+		// bool or array we have nothing meaningful to parse.
 		return data, false
 	}
 
-	out, err := json.Marshal(map[string]any{newKey: val})
+	converted, err := ConvertFormat([]byte(raw), format, "json")
 	if err != nil {
 		return data, false
 	}
-	return out, true
+	return converted, true
 }
 
 // filterByPaths filters a JSON object to only include fields matching

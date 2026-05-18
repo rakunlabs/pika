@@ -67,21 +67,13 @@ type VercelBlobConfigEntry struct {
 	Prefix  string `json:"prefix,omitempty"`
 }
 
-// PublicPortSettings configures the public (unauthenticated) HTTP server.
-type PublicPortSettings struct {
-	Enabled bool   `json:"enabled"`
-	Port    string `json:"port,omitempty"` // e.g. "9090"
-}
-
-// CompatSettings configures compatibility endpoints on the public server.
-type CompatSettings struct {
-	ConsulKV *ConsulKVSettings `json:"consul_kv,omitempty"`
-}
-
-// ConsulKVSettings configures the Consul KV API compatibility layer.
-type ConsulKVSettings struct {
-	BasePath string `json:"base_path,omitempty"` // default: "/consul"
-}
+// (PublicPortSettings / CompatSettings / ConsulKVSettings were removed
+// when the standalone /data + /raw "public port" + Consul KV compat
+// section was replaced by the user-built Proxy Servers — every
+// listener, every middleware and every endpoint shape that used to
+// live there is now an explicit node in a ProxyServer graph. The
+// settings field disappeared along with the types; any old row that
+// still carries the keys is safely ignored on unmarshal.)
 
 // ForwardAuthSettings configures forward-auth middleware that delegates
 // authentication to an external service. When Enabled, the middleware is
@@ -149,13 +141,17 @@ type Settings struct {
 	TFTPServe           *TFTPServeSettings           `json:"tftp_serve,omitempty"`
 	WebDAVServe         *WebDAVServeSettings         `json:"webdav_serve,omitempty"`
 	Hooks               []hook.Hook                  `json:"hooks,omitempty"`
-	PublicPort          *PublicPortSettings          `json:"public_port,omitempty"`
-	Compat              *CompatSettings              `json:"compat,omitempty"`
+	// ProxyServers is the operator-built set of public listeners.
+	// Replaces the previous PublicPort + Compat fields. Each entry
+	// is a full kaykay graph plus a denormalized pipeline meta blob
+	// the runner uses for change detection.
+	ProxyServers        []ProxyServer                `json:"proxy_servers,omitempty"`
 	ExternalPermissions *ExternalPermissionsSettings `json:"external_permissions,omitempty"`
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 	Auth                *AuthSettings                `json:"auth,omitempty"`
 	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
+	Proxy               *ProxySettings               `json:"proxy,omitempty"`
 
 	// SensitivePayload is the at-rest encrypted blob carrying the
 	// user-supplied secret values for fields above (S3 access keys,
@@ -169,6 +165,17 @@ type Settings struct {
 	// into bw. Empty/nil while the server is locked or for fresh
 	// installs that haven't written a settings row yet.
 	SensitivePayload []byte `json:"sensitive_payload,omitempty"`
+}
+
+// ProxySettings is the deployment-wide feature flag for the
+// user-built Proxy Servers. Same shape and semantics as
+// VaultSettings (Disabled=false-by-default for backward
+// compatibility) — when Disabled=true the SPA hides the /proxy
+// route, the runner refuses to start any listener, and the
+// /api/v1/proxy/* endpoints respond 404. Existing graphs are
+// preserved; flipping the flag back makes them runnable again.
+type ProxySettings struct {
+	Disabled bool `json:"disabled"`
 }
 
 // VaultSettings configures the personal-vault feature at the
@@ -282,13 +289,16 @@ type PatchSettings struct {
 	TFTPServe           *TFTPServeSettings           `json:"tftp_serve,omitempty"`
 	WebDAVServe         *WebDAVServeSettings         `json:"webdav_serve,omitempty"`
 	Hooks               *[]hook.Hook                 `json:"hooks,omitempty"` // pointer to distinguish nil from empty
-	PublicPort          *PublicPortSettings          `json:"public_port,omitempty"`
-	Compat              *CompatSettings              `json:"compat,omitempty"`
+	// ProxyServers is patched as a whole list (nil = no change, empty
+	// slice = clear all). Pointer-to-slice mirrors how Hooks / RawMounts
+	// distinguish "not provided" from "deliberately empty".
+	ProxyServers        *[]ProxyServer               `json:"proxy_servers,omitempty"`
 	ExternalPermissions *ExternalPermissionsSettings `json:"external_permissions,omitempty"`
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 	Auth                *AuthSettings                `json:"auth,omitempty"`
 	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
+	Proxy               *ProxySettings               `json:"proxy,omitempty"`
 }
 
 type ActionKey string
@@ -395,14 +405,9 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 		settings.Hooks = *patch.Hooks
 	}
 
-	// Handle public port update (if provided)
-	if patch.PublicPort != nil {
-		settings.PublicPort = patch.PublicPort
-	}
-
-	// Handle compat update (if provided)
-	if patch.Compat != nil {
-		settings.Compat = patch.Compat
+	// Handle proxy servers update (if provided)
+	if patch.ProxyServers != nil {
+		settings.ProxyServers = *patch.ProxyServers
 	}
 
 	// Handle external-permissions update (if provided)
@@ -433,7 +438,24 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 		settings.Vault = patch.Vault
 	}
 
+	// Handle proxy feature flag update (deployment-wide toggle).
+	if patch.Proxy != nil {
+		settings.Proxy = patch.Proxy
+	}
+
 	return s.UpdateSettings(ctx, settings)
+}
+
+// ProxyEnabled returns true when the deployment-level proxy feature
+// flag is on. Default is enabled (matches every previous build that
+// did not yet have the toggle) so flipping in to existing rows that
+// never wrote a Proxy entry preserves behaviour.
+func (s *Service) ProxyEnabled(ctx context.Context) bool {
+	settings, err := s.Settings(ctx)
+	if err != nil || settings == nil || settings.Proxy == nil {
+		return true
+	}
+	return !settings.Proxy.Disabled
 }
 
 // GetExternalPermissionsSettings returns the current external-permissions

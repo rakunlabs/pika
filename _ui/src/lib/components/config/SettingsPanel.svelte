@@ -3,8 +3,9 @@
   import { addToast } from '@/lib/store/toast.svelte';
   import { basePath } from '@/lib/basepath';
   import type { FileFormat, InheritEntry } from '@/lib/types/config';
-  import { Play, Info, Clock, HardDrive, GitBranch, FileText, Plus, Trash2, Layers, ChevronDown, ChevronRight, Pencil, Link, Copy, Check } from 'lucide-svelte';
+  import { Play, Info, Clock, HardDrive, GitBranch, FileText, Plus, Trash2, Layers, ChevronDown, ChevronRight, ChevronUp, Pencil, Link, Copy, Check } from 'lucide-svelte';
   import { onMount, tick } from 'svelte';
+  import InheritDialog from './InheritDialog.svelte';
 
   interface Props {
     onRender?: () => void;
@@ -93,21 +94,32 @@
     }
   }
 
-  // Inheritance state
+  // ── Inheritance state ──
+  // The Add / Edit form lives in InheritDialog (modal) to keep this
+  // panel scannable as the entry list grows. We only track the open
+  // flag and which entry (if any) is being edited; the dialog owns the
+  // form fields and reports back via onSubmit.
   let showInheritance = $state(true);
-  let showAddInherit = $state(false);
-  let newInheritSource = $state('');
-  let newInheritType = $state<'internal' | 'external' | 'mount'>('internal');
-  let newInheritResource = $state('');
-  let newInheritMount = $state('');
-  let newInheritPath = $state('');
-  let newInheritPaths = $state('');
-  let newInheritInject = $state('');
-  let externalPathSuggestions = $state<string[]>([]);
-  let loadingPaths = $state(false);
+  let showMergeDiagram = $state(false); // off by default — opt-in to keep the panel calm
+  let inheritDialogOpen = $state(false);
   let editingInheritIndex = $state<number | null>(null);
+  let editingInheritEntry = $state<InheritEntry | null>(null);
 
   const inheritEntries = $derived(activeTab?.meta?.inherits || []);
+
+  // Compact label for the merge diagram. Mirrors the list-row rendering
+  // but in a single line. Truncation happens via CSS; we just pick the
+  // most identifying field per source type.
+  function diagramLabel(entry: InheritEntry): string {
+    if (entry.mount) return entry.path ? `${entry.mount}/${entry.path}` : entry.mount;
+    if (entry.resource) return entry.path ? `${entry.resource}:${entry.path}` : entry.resource;
+    return entry.source || '(empty)';
+  }
+  function diagramKind(entry: InheritEntry): 'source' | 'ext' | 'mount' {
+    if (entry.mount) return 'mount';
+    if (entry.resource) return 'ext';
+    return 'source';
+  }
 
   onMount(() => {
     configStore.loadSettings();
@@ -128,45 +140,32 @@
   }
 
   // ── Inheritance handlers ──
-  function addInheritEntry() {
+  // openInheritDialog with index=null adds a new entry; with a number it
+  // edits the existing one. The dialog hydrates from editingInheritEntry,
+  // so we snapshot the entry here rather than letting the dialog reach
+  // back into activeTab (which keeps the dialog component reusable).
+  function openInheritDialog(index: number | null) {
     if (!activeTab) return;
-
-    const entry: InheritEntry = {};
-
-    if (newInheritType === 'internal') {
-      if (!newInheritSource.trim()) {
-        addToast('Source path is required', 'alert');
-        return;
-      }
-      entry.source = newInheritSource.trim();
-    } else if (newInheritType === 'mount') {
-      if (!newInheritMount) {
-        addToast('Mount prefix is required', 'alert');
-        return;
-      }
-      entry.mount = newInheritMount;
-      if (newInheritPath.trim()) {
-        entry.path = newInheritPath.trim();
-      }
+    if (index === null) {
+      editingInheritIndex = null;
+      editingInheritEntry = null;
     } else {
-      if (!newInheritResource) {
-        addToast('External resource is required', 'alert');
-        return;
-      }
-      entry.resource = newInheritResource;
-      if (newInheritPath.trim()) {
-        entry.path = newInheritPath.trim();
-      }
+      const entry = activeTab.meta.inherits?.[index];
+      if (!entry) return;
+      editingInheritIndex = index;
+      editingInheritEntry = entry;
     }
+    inheritDialogOpen = true;
+  }
 
-    const paths = newInheritPaths.split(',').map(p => p.trim()).filter(p => p.length > 0);
-    if (paths.length > 0) {
-      entry.paths = paths;
-    }
-    if (newInheritInject.trim()) {
-      entry.inject = newInheritInject.trim();
-    }
+  function closeInheritDialog() {
+    inheritDialogOpen = false;
+    editingInheritIndex = null;
+    editingInheritEntry = null;
+  }
 
+  function handleInheritSubmit(entry: InheritEntry) {
+    if (!activeTab) return;
     const current = [...(activeTab.meta.inherits || [])];
     const isEdit = editingInheritIndex !== null;
     if (isEdit) {
@@ -175,68 +174,8 @@
       current.push(entry);
     }
     configStore.updateTabMeta(activeTab.id, { inherits: current });
-
-    // Reset form
-    newInheritSource = '';
-    newInheritResource = '';
-    newInheritMount = '';
-    newInheritPath = '';
-    newInheritPaths = '';
-    newInheritInject = '';
-    externalPathSuggestions = [];
-    showAddInherit = false;
-    editingInheritIndex = null;
     addToast(isEdit ? 'Inheritance updated' : 'Inheritance added', 'success');
-  }
-
-  function startEditInherit(index: number) {
-    if (!activeTab) return;
-    const entry = activeTab.meta.inherits?.[index];
-    if (!entry) return;
-
-    if (entry.mount) {
-      newInheritType = 'mount';
-    } else if (entry.resource) {
-      newInheritType = 'external';
-    } else {
-      newInheritType = 'internal';
-    }
-    newInheritSource = entry.source || '';
-    newInheritResource = entry.resource || '';
-    newInheritMount = entry.mount || '';
-    newInheritPath = entry.path || '';
-    newInheritPaths = entry.paths ? entry.paths.join(', ') : '';
-    newInheritInject = entry.inject || '';
-    externalPathSuggestions = [];
-    editingInheritIndex = index;
-    showAddInherit = true;
-  }
-
-  function cancelInheritForm() {
-    showAddInherit = false;
-    editingInheritIndex = null;
-    newInheritSource = '';
-    newInheritResource = '';
-    newInheritMount = '';
-    newInheritPath = '';
-    newInheritPaths = '';
-    newInheritInject = '';
-    externalPathSuggestions = [];
-  }
-
-  async function loadExternalPaths(resourceName: string, prefix: string = '') {
-    if (!resourceName) {
-      externalPathSuggestions = [];
-      return;
-    }
-    loadingPaths = true;
-    try {
-      externalPathSuggestions = await configStore.listExternalPaths(resourceName, prefix);
-    } catch {
-      externalPathSuggestions = [];
-    } finally {
-      loadingPaths = false;
-    }
+    closeInheritDialog();
   }
 
   function removeInheritEntry(index: number) {
@@ -244,12 +183,22 @@
     const current = [...(activeTab.meta.inherits || [])];
     current.splice(index, 1);
     configStore.updateTabMeta(activeTab.id, { inherits: current.length > 0 ? current : undefined });
-    if (editingInheritIndex === index) {
-      cancelInheritForm();
-    } else if (editingInheritIndex !== null && editingInheritIndex > index) {
-      editingInheritIndex = editingInheritIndex - 1;
-    }
     addToast('Inheritance removed', 'success');
+  }
+
+  // Reordering. Order is semantically meaningful: the backend applies
+  // entries top-to-bottom (data.go:resolveInherits), and because each
+  // step uses the previous result as overlay, earlier entries end up
+  // with higher precedence than later ones. Swap-with-neighbor is the
+  // simplest mutation that gives the user full control without a
+  // drag-and-drop library.
+  function moveInherit(index: number, delta: -1 | 1) {
+    if (!activeTab) return;
+    const current = [...(activeTab.meta.inherits || [])];
+    const target = index + delta;
+    if (target < 0 || target >= current.length) return;
+    [current[index], current[target]] = [current[target], current[index]];
+    configStore.updateTabMeta(activeTab.id, { inherits: current });
   }
 
   // ── Variant handlers ──
@@ -503,7 +452,7 @@
           {#if showInheritance}
             <button
               class="flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] text-accent-700 dark:text-accent-300 bg-accent-50 dark:bg-accent-900/30 rounded cursor-pointer hover:bg-accent-100 dark:hover:bg-accent-900/50 transition-colors"
-              onclick={() => { editingInheritIndex = null; showAddInherit = true; }}
+              onclick={() => openInheritDialog(null)}
             >
               <Plus size={10} /> Add
             </button>
@@ -511,172 +460,109 @@
         </div>
 
         {#if showInheritance}
-          <!-- Add Inherit Form -->
-          {#if showAddInherit}
-            <div class="p-2.5 mb-2 {cardClass}">
-              <!-- Source type toggle -->
-              <div class="flex gap-1.5 mb-2">
-                <button
-                  class="flex-1 py-1 text-[10px] font-medium rounded transition-colors cursor-pointer
-                  {newInheritType === 'internal'
-                    ? 'bg-accent-100 text-accent-700 border border-accent-300 dark:bg-accent-900/40 dark:text-accent-200 dark:border-accent-700'
-                    : 'bg-slate-50 dark:bg-warm-900 text-slate-500 dark:text-warm-300 border border-slate-200 dark:border-warm-700 hover:bg-slate-100 dark:hover:bg-warm-700'}"
-                  onclick={() => { newInheritType = 'internal'; newInheritSource = ''; newInheritResource = ''; newInheritMount = ''; newInheritPath = ''; externalPathSuggestions = []; }}
-                >
-                  Internal
-                </button>
-                <button
-                  class="flex-1 py-1 text-[10px] font-medium rounded transition-colors cursor-pointer
-                  {newInheritType === 'external'
-                    ? 'bg-accent-100 text-accent-700 border border-accent-300 dark:bg-accent-900/40 dark:text-accent-200 dark:border-accent-700'
-                    : 'bg-slate-50 dark:bg-warm-900 text-slate-500 dark:text-warm-300 border border-slate-200 dark:border-warm-700 hover:bg-slate-100 dark:hover:bg-warm-700'}"
-                  onclick={() => { newInheritType = 'external'; newInheritSource = ''; newInheritResource = ''; newInheritMount = ''; newInheritPath = ''; externalPathSuggestions = []; }}
-                >
-                  External
-                </button>
-                <button
-                  class="flex-1 py-1 text-[10px] font-medium rounded transition-colors cursor-pointer
-                  {newInheritType === 'mount'
-                    ? 'bg-accent-100 text-accent-700 border border-accent-300 dark:bg-accent-900/40 dark:text-accent-200 dark:border-accent-700'
-                    : 'bg-slate-50 dark:bg-warm-900 text-slate-500 dark:text-warm-300 border border-slate-200 dark:border-warm-700 hover:bg-slate-100 dark:hover:bg-warm-700'}"
-                  onclick={() => { newInheritType = 'mount'; newInheritSource = ''; newInheritResource = ''; newInheritMount = ''; newInheritPath = ''; externalPathSuggestions = []; }}
-                >
-                  Mount
-                </button>
-              </div>
-
-              <!-- Source -->
-              {#if newInheritType === 'internal'}
-                <input
-                  type="text"
-                  bind:value={newInheritSource}
-                  placeholder="Config path (e.g., base/database)"
-                  class="{inputClass} mb-2"
-                />
-              {:else if newInheritType === 'mount'}
-                <!-- Raw mount selector -->
-                <select
-                  class="{selectClass} mb-2"
-                  bind:value={newInheritMount}
-                  onchange={() => { newInheritPath = ''; }}
-                >
-                  <option value="">Select mount</option>
-                  {#each rawMountPrefixes as prefix}
-                    <option value={prefix}>{prefix}</option>
-                  {/each}
-                </select>
-
-                <!-- Path within the mount -->
-                {#if newInheritMount}
-                  <label class="block mb-2">
-                    <span class="block text-[10px] text-slate-400 dark:text-warm-400 mb-0.5">File path (e.g., configs/base.json)</span>
-                    <input
-                      type="text"
-                      bind:value={newInheritPath}
-                      placeholder="Path within mount"
-                      class={inputClass}
-                    />
-                  </label>
-                {/if}
-              {:else}
-                <!-- External resource selector -->
-                <select
-                  class="{selectClass} mb-2"
-                  bind:value={newInheritResource}
-                  onchange={() => { newInheritPath = ''; loadExternalPaths(newInheritResource); }}
-                >
-                  <option value="">Select external resource</option>
-                  {#each externalResources as resource}
-                    <option value={resource}>{resource}</option>
-                  {/each}
-                </select>
-
-                <!-- Path within the resource -->
-                {#if newInheritResource}
-                  <label class="block mb-2">
-                    <span class="block text-[10px] text-slate-400 dark:text-warm-400 mb-0.5">Path (e.g., myapp/database)</span>
-                    <input
-                      type="text"
-                      bind:value={newInheritPath}
-                      placeholder="Secret or endpoint path"
-                      class={inputClass}
-                    />
-                  </label>
-
-                  <!-- Path suggestions from browse -->
-                  {#if loadingPaths}
-                    <div class="text-[10px] text-slate-400 dark:text-warm-400 mb-2">Loading paths...</div>
-                  {:else if externalPathSuggestions.length > 0}
-                    <div class="mb-2 max-h-32 overflow-y-auto {cardClass}">
-                      {#each externalPathSuggestions as suggestion}
-                        {@const isDir = suggestion.endsWith('/')}
-                        <button
-                          class="w-full text-left px-2 py-1 text-xs font-mono hover:bg-accent-50 dark:hover:bg-accent-900/30 transition-colors cursor-pointer border-b border-slate-100 dark:border-warm-700 last:border-b-0
-                          {isDir
-                            ? 'text-slate-500 dark:text-warm-300'
-                            : 'text-accent-700 dark:text-accent-300'}"
-                          onclick={() => {
-                            if (isDir) {
-                              newInheritPath = (newInheritPath ? newInheritPath.replace(/\/?$/, '/') : '') + suggestion;
-                              loadExternalPaths(newInheritResource, newInheritPath);
-                            } else {
-                              const base = newInheritPath.includes('/') ? newInheritPath.replace(/[^/]*$/, '') : '';
-                              newInheritPath = base + suggestion;
-                              externalPathSuggestions = [];
-                            }
-                          }}
-                        >
-                          {#if isDir}📁{:else}📄{/if} {suggestion}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                {/if}
-              {/if}
-
-              <!-- Paths filter -->
-              <label class="block mb-2">
-                <span class="block text-[10px] text-slate-400 dark:text-warm-400 mb-0.5">Include paths (optional)</span>
-                <input
-                  type="text"
-                  bind:value={newInheritPaths}
-                  placeholder="e.g., host, port, credentials.*"
-                  class={inputClass}
-                />
-              </label>
-
-              <!-- Inject target -->
-              <label class="block mb-2">
-                <span class="block text-[10px] text-slate-400 dark:text-warm-400 mb-0.5">Inject at (optional)</span>
-                <input
-                  type="text"
-                  bind:value={newInheritInject}
-                  placeholder="e.g., database.auth (empty = root)"
-                  class={inputClass}
-                />
-              </label>
-
-              <div class="flex gap-1.5">
-                <button
-                  class="flex-1 py-1 text-[11px] text-white bg-accent-600 rounded cursor-pointer hover:bg-accent-700 transition-colors"
-                  onclick={addInheritEntry}
-                >
-                  {editingInheritIndex !== null ? 'Save' : 'Add'}
-                </button>
-                <button
-                  class="flex-1 py-1 text-[11px] text-slate-500 dark:text-warm-300 bg-slate-100 dark:bg-warm-700 rounded cursor-pointer hover:bg-slate-200 dark:hover:bg-warm-600 transition-colors"
-                  onclick={cancelInheritForm}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          {/if}
-
-          <!-- Inherit entries list -->
-          {#if inheritEntries.length === 0 && !showAddInherit}
+          <!-- Inherit entries list.
+               Order is meaningful: the backend applies entries top-to-bottom
+               (resolveInherits in internal/service/data.go) and each step
+               uses the prior result as overlay, so entries higher in the
+               list win on key conflicts among the inherited sources. The
+               current file always overrides everything. Up/Down arrows let
+               the user fine-tune that precedence without a drag library. -->
+          {#if inheritEntries.length === 0}
             <p class="text-[11px] text-slate-400 dark:text-warm-400 italic">No inheritance. Add sources to merge configs from other files or external resources.</p>
           {:else}
+            <!-- Merge diagram (collapsible).
+                 Opt-in because most of the time the list itself is
+                 enough; the diagram is here for the "why is my config
+                 not what I expect" moment. The stack mirrors
+                 resolveInherits exactly: the top layer is the current
+                 file (always wins), then each inherited source from
+                 list-top to list-bottom, with the bottom-most acting
+                 as the original base.
+
+                 Layout: offset cards (margin-left grows with depth) so
+                 the eye reads it as a literal stack of sheets. Color
+                 matches the row pills (source=accent, ext=purple,
+                 mount=amber) for cross-reference. -->
+            <button
+              class="w-full flex items-center justify-between gap-1 px-1.5 py-1 mb-1.5 text-[10px] text-slate-500 dark:text-warm-300 rounded cursor-pointer hover:bg-slate-100 dark:hover:bg-warm-800 transition-colors"
+              onclick={() => showMergeDiagram = !showMergeDiagram}
+              title="Visualize how these sources stack into the final config"
+            >
+              <span class="flex items-center gap-1">
+                {#if showMergeDiagram}<ChevronDown size={10} />{:else}<ChevronRight size={10} />{/if}
+                <Layers size={10} />
+                <span>How sources merge</span>
+              </span>
+              <span class="text-slate-400 dark:text-warm-400">top wins</span>
+            </button>
+
+            {#if showMergeDiagram}
+              {@const total = inheritEntries.length}
+              {@const maxShown = 4}
+              {@const truncated = total > maxShown}
+              {@const head = truncated ? inheritEntries.slice(0, maxShown - 1) : inheritEntries}
+              {@const tail = truncated ? inheritEntries[total - 1] : null}
+              {@const hiddenCount = truncated ? total - maxShown : 0}
+              <div class="mb-2 px-2 py-2 rounded bg-slate-50 dark:bg-warm-900 border border-slate-200 dark:border-warm-700">
+                <!-- Topmost layer: the current file. Always wins; visually
+                     wider/stronger than the inherited layers below. -->
+                <div class="relative">
+                  <div class="flex items-center gap-1.5 px-2 py-1 rounded border border-accent-300 dark:border-accent-700 bg-accent-50 dark:bg-accent-900/40 text-[10px]">
+                    <FileText size={10} class="text-accent-700 dark:text-accent-300 shrink-0" />
+                    <span class="font-mono text-accent-700 dark:text-accent-300 truncate flex-1" title={activeTab.path}>
+                      {activeTab.path}
+                    </span>
+                    <span class="text-[9px] font-semibold uppercase tracking-wide text-accent-600 dark:text-accent-300 shrink-0">wins</span>
+                  </div>
+                </div>
+
+                <!-- Inherited layers, each offset slightly to read as a
+                     stack. We render head + tail with an ellipsis card
+                     in between when the list is long. -->
+                {#snippet layer(entry: InheritEntry, depth: number, isBase: boolean)}
+                  {@const kind = diagramKind(entry)}
+                  {@const kindClass =
+                    kind === 'mount'
+                      ? 'border-amber-300 dark:border-amber-700 bg-amber-50/70 dark:bg-amber-900/20 text-amber-700 dark:text-amber-200'
+                      : kind === 'ext'
+                        ? 'border-purple-300 dark:border-purple-700 bg-purple-50/70 dark:bg-purple-900/20 text-purple-700 dark:text-purple-200'
+                        : 'border-slate-200 dark:border-warm-700 bg-white dark:bg-warm-800 text-slate-600 dark:text-warm-200'}
+                  <div class="relative -mt-px" style="margin-left: {depth * 8}px">
+                    <div class="flex items-center gap-1.5 px-2 py-1 rounded border {kindClass} text-[10px]">
+                      <span class="font-mono text-[8px] uppercase tracking-wider opacity-70 w-7 shrink-0">{kind}</span>
+                      <span class="font-mono truncate flex-1" title={diagramLabel(entry)}>{diagramLabel(entry)}</span>
+                      {#if isBase}
+                        <span class="text-[9px] font-semibold uppercase tracking-wide opacity-70 shrink-0">base</span>
+                      {/if}
+                    </div>
+                  </div>
+                {/snippet}
+
+                {#each head as entry, i}
+                  {@render layer(entry, i + 1, !truncated && i === total - 1)}
+                {/each}
+
+                {#if truncated}
+                  <div class="relative -mt-px" style="margin-left: {(maxShown - 1) * 8}px">
+                    <div class="px-2 py-0.5 text-center text-[9px] text-slate-400 dark:text-warm-400 italic border border-dashed border-slate-200 dark:border-warm-700 rounded bg-white/50 dark:bg-warm-800/50">
+                      +{hiddenCount} more
+                    </div>
+                  </div>
+                  {#if tail}
+                    {@render layer(tail, maxShown, true)}
+                  {/if}
+                {/if}
+
+                <p class="mt-2 text-[9px] text-slate-400 dark:text-warm-400 leading-snug">
+                  Higher layer wins on key conflicts. Reorder with the ↑↓ buttons below.
+                </p>
+              </div>
+            {:else}
+              <p class="text-[10px] text-slate-400 dark:text-warm-400 mb-1.5">
+                Order = precedence among sources (top wins). Your local file always overrides.
+              </p>
+            {/if}
+
             <div class="space-y-1.5">
               {#each inheritEntries as entry, i (i)}
                 <div class="{cardClass} overflow-hidden">
@@ -718,10 +604,31 @@
                         </div>
                       {/if}
                     </div>
-                    <div class="flex items-center gap-1 shrink-0">
+                    <div class="flex items-center gap-0.5 shrink-0">
+                      <!-- Reorder up/down. First/last get a disabled state
+                           rather than hiding the buttons so the row's
+                           action column stays visually stable. -->
+                      <button
+                        class="p-0.5 text-slate-400 dark:text-warm-400 hover:text-accent-600 dark:hover:text-accent-300 cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-slate-400"
+                        onclick={() => moveInherit(i, -1)}
+                        disabled={i === 0}
+                        title="Move up (higher precedence)"
+                        aria-label="Move up"
+                      >
+                        <ChevronUp size={12} />
+                      </button>
+                      <button
+                        class="p-0.5 text-slate-400 dark:text-warm-400 hover:text-accent-600 dark:hover:text-accent-300 cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-slate-400"
+                        onclick={() => moveInherit(i, 1)}
+                        disabled={i === inheritEntries.length - 1}
+                        title="Move down (lower precedence)"
+                        aria-label="Move down"
+                      >
+                        <ChevronDown size={12} />
+                      </button>
                       <button
                         class="p-0.5 text-slate-400 dark:text-warm-400 hover:text-accent-600 dark:hover:text-accent-300 cursor-pointer transition-colors"
-                        onclick={() => startEditInherit(i)}
+                        onclick={() => openInheritDialog(i)}
                         title="Edit"
                       >
                         <Pencil size={12} />
@@ -834,3 +741,15 @@
     </div>
   {/if}
 </div>
+
+<!-- Inheritance editor lives outside the scrollable panel so it overlays
+     the whole viewport instead of being clipped by the panel's overflow. -->
+<InheritDialog
+  isOpen={inheritDialogOpen}
+  editIndex={editingInheritIndex}
+  initialEntry={editingInheritEntry}
+  {externalResources}
+  {rawMountPrefixes}
+  onSubmit={handleInheritSubmit}
+  onClose={closeInheritDialog}
+/>

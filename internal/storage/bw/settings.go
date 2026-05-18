@@ -65,13 +65,13 @@ func rowToSettings(r *settingsRow) *service.Settings {
 		TFTPServe:           r.TFTPServe,
 		WebDAVServe:         r.WebDAVServe,
 		Hooks:               r.Hooks,
-		PublicPort:          r.PublicPort,
-		Compat:              r.Compat,
+		ProxyServers:        r.ProxyServers,
 		ExternalPermissions: r.ExternalPermissions,
 		ForwardAuth:         r.ForwardAuth,
 		Auth:                r.Auth,
 		UserSync:            r.UserSync,
 		Vault:               r.Vault,
+		Proxy:               r.Proxy,
 		SensitivePayload:    r.SensitivePayload,
 	}
 }
@@ -89,13 +89,13 @@ func settingsToRow(s *service.Settings) *settingsRow {
 		TFTPServe:           s.TFTPServe,
 		WebDAVServe:         s.WebDAVServe,
 		Hooks:               s.Hooks,
-		PublicPort:          s.PublicPort,
-		Compat:              s.Compat,
+		ProxyServers:        s.ProxyServers,
 		ExternalPermissions: s.ExternalPermissions,
 		ForwardAuth:         s.ForwardAuth,
 		Auth:                s.Auth,
 		UserSync:            s.UserSync,
 		Vault:               s.Vault,
+		Proxy:               s.Proxy,
 		SensitivePayload:    s.SensitivePayload,
 	}
 }

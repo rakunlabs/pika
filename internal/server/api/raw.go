@@ -33,11 +33,6 @@ type mountEntry struct {
 	Writable bool
 }
 
-// publicServerInfo holds references to the running public HTTP server.
-type publicServerInfo struct {
-	cancel context.CancelFunc
-}
-
 // RawHandler holds the mounted filesystem backends.
 // Mounts can be updated at runtime (hot-reload from settings).
 type RawHandler struct {
@@ -51,7 +46,6 @@ type RawHandler struct {
 	sftpCancel   context.CancelFunc
 	tftpCancel   context.CancelFunc
 	webdavCancel context.CancelFunc
-	publicSrv    *publicServerInfo
 	appCtx       context.Context
 	dispatcher   *hook.Dispatcher
 }
@@ -426,7 +420,4 @@ func (h *RawHandler) Dispatcher() *hook.Dispatcher {
 	return h.dispatcher
 }
 
-// getRawPublic serves raw files without authentication.
-func (a *api) getRawPublic(c *ada.Context) error {
-	return a.rawHandler.serveRaw(c)
-}
+

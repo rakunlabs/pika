@@ -35,38 +35,31 @@ type Info struct {
 	Date    string `json:"date,omitempty"`
 }
 
-// PublicServerStarter is a callback that creates, starts and returns a cancel function
-// for the public HTTP server. It is set by the server package to encapsulate the
-// middleware/routing setup that lives in server.go.
-type PublicServerStarter func(settings *service.Settings, rh *RawHandler) (cancel context.CancelFunc, err error)
+// ProxyReconciler is the narrow surface api needs from the proxy
+// runner. server.go injects an *proxy.Manager value; defining the
+// interface here keeps the api package free of an import on proxy
+// (which would cycle: api -> proxy -> service -> api consumers).
+type ProxyReconciler interface {
+	Reconcile(servers []service.ProxyServer) error
+	Validate(s service.ProxyServer) (any, error)
+	Status() any
+}
 
 type api struct {
-	svc               *service.Service
-	info              Info
-	encStore          *secret.Storage     // nil if encryption is disabled
-	mgr               *authx.Manager      // auth manager (login/logout/cap resolution)
-	rawHandler        *RawHandler         // nil if no raw mounts configured
-	startPublicServer PublicServerStarter // set by server.go
-	syncScheduler     *usersync.Scheduler // nil until set by server.go
+	svc           *service.Service
+	info          Info
+	encStore      *secret.Storage     // nil if encryption is disabled
+	mgr           *authx.Manager      // auth manager (login/logout/cap resolution)
+	rawHandler    *RawHandler         // nil if no raw mounts configured
+	proxyMgr      ProxyReconciler     // nil until server.go injects via Handle
+	syncScheduler *usersync.Scheduler // nil until set by server.go
 }
 
 type response struct {
 	Message string `json:"message,omitempty"`
 }
 
-// HandlePublic registers unauthenticated endpoints for the public port.
-// Only /data/*, /raw/* and /healthz are exposed — no admin API, no UI.
-func HandlePublic(m *ada.Mux, svc *service.Service, rh *RawHandler) error {
-	a := &api{svc: svc, rawHandler: rh}
-
-	m.ErrorHandler(a.errorHandler)
-	m.GET("/data/*", m.Wrap(a.getDataPublic))
-	m.GET("/raw/*", m.Wrap(a.getRawPublic))
-	m.GET("/healthz", m.Wrap(a.healthzHandler))
-	return nil
-}
-
-func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, mgr *authx.Manager, rh *RawHandler, publicStarter PublicServerStarter) error {
+func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, mgr *authx.Manager, rh *RawHandler, proxyMgr ProxyReconciler) error {
 	// Set hook service identification from config
 	hook.ServiceName = config.ServiceName
 	hook.Version = config.Version
@@ -76,7 +69,7 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// path share one instance. Started below after the routes register.
 	syncSched := usersync.NewScheduler(svc)
 
-	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, rawHandler: rh, startPublicServer: publicStarter, syncScheduler: syncSched}
+	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, rawHandler: rh, proxyMgr: proxyMgr, syncScheduler: syncSched}
 
 	m.ErrorHandler(api.errorHandler)
 
@@ -250,6 +243,22 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.GET("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.getSettings)))
 	m.POST("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.postSettings)))
 
+	// Proxy: split into read vs. manage caps. Read covers the
+	// dashboard, status panel, catalog discovery and the in-app
+	// test request console; manage adds CRUD and validate. The
+	// dedicated caps (rather than reusing settings.manage) let an
+	// operator hand a teammate "see proxies, run tests" without
+	// also handing them every other settings knob.
+	m.GET("/api/v1/proxy", m.Wrap(api.withPerm(service.CapProxyRead, api.listProxyServers)))
+	m.GET("/api/v1/proxy/catalog", m.Wrap(api.withPerm(service.CapProxyRead, api.getProxyCatalog)))
+	m.GET("/api/v1/proxy/status", m.Wrap(api.withPerm(service.CapProxyRead, api.getProxyStatus)))
+	m.GET("/api/v1/proxy/{id}", m.Wrap(api.withPerm(service.CapProxyRead, api.getProxyServer)))
+	m.POST("/api/v1/proxy/test", m.Wrap(api.withPerm(service.CapProxyRead, api.proxyTest)))
+	m.POST("/api/v1/proxy", m.Wrap(api.withPerm(service.CapProxyManage, api.createProxyServer)))
+	m.PUT("/api/v1/proxy/{id}", m.Wrap(api.withPerm(service.CapProxyManage, api.updateProxyServer)))
+	m.DELETE("/api/v1/proxy/{id}", m.Wrap(api.withPerm(service.CapProxyManage, api.deleteProxyServer)))
+	m.POST("/api/v1/proxy/{id}/validate", m.Wrap(api.withPerm(service.CapProxyManage, api.validateProxyServer)))
+
 	// Backup & Restore. CapSettingsManage is the only gate — anyone
 	// authorized to manage settings can already export the entire
 	// DB, so no additional admin-secret step is required.
@@ -273,15 +282,15 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// rather than `*` because middle-segment `*` wildcards in this
 	// router don't surface their captured segment via PathValue —
 	// the value would silently come back empty. Named params do.
-	m.GET("/api/v1/external/resources", m.Wrap(api.withPerm(service.CapSettingsManage, api.listExternalResources)))
-	m.GET("/api/v1/external/{name}/paths", m.Wrap(api.withPerm(service.CapSettingsManage, api.listExternalPaths)))
-	m.POST("/api/v1/external/{name}/test", m.Wrap(api.withPerm(service.CapSettingsManage, api.testExternalResource)))
-	m.POST("/api/v1/external/{name}/read", m.Wrap(api.withPerm(service.CapSettingsManage, api.readExternalEntry)))
-	m.POST("/api/v1/external/{name}/write", m.Wrap(api.withPerm(service.CapSettingsManage, api.writeExternalEntry)))
-	m.POST("/api/v1/external/{name}/delete", m.Wrap(api.withPerm(service.CapSettingsManage, api.deleteExternalEntry)))
-	m.POST("/api/v1/external/{name}/versions", m.Wrap(api.withPerm(service.CapSettingsManage, api.listExternalVersions)))
-	m.POST("/api/v1/external/{name}/version", m.Wrap(api.withPerm(service.CapSettingsManage, api.readExternalVersion)))
-	m.GET("/api/v1/external/{name}/search", m.Wrap(api.withPerm(service.CapSettingsManage, api.searchExternal)))
+	m.GET("/api/v1/external/resources", m.Wrap(api.withPerm(service.CapExternalRead, api.listExternalResources)))
+	m.GET("/api/v1/external/{name}/paths", m.Wrap(api.withPerm(service.CapExternalRead, api.listExternalPaths)))
+	m.POST("/api/v1/external/{name}/test", m.Wrap(api.withPerm(service.CapExternalRead, api.testExternalResource)))
+	m.POST("/api/v1/external/{name}/read", m.Wrap(api.withPerm(service.CapExternalRead, api.readExternalEntry)))
+	m.POST("/api/v1/external/{name}/write", m.Wrap(api.withPerm(service.CapExternalWrite, api.writeExternalEntry)))
+	m.POST("/api/v1/external/{name}/delete", m.Wrap(api.withPerm(service.CapExternalWrite, api.deleteExternalEntry)))
+	m.POST("/api/v1/external/{name}/versions", m.Wrap(api.withPerm(service.CapExternalRead, api.listExternalVersions)))
+	m.POST("/api/v1/external/{name}/version", m.Wrap(api.withPerm(service.CapExternalRead, api.readExternalVersion)))
+	m.GET("/api/v1/external/{name}/search", m.Wrap(api.withPerm(service.CapExternalRead, api.searchExternal)))
 
 	// User-sync endpoints (LDAP and future drivers). The endpoints
 	// inspect/run the scheduler that's owned by this api struct.
@@ -400,6 +409,7 @@ func (a *api) infoHandler(c *ada.Context) error {
 	// toggle in Settings → Security → Personal vault, so the link
 	// disappears the moment an admin flips the toggle.
 	vaultEnabled := a.svc.VaultEnabled(ctx)
+	proxyEnabled := a.svc.ProxyEnabled(ctx)
 
 	resp := struct {
 		Info
@@ -413,6 +423,7 @@ func (a *api) infoHandler(c *ada.Context) error {
 		SetupRequired  bool                    `json:"setup_required,omitempty"`
 		RawMounts      []MountInfo             `json:"raw_mounts,omitempty"`
 		VaultEnabled   bool                    `json:"vault_enabled"`
+		ProxyEnabled   bool                    `json:"proxy_enabled"`
 		VaultItemTypes []service.VaultItemType `json:"vault_item_types,omitempty"`
 	}{
 		Info:           a.info,
@@ -425,6 +436,7 @@ func (a *api) infoHandler(c *ada.Context) error {
 		Capabilities:   service.KnownCapabilities,
 		RawMounts:      a.rawHandler.MountsInfo(),
 		VaultEnabled:   vaultEnabled,
+		ProxyEnabled:   proxyEnabled,
 		VaultItemTypes: service.KnownVaultItemTypes,
 	}
 
@@ -508,13 +520,25 @@ func (a *api) postSettings(c *ada.Context) error {
 		}
 	}
 
-	// If public port or compat were updated, reload the public server
-	if patchSettings.PublicPort != nil || patchSettings.Compat != nil {
+	// If proxy servers were updated OR the proxy feature flag was
+	// flipped, reconcile the runner. Reading settings fresh covers
+	// either trigger: the patch may contain only the Proxy toggle,
+	// in which case we need the (unchanged) ProxyServers list, and
+	// vice versa. When the deployment-wide proxy flag is off we
+	// reconcile with an empty list so the manager stops everything
+	// while leaving the graphs persisted for later.
+	if a.proxyMgr != nil && (patchSettings.ProxyServers != nil || patchSettings.Proxy != nil) {
 		settings, err := a.svc.Settings(c.Request.Context())
 		if err != nil {
-			slog.Error("failed to read settings for public server reload", "error", err)
+			slog.Error("read settings for proxy reload", "error", err)
 		} else {
-			a.reloadPublicServer(settings)
+			desired := settings.ProxyServers
+			if !a.svc.ProxyEnabled(c.Request.Context()) {
+				desired = nil
+			}
+			if err := a.proxyMgr.Reconcile(desired); err != nil {
+				slog.Error("proxy reconcile failed", "error", err)
+			}
 		}
 	}
 
@@ -780,47 +804,10 @@ func (a *api) reloadWebDAVServe(settings *service.Settings) {
 	}
 }
 
-// reloadPublicServer stops the existing public HTTP server (if running) and starts a new one if enabled.
-func (a *api) reloadPublicServer(settings *service.Settings) {
-	// Stop existing public server
-	a.rawHandler.mu.Lock()
-	oldSrv := a.rawHandler.publicSrv
-	a.rawHandler.publicSrv = nil
-	a.rawHandler.mu.Unlock()
-
-	if oldSrv != nil && oldSrv.cancel != nil {
-		oldSrv.cancel()
-	}
-
-	if settings.PublicPort == nil || !settings.PublicPort.Enabled || settings.PublicPort.Port == "" {
-		slog.Info("public server disabled")
-		return
-	}
-
-	if a.startPublicServer == nil {
-		slog.Error("public server starter not configured")
-		return
-	}
-
-	cancel, err := a.startPublicServer(settings, a.rawHandler)
-	if err != nil {
-		slog.Error("failed to start public server", "error", err)
-		return
-	}
-
-	a.rawHandler.mu.Lock()
-	a.rawHandler.publicSrv = &publicServerInfo{cancel: cancel}
-	a.rawHandler.mu.Unlock()
-
-	slog.Info("public server reloaded", "port", settings.PublicPort.Port)
-}
-
-// SetPublicServer stores the public server cancel func in the rawHandler.
-func SetPublicServer(rh *RawHandler, cancel context.CancelFunc) {
-	rh.mu.Lock()
-	rh.publicSrv = &publicServerInfo{cancel: cancel}
-	rh.mu.Unlock()
-}
+// (The standalone "public server" was retired with the introduction
+// of the user-built Proxy Servers. Reloads now flow through the
+// proxy Manager via postSettings; see ProxyReconciler at the top of
+// this file.)
 
 // BuildMountEntries creates mountEntry instances from settings entries.
 // Returns successfully created entries and any errors for failed ones.

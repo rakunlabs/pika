@@ -1,18 +1,23 @@
 <script lang="ts">
  import { link, router } from 'svelte-spa-router';
  import { appStore } from '@/lib/store/store.svelte';
-  import { Blocks, Settings, User, Users, LogOut, HardDrive, FileSliders, Lock, Globe } from 'lucide-svelte';
+  import { Blocks, Settings, User, Users, LogOut, HardDrive, FileSliders, Lock, Globe, Network } from 'lucide-svelte';
  import ThemeSwitcher from '@/lib/components/ThemeSwitcher.svelte';
 
  const info = $derived(appStore.info);
  const identity = $derived(appStore.identity);
 
-  const hasRawMounts = $derived((info?.raw_mounts?.length ?? 0) > 0);
-  // VaultEnabled is set by /api/v1/info from the server-side vault
-  // coordinator. The /vault page renders an "unavailable" fallback
-  // when this is false, but we hide the nav entry entirely so the
-  // user isn't tempted to click a dead link.
-  const vaultEnabled = $derived(info?.vault_enabled ?? false);
+   const hasRawMounts = $derived((info?.raw_mounts?.length ?? 0) > 0);
+   // VaultEnabled is set by /api/v1/info from the server-side vault
+   // coordinator. The /vault page renders an "unavailable" fallback
+   // when this is false, but we hide the nav entry entirely so the
+   // user isn't tempted to click a dead link.
+   const vaultEnabled = $derived(info?.vault_enabled ?? false);
+   // ProxyEnabled mirrors vault_enabled — the deployment-wide
+   // feature flag set under Settings → Features. When off we hide
+   // the nav link so the surface looks like the feature simply
+   // doesn't exist on this build.
+   const proxyEnabled = $derived(info?.proxy_enabled ?? false);
 
   const navItems = $derived.by(() => {
   const items: { path: string; label: string; icon: typeof Settings }[] = [];
@@ -34,11 +39,22 @@
 
    // External resources page: dedicated list/view/edit/test surface for
    // configured external backends (Vault, K8s, Consul, etcd, AWS, GCP,
-   // Azure, HTTP). Same capability as the in-Settings section that
-   // also exposes the same data, so hide the nav entry for users who
-   // would only see a 403 banner anyway.
-   if (appStore.hasPermission('settings.manage')) {
+   // Azure, HTTP). Gated by external.read; write actions inside the page
+   // additionally require external.write. Configuring which resources
+   // exist (CRUD on the resource definitions themselves) stays under
+   // settings.manage via the External section in Settings.
+   if (appStore.hasPermission('external.read')) {
    items.push({ path: '/external', label: 'External', icon: Globe });
+   }
+
+   // Proxy page: build custom HTTP listeners from a kaykay node
+   // graph. Gated on the deployment-wide feature flag + the
+   // dedicated proxy.read capability (proxy.manage is checked
+   // inside the page for write actions). Splitting from
+   // settings.manage means a teammate can be granted view+test
+   // without also unlocking auth, secrets, mounts etc.
+   if (proxyEnabled && appStore.hasPermission('proxy.read')) {
+   items.push({ path: '/proxy', label: 'Proxy', icon: Network });
    }
 
   // Settings is always visible: even users without settings.manage can

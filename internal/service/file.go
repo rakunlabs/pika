@@ -38,6 +38,17 @@ type InheritEntry struct {
 	// Supports dot-notation (e.g., "database.auth" injects under config.database.auth).
 	// If empty, data is merged at the root level.
 	Inject string `json:"inject,omitempty"`
+	// Format hints how to decode the raw payload when the external/mount
+	// backend returns a plain string (the {"value": "<string>"} wrapper
+	// shape produced by Consul/Etcd/GCP/HTTP for non-JSON values). When
+	// set to "json", "yaml" or "toml", the wrapped string is parsed with
+	// that decoder before merge/inject/filter run. When empty, behaviour
+	// is unchanged: provider-side JSON parsing is trusted, and a
+	// non-JSON payload stays wrapped as {"value": "..."}.
+	//
+	// Only meaningful for Resource/Mount entries; ignored for internal
+	// sources (those carry their own meta.format).
+	Format string `json:"format,omitempty"`
 }
 
 // FileMeta holds metadata about a configuration file.

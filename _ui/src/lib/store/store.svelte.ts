@@ -25,6 +25,10 @@ export interface AppInfo {
   // false, the SPA hides the /vault link entirely — the routes themselves
   // 503 in that case, so a stray bookmark just fails closed.
   vault_enabled?: boolean;
+  // ProxyEnabled mirrors the deployment-level proxy feature flag.
+  // When false, the SPA hides the /proxy link and the endpoints
+  // 404; saved graphs are preserved on the server.
+  proxy_enabled?: boolean;
   // VaultItemTypes is the server's known item-type vocabulary, used by
   // the new-item picker. Empty when vault is disabled.
   vault_item_types?: string[];

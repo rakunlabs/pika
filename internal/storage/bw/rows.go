@@ -733,13 +733,15 @@ type settingsRow struct {
 	TFTPServe           *service.TFTPServeSettings           `bw:"tftp_serve"`
 	WebDAVServe         *service.WebDAVServeSettings         `bw:"webdav_serve"`
 	Hooks               []hook.Hook                          `bw:"hooks"`
-	PublicPort          *service.PublicPortSettings          `bw:"public_port"`
-	Compat              *service.CompatSettings              `bw:"compat"`
+	// ProxyServers replaces the legacy PublicPort + Compat fields.
+	// Each entry is a full kaykay graph plus pipeline metadata.
+	ProxyServers        []service.ProxyServer                `bw:"proxy_servers"`
 	ExternalPermissions *service.ExternalPermissionsSettings `bw:"external_permissions"`
 	ForwardAuth         *service.ForwardAuthSettings         `bw:"forward_auth"`
 	Auth                *service.AuthSettings                `bw:"auth"`
 	UserSync            *service.UserSyncSettings            `bw:"user_sync"`
 	Vault               *service.VaultSettings               `bw:"vault"`
+	Proxy               *service.ProxySettings               `bw:"proxy"`
 	// SensitivePayload mirrors service.Settings.SensitivePayload —
 	// the encrypted blob holding all secret-bearing values that the
 	// secret.Storage wrapper unpacks during Get. bw stores it as raw

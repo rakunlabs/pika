@@ -121,6 +121,33 @@ body {
   @apply h-full w-full;
 }
 
+/* Default page-level text color so anything rendered OUTSIDE the App
+   shell's `text-slate-*` div still inherits a sensible value.
+
+   Background:
+   - App.svelte's `{:else}` branch wraps the routed UI in
+     `text-slate-800 dark:text-slate-100`. That handles 99% of the
+     tree.
+   - Full-screen overlays mounted at the App root level (UnlockScreen,
+     and any future portal-style modal) sit OUTSIDE that wrapper,
+     so they inherit from <body>, which the browser leaves at its
+     UA default (`CanvasText` / black).
+   - The form-element `color: inherit` rule below relies on a usable
+     ancestor color. Without this default the rule cheerfully
+     inherits black-on-dark — exactly the "input text is unreadable
+     on the locked screen" bug.
+
+   Setting it once on <body> means every escape hatch (overlays,
+   teleported dialogs, future portals) gets the right text color for
+   free, and component-level Tailwind classes still override it
+   wherever a designer wants a different tone. */
+body {
+  color: rgb(30 41 59); /* slate-800 */
+}
+.dark body {
+  color: rgb(241 245 249); /* slate-100 */
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
    Form-element color inheritance (dark mode fix).
 
@@ -162,6 +189,47 @@ textarea::placeholder {
 input,
 textarea {
   -webkit-text-fill-color: inherit;
+}
+
+/* Chrome / Edge / Safari autofill override.
+
+   When the browser autofills a saved credential, it injects its own
+   user-agent style: black text on a pale blue/yellow background that
+   ignores `color`, `background`, and any Tailwind class on the
+   element. The standard workaround is a giant inset box-shadow (which
+   IS honoured during autofill) plus an explicit text-fill-color.
+
+   We split light/dark so the autofilled field still reads correctly
+   under both themes. The shadow color matches the surrounding input
+   bg (white / warm-700) so the autofilled state is visually
+   indistinguishable from a manually-typed value — without this, a
+   user landing on the locked screen with a saved server key sees a
+   stark light rectangle with black text against the dark card. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active,
+textarea:-webkit-autofill,
+textarea:-webkit-autofill:hover,
+textarea:-webkit-autofill:focus,
+textarea:-webkit-autofill:active {
+  -webkit-text-fill-color: rgb(30 41 59); /* slate-800 (light mode) */
+  -webkit-box-shadow: 0 0 0 1000px #ffffff inset;
+  caret-color: rgb(30 41 59);
+  transition: background-color 9999s ease-in-out 0s; /* defeat the autofill fade-in */
+}
+
+.dark input:-webkit-autofill,
+.dark input:-webkit-autofill:hover,
+.dark input:-webkit-autofill:focus,
+.dark input:-webkit-autofill:active,
+.dark textarea:-webkit-autofill,
+.dark textarea:-webkit-autofill:hover,
+.dark textarea:-webkit-autofill:focus,
+.dark textarea:-webkit-autofill:active {
+  -webkit-text-fill-color: #f1f5f9; /* slate-100 — matches dark:text-slate-100 used across forms */
+  -webkit-box-shadow: 0 0 0 1000px #1a1a1a inset; /* warm-900 — matches dark:bg-warm-900 used by Login/Unlock inputs */
+  caret-color: #f1f5f9;
 }
 
 /* Scrollbar styling */

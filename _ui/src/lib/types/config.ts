@@ -26,6 +26,13 @@ export interface InheritEntry {
   path?: string;      // Resource-specific path (e.g., Vault secret path, HTTP endpoint path, or file path within mount)
   paths?: string[];   // Fields to pull from the source (dot-notation, wildcards)
   inject?: string;    // Where to place in the config (dot-notation, empty = root)
+  // Decoder hint for non-JSON external/mount payloads. When the provider
+  // returns {"value": "<raw-string>"} (Consul / etcd / GCP / HTTP fallback
+  // for unparseable bodies), this tells the backend to parse that string
+  // as the named format before merging. Empty / omitted = current
+  // behaviour (no special handling). Internal sources use their own
+  // meta.format and ignore this field.
+  format?: 'json' | 'yaml' | 'toml';
 }
 
 // File metadata
@@ -447,20 +454,44 @@ export interface Hook {
   targets: HookTarget[];
 }
 
-// Public server settings stored in DB
-export interface PublicPortSettings {
+// Proxy server graph entry — one user-built listener with its
+// kaykay node/edge graph and a denormalized pipeline summary.
+export interface ProxyServer {
+  id: string;
+  name: string;
   enabled: boolean;
-  port?: string;     // e.g. "9090"
+  host?: string;
+  port: string;
+  nodes: ProxyNode[];
+  edges: ProxyEdge[];
+  // pipeline is read-only from the UI; the backend regenerates it
+  // on every save. Carried so the live status panel can compare
+  // the row's hash with the runner's hash.
+  pipeline?: { hash?: string; listen_host?: string; listen_port?: string };
 }
 
-// Compat endpoint settings stored in DB
-export interface CompatSettings {
-  consul_kv?: ConsulKVSettings;
+export interface ProxyNode {
+  id: string;
+  // Node types match the backend graph.go constants. 'router' was
+  // retired in favour of 'switch' — the latter supports host/IP/
+  // path/method/header/query rules with a dedicated default branch.
+  type: 'listener' | 'middleware' | 'switch' | 'handler';
+  subtype?: string;
+  position: { x: number; y: number };
+  // Opaque per-node config matching the backend schema for the
+  // (type, subtype) pair. Catalog endpoint ships the schemas.
+  // For switch nodes this carries the SwitchConfig (see backend
+  // switch.go) — { rules: [{ id, label?, host?, cidrs?, path?,
+  //                          methods?, headers?, query? }, ...] }.
+  config?: Record<string, unknown>;
 }
 
-// Consul KV compatibility layer settings
-export interface ConsulKVSettings {
-  base_path?: string; // default: "/consul"
+export interface ProxyEdge {
+  id: string;
+  source: string;
+  source_handle?: string;
+  target: string;
+  target_handle?: string;
 }
 
 // Forward-auth settings — delegates authentication to an external service.
@@ -503,12 +534,18 @@ export interface Settings {
   tftp_serve?: TFTPServeSettings;
   webdav_serve?: WebDAVServeSettings;
   hooks?: Hook[];
-  public_port?: PublicPortSettings;
-  compat?: CompatSettings;
+  proxy_servers?: ProxyServer[];
   external_permissions?: ExternalPermissionsSettings;
   forward_auth?: ForwardAuthSettings;
   user_sync?: UserSyncSettings;
   vault?: VaultSettings;
+  proxy?: ProxySettings;
+}
+
+// ProxySettings is the deployment-wide feature flag for the
+// user-built Proxy Servers. Default disabled=false → enabled.
+export interface ProxySettings {
+  disabled: boolean;
 }
 
 // VaultSettings is the admin-level feature flag for the personal

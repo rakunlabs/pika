@@ -1,5 +1,5 @@
 <script lang="ts">
- import { Key, Globe, FolderOpen, Share2, Server, Webhook, RotateCw, Lock, HardDrive, ShieldCheck, Info, Users, Palette, KeyRound, Vault } from "lucide-svelte";
+ import { Key, Globe, FolderOpen, Share2, Server, Webhook, RotateCw, ToggleLeft, HardDrive, ShieldCheck, Info, Users, Palette, KeyRound, Vault } from "lucide-svelte";
  import { appStore } from '@/lib/store/store.svelte';
 
  import AppearanceSection from "@/pages/settings/AppearanceSection.svelte";
@@ -10,16 +10,15 @@
  import RawMountsSection from "@/pages/settings/RawMountsSection.svelte";
  import FileSharingSection from "@/pages/settings/FileSharingSection.svelte";
  import FileServersSection from "@/pages/settings/FileServersSection.svelte";
- import PublicServerSection from "@/pages/settings/PublicServerSection.svelte";
  import HooksSection from "@/pages/settings/HooksSection.svelte";
  import AuthSection from "@/pages/settings/AuthSection.svelte";
  import UserSyncSection from "@/pages/settings/UserSyncSection.svelte";
  import KeyRotationSection from "@/pages/settings/KeyRotationSection.svelte";
- import SecuritySection from "@/pages/settings/SecuritySection.svelte";
+ import FeaturesSection from "@/pages/settings/FeaturesSection.svelte";
  import BackupSection from "@/pages/settings/BackupSection.svelte";
  import AboutSection from "@/pages/settings/AboutSection.svelte";
 
- type Section = 'appearance' | 'account_security' | 'vault' | 'tokens' | 'external' | 'raw_mounts' | 'ftp_shares' | 'file_servers' | 'public_server' | 'hooks' | 'auth' | 'user_sync' | 'rotation' | 'security' | 'backup' | 'about';
+ type Section = 'appearance' | 'account_security' | 'vault' | 'tokens' | 'external' | 'raw_mounts' | 'ftp_shares' | 'file_servers' | 'hooks' | 'auth' | 'user_sync' | 'rotation' | 'features' | 'backup' | 'about';
 
  // Section → required capability. `null` means always visible (e.g.
  // About, Appearance, Account Security — these are per-user and
@@ -34,12 +33,11 @@
  raw_mounts: 'settings.manage',
  ftp_shares: 'settings.manage',
  file_servers: 'settings.manage',
- public_server: 'settings.manage',
  hooks: 'settings.manage',
  auth: 'settings.manage',
  user_sync: 'settings.manage',
  rotation: 'settings.manage',
- security: 'settings.manage',
+ features: 'settings.manage',
  backup: 'settings.manage',
  about: null,
  };
@@ -53,12 +51,11 @@
  { key: 'raw_mounts', label: 'Raw Mounts', icon: FolderOpen },
  { key: 'ftp_shares', label: 'File Sharing', icon: Share2 },
  { key: 'file_servers', label: 'File Servers', icon: Server },
- { key: 'public_server', label: 'Public Server', icon: Globe },
  { key: 'hooks', label: 'Hooks', icon: Webhook },
  { key: 'auth', label: 'Authentication', icon: ShieldCheck },
  { key: 'user_sync', label: 'User Sync', icon: Users },
  { key: 'rotation', label: 'Key Rotation', icon: RotateCw },
- { key: 'security', label: 'Security', icon: Lock },
+ { key: 'features', label: 'Features', icon: ToggleLeft },
  { key: 'backup', label: 'Backup', icon: HardDrive },
  { key: 'about', label: 'About', icon: Info },
  ];
@@ -128,8 +125,6 @@
  <FileSharingSection />
  {:else if activeSection === 'file_servers'}
  <FileServersSection />
- {:else if activeSection === 'public_server'}
- <PublicServerSection />
  {:else if activeSection === 'hooks'}
  <HooksSection />
  {:else if activeSection === 'auth'}
@@ -138,8 +133,8 @@
  <UserSyncSection />
  {:else if activeSection === 'rotation'}
  <KeyRotationSection />
- {:else if activeSection === 'security'}
- <SecuritySection />
+ {:else if activeSection === 'features'}
+ <FeaturesSection />
  {:else if activeSection === 'backup'}
  <BackupSection />
  {:else if activeSection === 'about'}
