@@ -1077,6 +1077,54 @@ func SetWebDAVServer(rh *RawHandler, webdavSrv *webdavserve.Server, cancel conte
 	rh.mu.Unlock()
 }
 
+// StopServeServers tears down every FTP/SFTP/TFTP/WebDAV listener
+// owned by the rawHandler in a deterministic order: cancel context
+// first to interrupt accept loops, then call Stop to release the
+// socket. Idempotent — calling Stop on a nil server is a no-op via
+// the nil guard. Intended for shutdown; the per-protocol reload
+// paths handle their own teardown when an operator flips the
+// enabled flag at runtime.
+func StopServeServers(rh *RawHandler) {
+	if rh == nil {
+		return
+	}
+	rh.mu.Lock()
+	ftpSrv, ftpCancel := rh.ftpServer, rh.ftpCancel
+	sftpSrv, sftpCancel := rh.sftpServer, rh.sftpCancel
+	tftpSrv, tftpCancel := rh.tftpServer, rh.tftpCancel
+	webdavSrv, webdavCancel := rh.webdavServer, rh.webdavCancel
+	rh.ftpServer, rh.ftpCancel = nil, nil
+	rh.sftpServer, rh.sftpCancel = nil, nil
+	rh.tftpServer, rh.tftpCancel = nil, nil
+	rh.webdavServer, rh.webdavCancel = nil, nil
+	rh.mu.Unlock()
+
+	if ftpCancel != nil {
+		ftpCancel()
+	}
+	if ftpSrv != nil {
+		ftpSrv.Stop()
+	}
+	if sftpCancel != nil {
+		sftpCancel()
+	}
+	if sftpSrv != nil {
+		sftpSrv.Stop()
+	}
+	if tftpCancel != nil {
+		tftpCancel()
+	}
+	if tftpSrv != nil {
+		tftpSrv.Stop()
+	}
+	if webdavCancel != nil {
+		webdavCancel()
+	}
+	if webdavSrv != nil {
+		webdavSrv.Stop()
+	}
+}
+
 func (a *api) listExternalPaths(c *ada.Context) error {
 	resourceName := c.Request.PathValue("name")
 	prefix := c.Request.URL.Query().Get("prefix")

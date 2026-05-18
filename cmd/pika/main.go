@@ -92,11 +92,6 @@ func run(ctx context.Context) error {
 	encStore := secret.New(store, mgr)
 	var storeWrap service.Storage = encStore
 
-	// Deprecation warning for the legacy env.
-	if cfg.Secret.EncryptionKey != "" {
-		slog.Warn("PIKA_SECRET_ENCRYPTION_KEY is set but no longer honored; enable at-rest encryption from Settings → Server encryption key and unlock after each restart. Remove the env var to suppress this warning.")
-	}
-
 	// //////////////////////////////////////
 	// Initialize service
 	svc := service.New(storeWrap)

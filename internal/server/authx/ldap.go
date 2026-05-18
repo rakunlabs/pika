@@ -21,8 +21,9 @@ import (
 // source; for the login leg we keep the historical defaults so plain
 // LDAP installs work with no extra setup.
 //
-// NOTE: BindPassword is currently plaintext, matching the rest of
-// AuthSettings. TODO: re-encrypt via secret store.
+// BindPassword is decrypted out of the sealed payload by the storage
+// wrapper before settings reach this layer, so the field is already
+// plaintext here.
 func BuildLDAP(s *service.LDAPStrategySettings) (strategy.Authenticator, error) {
 	if s == nil || s.Addr == "" {
 		return nil, nil
@@ -42,7 +43,7 @@ func BuildLDAP(s *service.LDAPStrategySettings) (strategy.Authenticator, error) 
 		Address:      s.Addr,
 		BaseDN:       s.UserBaseDN,
 		BindDN:       s.BindDN,
-		BindPassword: s.BindPassword, // TODO: decrypt via secret store
+		BindPassword: s.BindPassword,
 		UserFilter:   s.UserFilter,
 	}
 	if cfg.UserFilter == "" {

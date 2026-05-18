@@ -5,12 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/rakunlabs/pika/internal/external"
 	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/secret/envelope"
 	"github.com/rakunlabs/pika/internal/service"
 )
+
+// ErrSealedCorrupt is returned by Get when the SensitivePayload blob
+// exists but cannot be decrypted or parsed (wrong key, format drift,
+// or on-disk corruption). The row is still returned alongside this
+// error so callers that only need public fields can proceed; callers
+// that touch sealed slots should check for it with errors.Is and
+// surface the situation to the operator.
+var ErrSealedCorrupt = errors.New("settings: sealed payload corrupt or unreadable")
 
 // Sealed Settings — at-rest encryption for the user-managed secret
 // values that the Settings table carries.
@@ -77,6 +86,13 @@ type sensitivePayload struct {
 	// reasoning (a TLS private key is a credential).
 	SFTPHostKeyPEM string `json:"sftp_host_key_pem,omitempty"`
 	FTPTLSKeyPEM   string `json:"ftp_tls_key_pem,omitempty"`
+
+	// Auth-strategy secrets. OAuth2ClientSecrets is a parallel slice
+	// to Settings.Auth.OAuth2 so index ordering carries the matching
+	// secret back to the right strategy entry (same pattern as
+	// FTPUserPasswd / Mounts).
+	OAuth2ClientSecrets []string `json:"oauth2_client_secrets,omitempty"`
+	LDAPBindPassword    string   `json:"ldap_bind_password,omitempty"`
 }
 
 // sealedMount carries the secret subset of a single RawMountEntry.
@@ -247,6 +263,21 @@ func extractSecrets(s *service.Settings) *sensitivePayload {
 		s.FTPServe.TLSKeyPEM = ""
 	}
 
+	// Auth-strategy secrets.
+	if s.Auth != nil {
+		if len(s.Auth.OAuth2) > 0 {
+			p.OAuth2ClientSecrets = make([]string, len(s.Auth.OAuth2))
+			for i := range s.Auth.OAuth2 {
+				p.OAuth2ClientSecrets[i] = s.Auth.OAuth2[i].ClientSecret
+				s.Auth.OAuth2[i].ClientSecret = ""
+			}
+		}
+		if s.Auth.LDAP != nil && s.Auth.LDAP.BindPassword != "" {
+			p.LDAPBindPassword = s.Auth.LDAP.BindPassword
+			s.Auth.LDAP.BindPassword = ""
+		}
+	}
+
 	return p
 }
 
@@ -381,6 +412,15 @@ func injectSecrets(s *service.Settings, p *sensitivePayload) {
 	if s.FTPServe != nil && p.FTPTLSKeyPEM != "" {
 		s.FTPServe.TLSKeyPEM = p.FTPTLSKeyPEM
 	}
+
+	if s.Auth != nil {
+		for i := 0; i < len(s.Auth.OAuth2) && i < len(p.OAuth2ClientSecrets); i++ {
+			s.Auth.OAuth2[i].ClientSecret = p.OAuth2ClientSecrets[i]
+		}
+		if s.Auth.LDAP != nil && p.LDAPBindPassword != "" {
+			s.Auth.LDAP.BindPassword = p.LDAPBindPassword
+		}
+	}
 }
 
 func injectHookSecrets(h *hook.Hook, sh *sealedHook) {
@@ -447,16 +487,22 @@ func (w *settingsStorageWrapper) Get(ctx context.Context) (*service.Settings, er
 	}
 	plain, err := envelope.Open(mgr, s.SensitivePayload)
 	if err != nil {
-		// Couldn't decrypt — wrong key or unknown format. Don't
-		// fail the read (consumers may only need public fields)
-		// but log so the operator sees the corruption.
-		// We also leave SensitivePayload intact on the returned
-		// row in case the caller passes it back to Set unchanged.
-		return s, nil
+		// Couldn't decrypt — wrong key, format drift, or on-disk
+		// corruption. Leave SensitivePayload intact on the returned
+		// row (so callers can round-trip an unchanged Set) and
+		// surface the situation: log loudly AND wrap into
+		// ErrSealedCorrupt so callers can branch with errors.Is.
+		slog.Error("settings: sealed payload could not be decrypted",
+			"bytes", len(s.SensitivePayload),
+			"error", err)
+		return s, fmt.Errorf("%w: %v", ErrSealedCorrupt, err)
 	}
 	var p sensitivePayload
 	if err := json.Unmarshal(plain, &p); err != nil {
-		return s, nil
+		slog.Error("settings: decrypted sealed payload failed to parse",
+			"bytes", len(plain),
+			"error", err)
+		return s, fmt.Errorf("%w: %v", ErrSealedCorrupt, err)
 	}
 	injectSecrets(s, &p)
 	return s, nil

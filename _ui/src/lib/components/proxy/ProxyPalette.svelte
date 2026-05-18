@@ -16,6 +16,7 @@
  // fallback (drag is not reachable by screen readers).
  import type { CatalogSpec } from '@/lib/store/proxy.svelte';
  import { Layers, Boxes, Split, ChevronRight } from 'lucide-svelte';
+ import { stripeClassFor } from './palette-categories';
 
  type NodeKind = 'middleware' | 'switch' | 'handler';
 
@@ -157,9 +158,9 @@
      >
       <ChevronRight
        size={11}
-       class={'chev ' + (collapsed[group.key] ? '' : 'rot')}
+       class={'chev shrink-0 ' + (collapsed[group.key] ? '' : 'rot')}
       />
-      <group.icon size={12} class={group.iconClass} />
+      <group.icon size={12} class={group.iconClass + ' shrink-0'} />
       <span class="grow text-left">{group.title}</span>
       <span class="count">{group.rows.length}</span>
      </button>
@@ -169,7 +170,7 @@
        {#each group.rows as row (row.kind + ':' + (row.subtype ?? ''))}
         <li>
          <div
-          class="row"
+          class={'row ' + stripeClassFor(row.kind, row.subtype)}
           class:disabled={!canManage}
           role="button"
           tabindex={canManage ? 0 : -1}
@@ -185,11 +186,8 @@
           }}
           title={row.description ?? row.label}
          >
-          <group.icon size={13} class={group.iconClass} />
+          <group.icon size={13} class={group.iconClass + ' shrink-0'} />
           <span class="grow text-left truncate">{row.label}</span>
-          {#if row.subtype}
-           <span class="text-[10px] opacity-60 font-mono shrink-0">{row.subtype}</span>
-          {/if}
          </div>
         </li>
        {/each}
@@ -251,14 +249,21 @@
   gap: 6px;
   width: 100%;
   padding: 5px 8px;
+  /* 3px coloured stripe on the left; colour token comes from the
+     dynamic stripeClassFor() class (border-{rose,sky,...}-500). */
+  border-left-width: 3px;
+  border-left-style: solid;
   margin-left: 6px;
-  border-radius: 4px;
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+  padding-left: 8px;
   background: transparent;
   color: inherit;
   cursor: grab;
   text-align: left;
   font-size: 12px;
   user-select: none;
+  transition: background-color 100ms ease, border-color 100ms ease;
  }
  .row:hover:not(.disabled) { background: rgba(0,0,0,0.04); }
  :global(.dark) .row:hover:not(.disabled) { background: rgba(255,255,255,0.05); }

@@ -98,12 +98,16 @@ export const middlewareForms: Record<string, FormDef> = {
   },
 
   'basic-auth': {
-    intro: 'Static user/password list checked against HTTP Basic credentials. Passwords are stored encrypted at rest with the rest of settings.',
+    intro: 'Static user list checked against HTTP Basic credentials. Passwords are stored as htpasswd-style hashes (bcrypt, apr1, SHA, crypt) — never plaintext.',
     fields: [
       { key: 'realm', label: 'Realm', kind: 'string', placeholder: 'pika-proxy', default: 'pika-proxy' },
-      { key: 'users', label: 'Users (one per line as "username:password")', kind: 'text',
-        placeholder: 'alice:hunter2\nbob:s3cret',
-        help: 'At least one entry required. Each line is split on the first ":" — passwords may contain colons.' },
+      { key: 'users', label: 'Users (one per line as "username:hash")', kind: 'text',
+        placeholder: 'alice:$2y$12$...\nbob:$apr1$...',
+        help: 'Generate with htpasswd: `htpasswd -nB <user>` for bcrypt or `htpasswd -n <user>` for apr1. At least one entry required.' },
+      { key: 'header_field', label: 'Forward username header', kind: 'string', placeholder: 'X-User',
+        help: 'When set, the authenticated username is added to this request header before forwarding upstream.' },
+      { key: 'remove_header', label: 'Strip Authorization header', kind: 'boolean', default: false,
+        help: 'Removes the Authorization header before the request reaches the upstream so credentials never leak past the proxy.' },
     ],
   },
 
@@ -198,6 +202,24 @@ export const middlewareForms: Record<string, FormDef> = {
         help: 'First match wins. Used when one node should peel different mount points.' },
       { key: 'force_slash', label: 'Re-add leading slash if stripped', kind: 'boolean', default: true,
         help: 'On (default): result always starts with "/". Off: literal trim, occasionally needed before proxy-pass.' },
+    ],
+  },
+
+  'add-prefix': {
+    intro: 'Prepend a fixed prefix to r.URL.Path. Mirrors turna addprefix — handy when a switch routes /foo into a node whose downstream expects /api/foo.',
+    fields: [
+      { key: 'prefix', label: 'Prefix', kind: 'string', placeholder: '/api',
+        help: 'Prepended via url.JoinPath, so duplicate slashes collapse correctly. Empty = no-op.' },
+    ],
+  },
+
+  'regex-path': {
+    intro: 'Rewrite r.URL.Path with a Go RE2 regex. Uses $1 / $2 / ${name} expansion (NOT Perl-style \\1). Compile errors surface on Save.',
+    fields: [
+      { key: 'regex', label: 'Regex', kind: 'string', placeholder: '^/old/(.*)$',
+        help: 'Go RE2 syntax. An always-empty match would loop; pika rejects cycles at compile time but mind the replacement chain.' },
+      { key: 'replacement', label: 'Replacement', kind: 'string', placeholder: '/new/$1',
+        help: 'Use $1, $2, ${name} to reference capture groups.' },
     ],
   },
 

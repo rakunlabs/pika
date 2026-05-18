@@ -56,27 +56,19 @@
   return out;
  }
 
- // For the basic-auth "users" multi-line field we use a custom
- // serializer because the value on disk is an array of objects,
- // not a string. Handled inline below.
+ // basic-auth "users" is a list of htpasswd-style "username:hash"
+ // strings. Each line is one entry; we keep the raw "username:hash"
+ // form on the wire so the backend can hand it straight to
+ // CheckSecret (bcrypt / apr1 / SHA / crypt).
  function usersToText(v: unknown): string {
-  if (Array.isArray(v)) {
-   return (v as Array<{ username?: string; password?: string }>)
-    .map(u => `${u.username ?? ''}:${u.password ?? ''}`)
-    .join('\n');
-  }
+  if (Array.isArray(v)) return (v as string[]).join('\n');
   return '';
  }
- function textToUsers(s: string): Array<{ username: string; password: string }> {
-  const out: Array<{ username: string; password: string }> = [];
+ function textToUsers(s: string): string[] {
+  const out: string[] = [];
   for (const line of s.split(/\n+/)) {
    const trimmed = line.trim();
-   if (!trimmed) continue;
-   const colon = trimmed.indexOf(':');
-   if (colon < 0) continue;
-   const username = trimmed.slice(0, colon).trim();
-   const password = trimmed.slice(colon + 1);
-   if (username) out.push({ username, password });
+   if (trimmed) out.push(trimmed);
   }
   return out;
  }

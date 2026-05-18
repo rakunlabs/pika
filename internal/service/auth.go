@@ -14,26 +14,31 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// passwordCost is the bcrypt cost used for user password hashes.
+// 12 ≈ 40ms/check on modern CPUs — within UX budget and significantly
+// slower than bcrypt.DefaultCost (10 ≈ 10ms) under GPU brute-force.
+// Existing hashes with lower cost are transparently re-hashed on the
+// next successful login (see rehashIfStale).
+const passwordCost = 12
+
 // dummyHash is a precomputed bcrypt hash used to equalize the time taken by
 // Authenticate when a username does not exist. Without this, an attacker
 // can probe valid usernames by measuring response latency: a real user
-// triggers a bcrypt compare (~100ms), a non-existent user returns
+// triggers a bcrypt compare (~40ms), a non-existent user returns
 // immediately. Running CompareHashAndPassword against this throwaway hash
 // in the not-found path closes that timing channel.
 //
-// Initialized lazily on first use to avoid paying the bcrypt cost during
-// package init when callers may never authenticate (e.g. CLI tools).
+// Initialized eagerly via init() so the first authentication attempt
+// after process start doesn't reveal "user not found" via the lazy-init
+// cost difference.
 var dummyHash []byte
 
-func ensureDummyHash() {
-	if dummyHash != nil {
-		return
-	}
-	h, err := bcrypt.GenerateFromPassword([]byte("not-a-real-password"), bcrypt.DefaultCost)
+func init() {
+	h, err := bcrypt.GenerateFromPassword([]byte("not-a-real-password"), passwordCost)
 	if err != nil {
 		// Should never happen; fall back to a fixed bcrypt-shaped value
 		// so CompareHashAndPassword still consumes time on each call.
-		dummyHash = []byte("$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidinvali")
+		dummyHash = []byte("$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidinvali")
 		return
 	}
 	dummyHash = h
@@ -136,7 +141,7 @@ func (s *Service) createUser(ctx context.Context, req *CreateUserRequest, supera
 		return nil, fmt.Errorf("password is required: %w", ErrBadRequest)
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), passwordCost)
 	if err != nil {
 		return nil, fmt.Errorf("hashing password: %w", err)
 	}
@@ -179,7 +184,6 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 	user, err := s.store.Users().GetByUsername(ctx, username)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			ensureDummyHash()
 			// Result intentionally ignored — we just want the
 			// CPU work to happen so timings match.
 			_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
@@ -198,8 +202,38 @@ func (s *Service) Authenticate(ctx context.Context, username, password string) (
 
 	slog.Info("auth: login success", "username", user.Username)
 
+	// Lazy upgrade: when the stored hash was made at a cost lower than
+	// the current passwordCost, we have the plaintext in hand (just
+	// verified) — re-hash and persist transparently. Failures are
+	// logged but don't fail the login, the user still gets in with the
+	// older hash.
+	s.rehashIfStale(ctx, user, password)
+
 	info := user.toInfo()
 	return &info, nil
+}
+
+// rehashIfStale re-hashes the user's password with the current
+// passwordCost when the stored hash's cost is below target. Best-
+// effort: any error (cost parse, hash generate, DB update) is logged
+// but does not propagate.
+func (s *Service) rehashIfStale(ctx context.Context, user *User, plaintext string) {
+	cost, err := bcrypt.Cost([]byte(user.PasswordHash))
+	if err != nil || cost >= passwordCost {
+		return
+	}
+	newHash, err := bcrypt.GenerateFromPassword([]byte(plaintext), passwordCost)
+	if err != nil {
+		slog.Warn("auth: rehash failed at generate", "username", user.Username, "error", err)
+		return
+	}
+	user.PasswordHash = string(newHash)
+	user.UpdatedAt = time.Now()
+	if err := s.store.Users().Update(ctx, user); err != nil {
+		slog.Warn("auth: rehash failed at persist", "username", user.Username, "error", err)
+		return
+	}
+	slog.Info("auth: password rehashed at higher cost", "username", user.Username, "from", cost, "to", passwordCost)
 }
 
 // ListUsers returns all users (without password hashes).
@@ -285,7 +319,7 @@ func (s *Service) UpdateUser(ctx context.Context, id string, req *UpdateUserRequ
 	}
 
 	if req.Password != nil {
-		hash, err := bcrypt.GenerateFromPassword([]byte(*req.Password), bcrypt.DefaultCost)
+		hash, err := bcrypt.GenerateFromPassword([]byte(*req.Password), passwordCost)
 		if err != nil {
 			return fmt.Errorf("hashing password: %w", err)
 		}

@@ -270,13 +270,46 @@ func (m *Manager) stopLocked(inst *runningInstance) {
 	inst.cancel = nil
 }
 
-// Stop cancels every running instance. Called when the application
-// shuts down.
+// Stop cancels every running instance and waits for each listener
+// goroutine to release its socket before returning. Without the wait
+// a restart immediately after Stop could race the OS socket release
+// and fail with "address already in use" on the same port. The
+// global timeout matches the per-instance budget used by applyOne
+// (12s = ada's default shutdown + margin) — if a listener really
+// hangs we surface logs and proceed instead of deadlocking forever.
 func (m *Manager) Stop() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, inst := range m.instances {
-		m.stopLocked(inst)
+	dones := make([]chan struct{}, 0, len(m.instances))
+	ids := make([]string, 0, len(m.instances))
+	for id, inst := range m.instances {
+		if inst == nil {
+			continue
+		}
+		if inst.cancel != nil {
+			inst.cancel()
+			inst.cancel = nil
+		}
+		if inst.done != nil {
+			dones = append(dones, inst.done)
+			ids = append(ids, id)
+		}
+	}
+	m.mu.Unlock()
+
+	if len(dones) == 0 {
+		return
+	}
+
+	deadline := time.NewTimer(12 * time.Second)
+	defer deadline.Stop()
+	for i, d := range dones {
+		select {
+		case <-d:
+		case <-deadline.C:
+			slog.Warn("proxy: listener did not stop within timeout; abandoning wait",
+				"pending", len(dones)-i, "first_pending_id", ids[i])
+			return
+		}
 	}
 }
 

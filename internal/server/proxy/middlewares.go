@@ -10,11 +10,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	goauth "github.com/abbot/go-http-auth"
 	"github.com/rakunlabs/ada/middleware/ratelimit"
 	mcors "github.com/rakunlabs/ada/middleware/cors"
 	mrequestid "github.com/rakunlabs/ada/middleware/requestid"
@@ -137,6 +140,20 @@ func DefaultMiddlewares() map[string]NodeSpec {
 			Label:       "Strip path prefix",
 			Description: "Remove a prefix from r.URL.Path before the next node sees it. Mirrors turna's stripprefix middleware.",
 			Build:       adaptMW(buildStripPrefixMW),
+		},
+		{
+			Kind:        KindMiddleware,
+			Subtype:     "add-prefix",
+			Label:       "Add path prefix",
+			Description: "Prepend a fixed prefix to r.URL.Path. Mirrors turna's addprefix middleware.",
+			Build:       adaptMW(buildAddPrefixMW),
+		},
+		{
+			Kind:        KindMiddleware,
+			Subtype:     "regex-path",
+			Label:       "Regex path rewrite",
+			Description: "Rewrite r.URL.Path via a Go RE2 regex. Mirrors turna's regexpath middleware.",
+			Build:       adaptMW(buildRegexPathMW),
 		},
 		{
 			Kind:        KindMiddleware,
@@ -304,19 +321,23 @@ func methodToOp(m string) string {
 
 // --- basic-auth ---
 
+// basicAuthCfg mirrors turna's middleware: users are htpasswd-style
+// "username:hash" strings so passwords are never stored or compared
+// in plaintext. CheckSecret from abbot/go-http-auth verifies bcrypt
+// ($2a/$2b/$2y), apr1 ($apr1$), SHA ({SHA}), and crypt formats.
+//
+// Operators generate entries with `htpasswd -nB <user>` (bcrypt) or
+// `htpasswd -n <user>` (apr1) and paste them into the users field.
 type basicAuthCfg struct {
-	Realm string                 `json:"realm,omitempty"`
-	Users []basicAuthCredentials `json:"users"`
-}
-
-type basicAuthCredentials struct {
-	Username string `json:"username"`
-	// Password is compared in plaintext. Storage is encrypted at rest
-	// because the whole Settings row goes through the seal layer, so
-	// keeping plaintext on the wire (within the encrypted blob) is
-	// the same trust level as e.g. FTP passwords elsewhere in
-	// settings. Hashing would still be welcome — see issue tracker.
-	Password string `json:"password"`
+	Realm string   `json:"realm,omitempty"`
+	Users []string `json:"users"`
+	// HeaderField, when set, is populated with the authenticated
+	// username before the request reaches the next handler. Defaults
+	// to empty (no header). turna uses "X-User" as a common default.
+	HeaderField string `json:"header_field,omitempty"`
+	// RemoveHeader strips the Authorization header before forwarding
+	// so the upstream never sees the credentials.
+	RemoveHeader bool `json:"remove_header,omitempty"`
 }
 
 func buildBasicAuthMW(raw json.RawMessage, _ ServiceDeps) (func(http.Handler) http.Handler, error) {
@@ -329,18 +350,20 @@ func buildBasicAuthMW(raw json.RawMessage, _ ServiceDeps) (func(http.Handler) ht
 	if len(cfg.Users) == 0 {
 		return nil, errors.New("basic-auth: at least one user required")
 	}
+	hashes := make(map[string]string, len(cfg.Users))
+	for _, entry := range cfg.Users {
+		name, hash, ok := strings.Cut(entry, ":")
+		if !ok || name == "" || hash == "" {
+			return nil, fmt.Errorf("basic-auth: invalid user entry %q (expected \"username:hash\")", entry)
+		}
+		hashes[name] = hash
+	}
 	realm := cfg.Realm
 	if realm == "" {
 		realm = "pika-proxy"
 	}
-	users := make(map[string]string, len(cfg.Users))
-	for _, u := range cfg.Users {
-		if u.Username == "" {
-			return nil, errors.New("basic-auth: user with empty username")
-		}
-		users[u.Username] = u.Password
-	}
-	wwwAuthHeader := fmt.Sprintf(`Basic realm=%q`, realm)
+	wwwAuthHeader := "Basic realm=" + strconv.Quote(realm)
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, pass, ok := r.BasicAuth()
@@ -349,48 +372,21 @@ func buildBasicAuthMW(raw json.RawMessage, _ ServiceDeps) (func(http.Handler) ht
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			want, found := users[user]
-			// constantTimeStrEqual to defeat timing oracle. Wrapping
-			// the lookup in the same compare ignores whether the
-			// username existed.
-			if !found || !constantTimeStrEqual(pass, want) {
+			hash, found := hashes[user]
+			if !found || !goauth.CheckSecret(pass, hash) {
 				w.Header().Set("WWW-Authenticate", wwwAuthHeader)
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
+			if cfg.RemoveHeader {
+				r.Header.Del("Authorization")
+			}
+			if cfg.HeaderField != "" {
+				r.Header.Set(cfg.HeaderField, user)
+			}
 			next.ServeHTTP(w, r)
 		})
 	}, nil
-}
-
-// constantTimeStrEqual compares two strings in constant time relative
-// to the longer length so a username-not-found doesn't return faster
-// than a wrong-password case.
-func constantTimeStrEqual(a, b string) bool {
-	// subtle.ConstantTimeCompare requires equal-length slices; pad
-	// the shorter side and OR the mismatch flag with the length
-	// comparison so identical-length-but-different and different-length
-	// inputs both take the full loop.
-	aBytes, bBytes := []byte(a), []byte(b)
-	var diff byte
-	if len(aBytes) != len(bBytes) {
-		diff = 1
-	}
-	max := len(aBytes)
-	if len(bBytes) > max {
-		max = len(bBytes)
-	}
-	for i := 0; i < max; i++ {
-		var ai, bi byte
-		if i < len(aBytes) {
-			ai = aBytes[i]
-		}
-		if i < len(bBytes) {
-			bi = bBytes[i]
-		}
-		diff |= ai ^ bi
-	}
-	return diff == 0
 }
 
 // --- ip-allowlist / ip-denylist ---
@@ -938,6 +934,84 @@ func buildStripPrefixMW(raw json.RawMessage, _ ServiceDeps) (func(http.Handler) 
 			if forceSlash && !strings.HasPrefix(r.URL.Path, "/") {
 				r.URL.Path = "/" + r.URL.Path
 			}
+			next.ServeHTTP(w, r)
+		})
+	}, nil
+}
+
+// --- add-prefix ---
+
+// addPrefixCfg prepends a fixed prefix to r.URL.Path. Mirrors
+// turna's addprefix middleware. Useful when a switch routes /foo
+// into this node but the downstream handler expects /api/foo.
+type addPrefixCfg struct {
+	Prefix string `json:"prefix,omitempty"`
+}
+
+func buildAddPrefixMW(raw json.RawMessage, _ ServiceDeps) (func(http.Handler) http.Handler, error) {
+	var cfg addPrefixCfg
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, fmt.Errorf("add-prefix config: %w", err)
+		}
+	}
+	prefix := strings.TrimSpace(cfg.Prefix)
+	if prefix == "" {
+		// No-op — same rationale as strip-prefix: dropping the node
+		// onto the canvas should not fail save before any field is
+		// filled in.
+		return func(next http.Handler) http.Handler { return next }, nil
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			joined, err := url.JoinPath(prefix, r.URL.Path)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			r.URL.Path = joined
+			next.ServeHTTP(w, r)
+		})
+	}, nil
+}
+
+// --- regex-path ---
+
+// regexPathCfg rewrites r.URL.Path via a Go RE2 regex. Mirrors
+// turna's regexpath middleware. The regex is compiled once at
+// build-time so a bad pattern fails save loudly rather than 500-
+// ing every request.
+//
+// Caveats for operators: the replacement uses Go's $1/$2/${name}
+// expansion (NOT Perl-style \1). A pattern that matches the empty
+// string can rewrite forever inside a loop graph — pika prevents
+// this at compile time by rejecting cycles in the node graph, but
+// operators chaining several regex-path nodes can still wedge a
+// path into something downstream rejects. Test with the Validate
+// button before saving.
+type regexPathCfg struct {
+	Regex       string `json:"regex,omitempty"`
+	Replacement string `json:"replacement"`
+}
+
+func buildRegexPathMW(raw json.RawMessage, _ ServiceDeps) (func(http.Handler) http.Handler, error) {
+	var cfg regexPathCfg
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, fmt.Errorf("regex-path config: %w", err)
+		}
+	}
+	if cfg.Regex == "" {
+		return func(next http.Handler) http.Handler { return next }, nil
+	}
+	rx, err := regexp.Compile(cfg.Regex)
+	if err != nil {
+		return nil, fmt.Errorf("regex-path invalid regex %q: %w", cfg.Regex, err)
+	}
+	replacement := cfg.Replacement
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.URL.Path = rx.ReplaceAllString(r.URL.Path, replacement)
 			next.ServeHTTP(w, r)
 		})
 	}, nil

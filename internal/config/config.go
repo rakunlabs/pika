@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/rakunlabs/chu"
 	"github.com/rakunlabs/chu/loader/loaderenv"
@@ -27,26 +26,7 @@ type Config struct {
 	Server  Server         `cfg:"server"`
 	Cluster cluster.Config `cfg:"cluster"`
 
-	Secret Secret `cfg:"secret"`
-
 	Telemetry tell.Config `cfg:"telemetry"`
-}
-
-type Secret struct {
-	// EncryptionKey is DEPRECATED.
-	//
-	// Pika no longer reads the at-rest encryption key from
-	// configuration or environment. After every restart an
-	// administrator must unlock the server through the web UI (or
-	// POST /api/v1/key/unlock) — the key is held in memory for the
-	// process lifetime and zeroed on lock/restart.
-	//
-	// This field is kept in the config struct so existing
-	// PIKA_SECRET_ENCRYPTION_KEY env vars don't break startup;
-	// cmd/pika emits a deprecation warning on boot when it sees a
-	// non-empty value but otherwise ignores it. The field will be
-	// removed in a future release.
-	EncryptionKey string `cfg:"encryption_key" log:"-"`
 }
 
 type Server struct {
@@ -54,35 +34,6 @@ type Server struct {
 	Port string `cfg:"port" default:"8080"`
 
 	BasePath string `cfg:"base_path"`
-
-	// Auth configures built-in user/password authentication.
-	Auth Auth `cfg:"auth"`
-}
-
-// Auth configures built-in user/password authentication.
-// Built-in auth is always enabled. The first visit to the UI will show a
-// setup screen to create the initial admin account.
-type Auth struct {
-	// SessionTTL is the session lifetime (default: 24h).
-	SessionTTL time.Duration `cfg:"session_ttl"`
-	// Cookie configures session cookie properties.
-	Cookie CookieConfig `cfg:"cookie"`
-}
-
-// CookieConfig configures the session cookie.
-type CookieConfig struct {
-	// Name is the cookie name (default: "pika_session").
-	Name string `cfg:"name"`
-	// Domain sets the cookie domain. Empty means the current host.
-	Domain string `cfg:"domain"`
-	// Path sets the cookie path (default: "/").
-	Path string `cfg:"path"`
-	// Secure marks the cookie as HTTPS-only (default: false).
-	// Should be true in production behind TLS.
-	Secure bool `cfg:"secure"`
-	// SameSite controls cross-site cookie behavior.
-	// Values: "lax" (default), "strict", "none".
-	SameSite string `cfg:"same_site"`
 }
 
 func Load(ctx context.Context) (*Config, error) {

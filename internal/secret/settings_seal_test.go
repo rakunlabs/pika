@@ -204,5 +204,60 @@ func buildFixture() *service.Settings {
 			Port:      21,
 			TLSKeyPEM: tlsKey,
 		},
+		Auth: &service.AuthSettings{
+			OAuth2: []service.OAuth2StrategySettings{
+				{
+					Name:         "google",
+					IssuerURL:    "https://accounts.google.com",
+					ClientID:     "google-client-id",
+					ClientSecret: "google-client-secret",
+				},
+				{
+					Name:         "github",
+					IssuerURL:    "https://github.com",
+					ClientID:     "gh-client-id",
+					ClientSecret: "gh-client-secret",
+				},
+			},
+			LDAP: &service.LDAPStrategySettings{
+				Name:         "corp-ldap",
+				Addr:         "ldap.example.com:389",
+				BindDN:       "cn=admin,dc=example,dc=com",
+				BindPassword: "ldap-bind-secret",
+			},
+		},
+	}
+}
+
+// TestAuthSecretRoundTrip — OAuth2 ClientSecret and LDAP BindPassword
+// must survive an extract→inject pass identically, and be cleared
+// from the source struct after extract so the persisted plaintext
+// row contains no auth secrets.
+func TestAuthSecretRoundTrip(t *testing.T) {
+	working := buildFixture()
+	original := buildFixture()
+
+	payload := extractSecrets(working)
+
+	if working.Auth.OAuth2[0].ClientSecret != "" || working.Auth.OAuth2[1].ClientSecret != "" {
+		t.Errorf("OAuth2 client secret not cleared after extract")
+	}
+	if working.Auth.LDAP.BindPassword != "" {
+		t.Errorf("LDAP bind password not cleared after extract")
+	}
+	if len(payload.OAuth2ClientSecrets) != 2 {
+		t.Fatalf("payload OAuth2ClientSecrets len=%d, want 2", len(payload.OAuth2ClientSecrets))
+	}
+
+	injectSecrets(working, payload)
+
+	if working.Auth.OAuth2[0].ClientSecret != original.Auth.OAuth2[0].ClientSecret {
+		t.Errorf("OAuth2 secret #0 lost in round-trip")
+	}
+	if working.Auth.OAuth2[1].ClientSecret != original.Auth.OAuth2[1].ClientSecret {
+		t.Errorf("OAuth2 secret #1 lost in round-trip")
+	}
+	if working.Auth.LDAP.BindPassword != original.Auth.LDAP.BindPassword {
+		t.Errorf("LDAP bind password lost in round-trip")
 	}
 }

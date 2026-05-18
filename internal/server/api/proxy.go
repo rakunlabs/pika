@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/rakunlabs/ada"
-	"github.com/google/uuid"
 
 	"github.com/rakunlabs/pika/internal/server/proxy"
 	"github.com/rakunlabs/pika/internal/service"
@@ -85,7 +85,7 @@ func (a *api) createProxyServer(c *ada.Context) error {
 	}
 	srv.ID = strings.TrimSpace(srv.ID)
 	if srv.ID == "" {
-		srv.ID = uuid.NewString()
+		srv.ID = ulid.Make().String()
 	}
 	if err := a.persistProxy(c, srv, true); err != nil {
 		return err

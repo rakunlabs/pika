@@ -98,7 +98,9 @@ func TestAuthBearerMW(t *testing.T) {
 }
 
 func TestBasicAuthMW(t *testing.T) {
-	cfg := `{"realm":"test","users":[{"username":"alice","password":"hunter2"}]}`
+	// bcrypt cost=4 hash for "hunter2"; low cost keeps tests fast.
+	const aliceHash = "$2a$04$VPbPVSe8WOMUCgyXGlFFz.GgLZKAa/9bSBXA42ZUfMURinIJzRRLe"
+	cfg := `{"realm":"test","users":["alice:` + aliceHash + `"]}`
 	t.Run("missing creds -> 401", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		rec := runOneMW(t, "basic-auth", cfg, nil, req)
@@ -137,6 +139,39 @@ func TestBasicAuthMW(t *testing.T) {
 		_, err := DefaultMiddlewares()["basic-auth"].Build(json.RawMessage(`{}`), nil, nil)
 		if err == nil {
 			t.Fatal("expected error for empty user list")
+		}
+	})
+	t.Run("malformed entry -> build error", func(t *testing.T) {
+		_, err := DefaultMiddlewares()["basic-auth"].Build(json.RawMessage(`{"users":["no-colon-here"]}`), nil, nil)
+		if err == nil {
+			t.Fatal("expected error for malformed user entry")
+		}
+	})
+	t.Run("header_field + remove_header", func(t *testing.T) {
+		hdrCfg := `{"users":["alice:` + aliceHash + `"],"header_field":"X-User","remove_header":true}`
+		specs := DefaultMiddlewares()
+		mw, err := specs["basic-auth"].Build(json.RawMessage(hdrCfg), nil, nil)
+		if err != nil {
+			t.Fatalf("build: %v", err)
+		}
+		var sawUser, sawAuth string
+		term := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sawUser = r.Header.Get("X-User")
+			sawAuth = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusNoContent)
+		})
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.SetBasicAuth("alice", "hunter2")
+		rec := httptest.NewRecorder()
+		mw(term).ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("status: %d", rec.Code)
+		}
+		if sawUser != "alice" {
+			t.Fatalf("X-User not propagated: %q", sawUser)
+		}
+		if sawAuth != "" {
+			t.Fatalf("Authorization header not stripped: %q", sawAuth)
 		}
 	})
 }
@@ -463,6 +498,89 @@ func TestStripPrefixMW(t *testing.T) {
 		rec := httptest.NewRecorder()
 		mw(inner).ServeHTTP(rec, req)
 		if got := rec.Header().Get("X-P"); got != "/other/x" {
+			t.Fatalf("path: %q", got)
+		}
+	})
+}
+
+// --- add-prefix ---
+
+func TestAddPrefixMW(t *testing.T) {
+	t.Run("prepends configured prefix", func(t *testing.T) {
+		spec := DefaultMiddlewares()["add-prefix"]
+		mw, err := spec.Build(json.RawMessage(`{"prefix":"/api"}`), nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-P", r.URL.Path)
+		})
+		req := httptest.NewRequest(http.MethodGet, "/users/42", nil)
+		rec := httptest.NewRecorder()
+		mw(inner).ServeHTTP(rec, req)
+		if got := rec.Header().Get("X-P"); got != "/api/users/42" {
+			t.Fatalf("path: got %q want /api/users/42", got)
+		}
+	})
+
+	t.Run("empty prefix is a no-op", func(t *testing.T) {
+		spec := DefaultMiddlewares()["add-prefix"]
+		mw, err := spec.Build(json.RawMessage(`{}`), nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-P", r.URL.Path)
+		})
+		req := httptest.NewRequest(http.MethodGet, "/x", nil)
+		rec := httptest.NewRecorder()
+		mw(inner).ServeHTTP(rec, req)
+		if got := rec.Header().Get("X-P"); got != "/x" {
+			t.Fatalf("path: %q", got)
+		}
+	})
+}
+
+// --- regex-path ---
+
+func TestRegexPathMW(t *testing.T) {
+	t.Run("rewrites with capture group", func(t *testing.T) {
+		spec := DefaultMiddlewares()["regex-path"]
+		mw, err := spec.Build(json.RawMessage(`{"regex":"^/old/(.*)$","replacement":"/new/$1"}`), nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-P", r.URL.Path)
+		})
+		req := httptest.NewRequest(http.MethodGet, "/old/items/42", nil)
+		rec := httptest.NewRecorder()
+		mw(inner).ServeHTTP(rec, req)
+		if got := rec.Header().Get("X-P"); got != "/new/items/42" {
+			t.Fatalf("path: %q", got)
+		}
+	})
+
+	t.Run("invalid regex -> build error", func(t *testing.T) {
+		_, err := DefaultMiddlewares()["regex-path"].Build(json.RawMessage(`{"regex":"([","replacement":""}`), nil, nil)
+		if err == nil {
+			t.Fatal("expected compile error for malformed regex")
+		}
+	})
+
+	t.Run("empty regex is a no-op", func(t *testing.T) {
+		spec := DefaultMiddlewares()["regex-path"]
+		mw, err := spec.Build(json.RawMessage(`{}`), nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-P", r.URL.Path)
+		})
+		req := httptest.NewRequest(http.MethodGet, "/keep/me", nil)
+		rec := httptest.NewRecorder()
+		mw(inner).ServeHTTP(rec, req)
+		if got := rec.Header().Get("X-P"); got != "/keep/me" {
 			t.Fatalf("path: %q", got)
 		}
 	})

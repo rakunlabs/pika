@@ -46,13 +46,10 @@ func (w proxyMgrWrapper) Validate(s service.ProxyServer) (any, error) {
 func (w proxyMgrWrapper) Status() any { return w.m.Status() }
 
 // cookieName returns the session cookie name, preferring the AuthSettings
-// value, then the config value, then the default "pika_session".
-func cookieName(s *service.AuthSettings, cfg *config.Config) string {
+// value, then the default "pika_session".
+func cookieName(s *service.AuthSettings) string {
 	if s != nil && s.Cookie.Name != "" {
 		return s.Cookie.Name
-	}
-	if cfg.Server.Auth.Cookie.Name != "" {
-		return cfg.Server.Auth.Cookie.Name
 	}
 	return "pika_session"
 }
@@ -125,9 +122,9 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 
 	mgr := authx.New(authx.Deps{
 		Svc:          svc,
-		SessionStore: authx.NewSessionStore(svc, cookieName(authSettings, cfg)),
+		SessionStore: authx.NewSessionStore(svc, cookieName(authSettings)),
 		BasePath:     cfg.Server.BasePath + "/",
-		CookieName:   cookieName(authSettings, cfg),
+		CookieName:   cookieName(authSettings),
 		// Version comes from build-time ldflags (cmd/pika/main.go),
 		// not from settings — so the login UI shows the real binary
 		// version and no operator can spoof it.
@@ -160,7 +157,14 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	// reserved so a misconfigured graph can't knock the admin UI
 	// offline by binding the same socket.
 	proxyMgr := proxy.NewManager(ctx, proxy.ServiceFromService(svc), cfg.Server.Host, []string{cfg.Server.Port})
+	// Deterministic shutdown order: main HTTP server returns first
+	// (via StartWithContext below), then the user-facing protocol
+	// listeners drain (FTP/SFTP/TFTP/WebDAV via api.StopServeServers),
+	// then the user-built proxy graphs (proxyMgr.Stop waits for socket
+	// release per B1). Defers execute LIFO so we register them in
+	// reverse: proxyMgr first, serve listeners second.
 	defer proxyMgr.Stop()
+	defer api.StopServeServers(rh)
 
 	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, rh, proxyMgrWrapper{proxyMgr}); err != nil {
 		return err
