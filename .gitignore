@@ -9,6 +9,7 @@ coverage.out
 .env
 .env.*
 /pika
+/.planning
 
 # Local Go workspace (for developing against sibling repos like ../ada)
 go.work

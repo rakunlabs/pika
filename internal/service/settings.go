@@ -152,6 +152,12 @@ type Settings struct {
 	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
 	Proxy               *ProxySettings               `json:"proxy,omitempty"`
+	// Registry is the artifact-registry feature tree (Go modules,
+	// NPM packages, Docker/OCI images). Optional pointer so
+	// deployments that don't use the feature carry zero bytes for
+	// it. See registry.go for the model and registry_validate.go
+	// for the shape guarantees the runtime relies on.
+	Registry *RegistrySettings `json:"registry,omitempty"`
 
 	// SensitivePayload is the at-rest encrypted blob carrying the
 	// user-supplied secret values for fields above (S3 access keys,
@@ -299,6 +305,10 @@ type PatchSettings struct {
 	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
 	Proxy               *ProxySettings               `json:"proxy,omitempty"`
+	// Registry is patched as a whole tree (nil = no change, non-nil
+	// = replace). The Validate() call in PatchSettings rejects
+	// mis-shaped trees before any write.
+	Registry *RegistrySettings `json:"registry,omitempty"`
 }
 
 type ActionKey string
@@ -443,7 +453,56 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 		settings.Proxy = patch.Proxy
 	}
 
+	// Handle registry tree update. Validate before persistence so a
+	// mis-shaped tree never reaches storage and the runtime can
+	// trust the structure on reload.
+	if patch.Registry != nil {
+		if err := patch.Registry.Validate(); err != nil {
+			return err
+		}
+		settings.Registry = patch.Registry
+	}
+
 	return s.UpdateSettings(ctx, settings)
+}
+
+// EnsureDefaultRegistryNamespace creates the "default" namespace
+// when no registry config exists yet. Called once at boot from
+// internal/server. Non-destructive: if any namespace is already
+// present (including a user-deleted-then-recreated "default"),
+// the function is a no-op.
+//
+// The default namespace is empty (no repositories). The intent is to
+// give the UI a non-empty starting point so the "create repository"
+// flow doesn't have to wedge in a "create namespace first" step for
+// fresh installs.
+func (s *Service) EnsureDefaultRegistryNamespace(ctx context.Context) error {
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		return fmt.Errorf("read settings for registry bootstrap: %w", err)
+	}
+	if settings.Registry != nil && len(settings.Registry.Namespaces) > 0 {
+		return nil // already bootstrapped (or operator has configured)
+	}
+	if settings.Registry == nil {
+		settings.Registry = &RegistrySettings{}
+	}
+	settings.Registry.Namespaces = append(settings.Registry.Namespaces, RegistryNamespace{
+		Name:        DefaultRegistryNamespace,
+		Description: "Default namespace, auto-created at first boot.",
+	})
+	return s.UpdateSettings(ctx, settings)
+}
+
+// GetRegistrySettings returns the current registry tree or nil. Used
+// by the registry runtime to (re)build its in-memory routing table on
+// boot and after every settings save.
+func (s *Service) GetRegistrySettings(ctx context.Context) *RegistrySettings {
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		return nil
+	}
+	return settings.Registry
 }
 
 // ProxyEnabled returns true when the deployment-level proxy feature
@@ -456,6 +515,29 @@ func (s *Service) ProxyEnabled(ctx context.Context) bool {
 		return true
 	}
 	return !settings.Proxy.Disabled
+}
+
+// RegistryEnabled returns true when the deployment-level artifact
+// registry feature flag is on. Mirrors ProxyEnabled / VaultEnabled:
+// nil settings or nil Registry pointer => enabled (backward compat
+// with any row written before the feature flag existed). Consumed
+// by:
+//
+//   - The /api/v1/info endpoint so the SPA can hide the Registries
+//     navigation link when off.
+//   - The /registries/* data router and /api/v1/registries/* admin
+//     router so requests short-circuit to 404 when the operator has
+//     turned the feature off.
+//
+// Note: this checks ONLY the feature flag. The registry runtime can
+// still be unconfigured (no namespaces yet) while the feature is
+// "enabled"; that's a UI/empty-state concern, not a 404 condition.
+func (s *Service) RegistryEnabled(ctx context.Context) bool {
+	settings, err := s.Settings(ctx)
+	if err != nil || settings == nil || settings.Registry == nil {
+		return true
+	}
+	return !settings.Registry.Disabled
 }
 
 // GetExternalPermissionsSettings returns the current external-permissions

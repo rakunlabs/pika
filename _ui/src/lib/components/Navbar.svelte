@@ -1,7 +1,7 @@
 <script lang="ts">
  import { link, router } from 'svelte-spa-router';
  import { appStore } from '@/lib/store/store.svelte';
-  import { Blocks, Settings, User, Users, LogOut, HardDrive, FileSliders, Lock, Globe, Network } from 'lucide-svelte';
+   import { Blocks, Settings, User, Users, LogOut, HardDrive, FileSliders, Lock, Globe, Network, Package } from 'lucide-svelte';
  import ThemeSwitcher from '@/lib/components/ThemeSwitcher.svelte';
 
  const info = $derived(appStore.info);
@@ -18,6 +18,11 @@
    // the nav link so the surface looks like the feature simply
    // doesn't exist on this build.
    const proxyEnabled = $derived(info?.proxy_enabled ?? false);
+   // RegistryEnabled — same deployment-wide feature flag pattern.
+   // Hide the Registries nav link entirely when the operator has
+   // turned the artifact registry off; the page would 404 every
+   // API call anyway.
+   const registryEnabled = $derived(info?.registry_enabled ?? true);
 
   const navItems = $derived.by(() => {
   const items: { path: string; label: string; icon: typeof Settings }[] = [];
@@ -48,14 +53,22 @@
    }
 
    // Proxy page: build custom HTTP listeners from a kaykay node
-   // graph. Gated on the deployment-wide feature flag + the
-   // dedicated proxy.read capability (proxy.manage is checked
-   // inside the page for write actions). Splitting from
-   // settings.manage means a teammate can be granted view+test
-   // without also unlocking auth, secrets, mounts etc.
-   if (proxyEnabled && appStore.hasPermission('proxy.read')) {
-   items.push({ path: '/proxy', label: 'Proxy', icon: Network });
-   }
+    // graph. Gated on the deployment-wide feature flag + the
+    // dedicated proxy.read capability (proxy.manage is checked
+    // inside the page for write actions). Splitting from
+    // settings.manage means a teammate can be granted view+test
+    // without also unlocking auth, secrets, mounts etc.
+    if (proxyEnabled && appStore.hasPermission('proxy.read')) {
+    items.push({ path: '/proxy', label: 'Proxy', icon: Network });
+    }
+
+    // Registries page: artifact registry overview (Go modules, NPM
+    // packages, Docker / OCI images). Gated on registry.read; per-
+    // namespace edit / publish actions inside the page additionally
+    // require registry.admin / registry.write.
+    if (registryEnabled && appStore.hasPermission('registry.read')) {
+    items.push({ path: '/registries', label: 'Registries', icon: Package });
+    }
 
   // Settings is always visible: even users without settings.manage can
   // reach the About section. Individual sections gate themselves inside

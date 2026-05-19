@@ -742,6 +742,12 @@ type settingsRow struct {
 	UserSync            *service.UserSyncSettings            `bw:"user_sync"`
 	Vault               *service.VaultSettings               `bw:"vault"`
 	Proxy               *service.ProxySettings               `bw:"proxy"`
+	// Registry carries the artifact-registry namespace + repository
+	// tree plus the deployment-wide feature flag. Optional pointer so
+	// rows written before the registry feature shipped decode to nil
+	// (treated as "feature enabled, no namespaces configured" by the
+	// service layer).
+	Registry            *service.RegistrySettings            `bw:"registry"`
 	// SensitivePayload mirrors service.Settings.SensitivePayload —
 	// the encrypted blob holding all secret-bearing values that the
 	// secret.Storage wrapper unpacks during Get. bw stores it as raw

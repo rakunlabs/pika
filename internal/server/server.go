@@ -166,7 +166,19 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	defer proxyMgr.Stop()
 	defer api.StopServeServers(rh)
 
-	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, rh, proxyMgrWrapper{proxyMgr}); err != nil {
+	// Build the artifact registry manager BEFORE api.Handle so the
+	// api struct can attach to it during construction. Protocol
+	// factories (registry/goproxy, registry/npm, registry/docker)
+	// register themselves into this manager here, before the
+	// initial Reload that api.Handle triggers — otherwise
+	// Settings.Registry rows of those types would be silently
+	// skipped on cold boot.
+	registryMgr := api.BootRegistryManager(ctx, svc, rh)
+	if err := registerRegistryFactories(registryMgr); err != nil {
+		return fmt.Errorf("register registry factories: %w", err)
+	}
+
+	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, rh, proxyMgrWrapper{proxyMgr}, registryMgr); err != nil {
 		return err
 	}
 

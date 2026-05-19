@@ -27,6 +27,15 @@ const (
 	// different blast radii.
 	CapProxyRead   = "proxy.read"
 	CapProxyManage = "proxy.manage"
+	// Registry capabilities cover the artifact registry feature
+	// (Go modules, NPM, Docker/OCI). Read = browse + pull, write
+	// = push/publish, delete = remove tags/versions/manifests,
+	// admin = settings/namespace/repo CRUD and maintenance actions
+	// like rebuild-index or garbage-collect.
+	CapRegistryRead   = "registry.read"
+	CapRegistryWrite  = "registry.write"
+	CapRegistryDelete = "registry.delete"
+	CapRegistryAdmin  = "registry.admin"
 )
 
 // Capability describes a capability key for UI discovery.
@@ -49,6 +58,10 @@ var KnownCapabilities = []Capability{
 	{CapSettingsManage, "Settings Management", "View and modify server settings, admin secret, backup/restore, key rotation"},
 	{CapProxyRead, "Proxy Read", "View configured proxy servers, their pipelines, live status and run test requests against them"},
 	{CapProxyManage, "Proxy Manage", "Create, edit and delete proxy server graphs (listeners, middleware, handlers)"},
+	{CapRegistryRead, "Registry Read", "Browse and pull artifacts from configured registries (Go modules, NPM packages, Docker/OCI images)"},
+	{CapRegistryWrite, "Registry Write", "Publish and push artifacts to local registries"},
+	{CapRegistryDelete, "Registry Delete", "Remove tags, versions and manifests from registries"},
+	{CapRegistryAdmin, "Registry Admin", "Manage namespaces and repositories, trigger maintenance actions (rebuild index, garbage collect)"},
 	{CapTokensManage, "Token Management", "Create, edit and revoke API access tokens"},
 	{CapUsersManage, "User Management", "Create, edit, delete and kick users"},
 	{CapPermissionsManage, "Permission Management", "Create, edit, delete permissions and assign them to users"},

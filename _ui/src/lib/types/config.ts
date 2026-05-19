@@ -540,12 +540,76 @@ export interface Settings {
   user_sync?: UserSyncSettings;
   vault?: VaultSettings;
   proxy?: ProxySettings;
+  registry?: RegistrySettings;
 }
 
 // ProxySettings is the deployment-wide feature flag for the
 // user-built Proxy Servers. Default disabled=false → enabled.
 export interface ProxySettings {
   disabled: boolean;
+}
+
+// RegistrySettings is the deployment-wide artifact-registry config:
+// feature flag + namespace/repository tree. Operators edit this from
+// the Registries page (tree) and Settings → Features (flag). When
+// posted with action=set the server replaces the entire registry
+// block, so callers must include the full namespaces array even
+// when only flipping the disabled bit (Registries.svelte does this
+// by re-loading first).
+export interface RegistrySettings {
+  disabled?: boolean;
+  namespaces?: RegistryNamespace[];
+}
+
+// RegistryNamespace = tenant. Name is the URL path segment; must
+// match [a-z0-9_-]+ and be unique across the deployment.
+export interface RegistryNamespace {
+  name: string;
+  description?: string;
+  repositories?: RegistryRepository[];
+}
+
+// RegistryRepository — one repo inside a namespace. The shape is
+// the union of all three kinds (local|remote|virtual); the server
+// validator rejects rows that mix fields across kinds.
+export interface RegistryRepository {
+  name: string;
+  description?: string;
+  type: 'go' | 'npm' | 'docker';
+  kind: 'local' | 'remote' | 'virtual';
+  // Local fields
+  mount?: string;
+  base_path?: string;
+  allow_push?: boolean;
+  // Remote fields
+  url?: string;
+  auth?: RegistryUpstreamAuth;
+  mutable_ttl?: string;
+  // Docker-only: tags treated as mutable (TTL-bounded). Tags not
+  // in this list are cached forever after the first resolve. Empty
+  // ⇒ default list. ["*"] ⇒ every tag is floating.
+  floating_tags?: string[];
+  insecure_skip_verify?: boolean;
+  // Virtual fields
+  members?: string[];
+  default_local?: string;
+  // Common overrides
+  cors_origins?: string[];
+  max_upload_size?: number;
+}
+
+// RegistryUpstreamAuth — credentials for a Remote repository's
+// upstream. Username/Password supports HTTP basic; Token supports
+// bearer auth (npm "_authToken", Docker registry token).
+// All secret-valued fields accept "secret://path" references that
+// the server resolves at runtime.
+export interface RegistryUpstreamAuth {
+  type?: 'basic' | 'bearer' | 'header';
+  username?: string;
+  password?: string;
+  token?: string;
+  header_name?: string;
+  header_value?: string;
 }
 
 // VaultSettings is the admin-level feature flag for the personal

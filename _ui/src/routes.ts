@@ -6,6 +6,7 @@ import Users from '@/pages/Users.svelte';
 import Vault from '@/pages/Vault.svelte';
 import External from '@/pages/External.svelte';
 import Proxy from '@/pages/Proxy.svelte';
+import Registries from '@/pages/Registries.svelte';
 
 export default {
   '/': Configurations,
@@ -15,6 +16,7 @@ export default {
   '/vault': Vault,
   '/external': External,
   '/proxy': Proxy,
+  '/registries': Registries,
   '/users': Users,
   '*': NotFound
 };

@@ -72,6 +72,7 @@ func rowToSettings(r *settingsRow) *service.Settings {
 		UserSync:            r.UserSync,
 		Vault:               r.Vault,
 		Proxy:               r.Proxy,
+		Registry:            r.Registry,
 		SensitivePayload:    r.SensitivePayload,
 	}
 }
@@ -96,6 +97,7 @@ func settingsToRow(s *service.Settings) *settingsRow {
 		UserSync:            s.UserSync,
 		Vault:               s.Vault,
 		Proxy:               s.Proxy,
+		Registry:            s.Registry,
 		SensitivePayload:    s.SensitivePayload,
 	}
 }

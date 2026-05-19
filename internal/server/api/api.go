@@ -17,6 +17,7 @@ import (
 	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/rawfs"
 	"github.com/rakunlabs/pika/internal/rawfs/localfs"
+	"github.com/rakunlabs/pika/internal/registry"
 	"github.com/rakunlabs/pika/internal/secret"
 	"github.com/rakunlabs/pika/internal/serve/ftpserve"
 	"github.com/rakunlabs/pika/internal/serve/sftpserve"
@@ -53,13 +54,22 @@ type api struct {
 	rawHandler    *RawHandler         // nil if no raw mounts configured
 	proxyMgr      ProxyReconciler     // nil until server.go injects via Handle
 	syncScheduler *usersync.Scheduler // nil until set by server.go
+	// registryMgr owns the per-(namespace, repo) routing table for
+	// the artifact registry feature. nil until server.go calls
+	// SetRegistryManager during boot. The data-mux entry handler
+	// serveRegistry returns 404 when this is nil, matching pika's
+	// existing "feature unconfigured" semantics for raw mounts and
+	// proxy servers.
+	registryMgr *registry.Manager
 }
+
+
 
 type response struct {
 	Message string `json:"message,omitempty"`
 }
 
-func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, mgr *authx.Manager, rh *RawHandler, proxyMgr ProxyReconciler) error {
+func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, mgr *authx.Manager, rh *RawHandler, proxyMgr ProxyReconciler, registryMgr *registry.Manager) error {
 	// Set hook service identification from config
 	hook.ServiceName = config.ServiceName
 	hook.Version = config.Version
@@ -69,7 +79,15 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// path share one instance. Started below after the routes register.
 	syncSched := usersync.NewScheduler(svc)
 
-	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, rawHandler: rh, proxyMgr: proxyMgr, syncScheduler: syncSched}
+	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, rawHandler: rh, proxyMgr: proxyMgr, syncScheduler: syncSched, registryMgr: registryMgr}
+
+	// Perform the initial registry reload so the routing table is
+	// hot the first time a client hits /registries/*. If the manager
+	// has no factories registered (foundation phase), this is a
+	// no-op aside from logging the empty table.
+	if registryMgr != nil {
+		registryMgr.Reload(context.Background(), svc.GetRegistrySettings(context.Background()))
+	}
 
 	m.ErrorHandler(api.errorHandler)
 
@@ -81,6 +99,18 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	mData.GET("/raw/*", mData.Wrap(api.getRaw))
 	mData.PUT("/raw/*", mData.Wrap(api.putRaw))
 	mData.DELETE("/raw/*", mData.Wrap(api.deleteRaw))
+
+	// Artifact registry endpoints. One catch-all per method because
+	// every protocol (Go, NPM, Docker) needs both safe and unsafe
+	// verbs. The serveRegistry handler parses {namespace}/{repo}
+	// out of the path, enforces token+capability, then dispatches
+	// to the per-repo Registry.
+	mData.GET("/registries/*", mData.Wrap(api.serveRegistry))
+	mData.HEAD("/registries/*", mData.Wrap(api.serveRegistry))
+	mData.POST("/registries/*", mData.Wrap(api.serveRegistry))
+	mData.PUT("/registries/*", mData.Wrap(api.serveRegistry))
+	mData.PATCH("/registries/*", mData.Wrap(api.serveRegistry))
+	mData.DELETE("/registries/*", mData.Wrap(api.serveRegistry))
 
 	mAuth.ErrorHandler(api.errorHandler)
 
@@ -242,6 +272,24 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// Settings
 	m.GET("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.getSettings)))
 	m.POST("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.postSettings)))
+
+	// Artifact registry admin endpoints. listRegistryNamespaces and
+	// listRegistryRepos are read-only (Registry Read or above);
+	// putRegistrySettings replaces the entire registry tree and
+	// gates on Registry Admin.
+	m.GET("/api/v1/registries", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryNamespaces)))
+	m.GET("/api/v1/registries/repos", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryRepos)))
+	m.PUT("/api/v1/registries", m.Wrap(api.withPerm(service.CapRegistryAdmin, api.putRegistrySettings)))
+	// Per-repo module browser for Go registries. Path params
+	// `{ns}` and `{repo}` are extracted via ada's PathValue.
+	m.GET("/api/v1/registries/go/{ns}/{repo}/modules", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryGoModules)))
+	// Per-repo package browser for NPM registries.
+	m.GET("/api/v1/registries/npm/{ns}/{repo}/packages", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryNPMPackages)))
+	// Per-repo image/tag browser for Docker registries.
+	m.GET("/api/v1/registries/docker/{ns}/{repo}/repos", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryDockerRepos)))
+	// Docker GC trigger (mark-and-sweep). Admin only because it
+	// deletes content from the underlying blob store.
+	m.POST("/api/v1/registries/docker/{ns}/{repo}/gc", m.Wrap(api.withPerm(service.CapRegistryAdmin, api.runDockerGC)))
 
 	// Proxy: split into read vs. manage caps. Read covers the
 	// dashboard, status panel, catalog discovery and the in-app
@@ -410,34 +458,37 @@ func (a *api) infoHandler(c *ada.Context) error {
 	// disappears the moment an admin flips the toggle.
 	vaultEnabled := a.svc.VaultEnabled(ctx)
 	proxyEnabled := a.svc.ProxyEnabled(ctx)
+	registryEnabled := a.svc.RegistryEnabled(ctx)
 
 	resp := struct {
 		Info
-		Subtitle       string                  `json:"subtitle,omitempty"`
-		User           string                  `json:"user,omitempty"`
-		AuthEnabled    bool                    `json:"auth_enabled"`
-		BuiltinAuth    bool                    `json:"builtin_auth"`
-		IsSuperadmin   bool                    `json:"is_superadmin"`
-		Permissions    []string                `json:"permissions"`
-		Capabilities   []service.Capability    `json:"capabilities"`
-		SetupRequired  bool                    `json:"setup_required,omitempty"`
-		RawMounts      []MountInfo             `json:"raw_mounts,omitempty"`
-		VaultEnabled   bool                    `json:"vault_enabled"`
-		ProxyEnabled   bool                    `json:"proxy_enabled"`
-		VaultItemTypes []service.VaultItemType `json:"vault_item_types,omitempty"`
+		Subtitle        string                  `json:"subtitle,omitempty"`
+		User            string                  `json:"user,omitempty"`
+		AuthEnabled     bool                    `json:"auth_enabled"`
+		BuiltinAuth     bool                    `json:"builtin_auth"`
+		IsSuperadmin    bool                    `json:"is_superadmin"`
+		Permissions     []string                `json:"permissions"`
+		Capabilities    []service.Capability    `json:"capabilities"`
+		SetupRequired   bool                    `json:"setup_required,omitempty"`
+		RawMounts       []MountInfo             `json:"raw_mounts,omitempty"`
+		VaultEnabled    bool                    `json:"vault_enabled"`
+		ProxyEnabled    bool                    `json:"proxy_enabled"`
+		RegistryEnabled bool                    `json:"registry_enabled"`
+		VaultItemTypes  []service.VaultItemType `json:"vault_item_types,omitempty"`
 	}{
-		Info:           a.info,
-		Subtitle:       subtitle,
-		User:           username,
-		AuthEnabled:    true,
-		BuiltinAuth:    true,
-		IsSuperadmin:   isSuperadmin,
-		Permissions:    caps,
-		Capabilities:   service.KnownCapabilities,
-		RawMounts:      a.rawHandler.MountsInfo(),
-		VaultEnabled:   vaultEnabled,
-		ProxyEnabled:   proxyEnabled,
-		VaultItemTypes: service.KnownVaultItemTypes,
+		Info:            a.info,
+		Subtitle:        subtitle,
+		User:            username,
+		AuthEnabled:     true,
+		BuiltinAuth:     true,
+		IsSuperadmin:    isSuperadmin,
+		Permissions:     caps,
+		Capabilities:    service.KnownCapabilities,
+		RawMounts:       a.rawHandler.MountsInfo(),
+		VaultEnabled:    vaultEnabled,
+		ProxyEnabled:    proxyEnabled,
+		RegistryEnabled: registryEnabled,
+		VaultItemTypes:  service.KnownVaultItemTypes,
 	}
 
 	// Fresh-install detection: no users exist yet.
@@ -497,6 +548,14 @@ func (a *api) postSettings(c *ada.Context) error {
 	// If hooks were updated, reload them in the dispatcher
 	if patchSettings.Hooks != nil {
 		a.reloadHooks(c.Request.Context())
+	}
+
+	// If the registry tree was updated, rebuild the routing table.
+	// Hot reload semantics match raw mounts: the new tree replaces
+	// the old one atomically, in-flight requests against the old
+	// handles drain naturally.
+	if patchSettings.Registry != nil {
+		a.reloadRegistry(c.Request.Context())
 	}
 
 	// If serve settings were updated, reload the corresponding servers

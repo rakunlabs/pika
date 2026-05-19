@@ -861,6 +861,56 @@ function createConfigStore() {
     }
   }
 
+  // saveRegistrySettings replaces the entire registry tree
+  // (namespaces + feature flag). The server validates the full tree
+  // before persisting; callers should fetch+mutate+post the
+  // whole object rather than building partial patches, because
+  // missing namespaces would be interpreted as a delete.
+  //
+  // This is the workhorse for the Registries page (add/edit/delete
+  // namespace + repository) AND the feature toggle in Settings →
+  // Features (which calls it with the existing namespaces array
+  // and only flips disabled).
+  async function saveRegistrySettings(
+    patch: import('@/lib/types/config').RegistrySettings,
+  ): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', {
+        action: 'set',
+        registry: patch,
+      });
+      if (settings) {
+        settings = { ...settings, registry: patch };
+      } else {
+        settings = { registry: patch };
+      }
+      // Refresh /api/v1/info so the navbar registry_enabled gate
+      // updates immediately when this call flipped the flag.
+      await appStore.loadInfo();
+    } catch (error: any) {
+      // Surface the server-side detail when we can. Axios bundles
+      // the JSON error body at error.response.data; the API uses
+      // {error: "..."} for service errors, sometimes {message: "..."}
+      // for older handlers, and may also stuff the wrapped Go
+      // error chain into the body verbatim.
+      const data = error?.response?.data;
+      const detail =
+        (typeof data === 'string' && data) ||
+        data?.error ||
+        data?.message ||
+        error?.message ||
+        'unknown error';
+      const status = error?.response?.status ? ` (HTTP ${error.response.status})` : '';
+      addToast(`Failed to save registry settings${status}: ${detail}`, 'alert');
+      // Also log the full error to the console so the operator can
+      // grab the stack + response body from devtools when the
+      // toast string is too terse.
+      // eslint-disable-next-line no-console
+      console.error('saveRegistrySettings failed', error);
+      throw error;
+    }
+  }
+
   async function saveHooks(hooks: import('@/lib/types/config').Hook[]): Promise<void> {
     try {
       await axios.post('/api/v1/settings', {
@@ -1421,6 +1471,7 @@ function createConfigStore() {
     saveServeSettings,
     saveVaultSettings,
     saveProxySettings,
+    saveRegistrySettings,
     saveHooks,
     saveUserSync,
     listUserSyncStatus,

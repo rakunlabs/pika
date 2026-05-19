@@ -110,6 +110,28 @@ func (h *RawHandler) UpdateMounts(entries []mountEntry) {
 	}
 }
 
+// MountFS returns the rawfs.RawFS backing the named mount prefix.
+// Used by callers outside this package (e.g. the registry runtime
+// in internal/registry) that need to wrap a raw mount with their
+// own abstraction (blobstore, npm metadata cache, ...). Returns
+// ok=false when no mount with that prefix exists.
+//
+// The returned filesystem is the live, hot-reload-tracked instance:
+// a subsequent UpdateMounts swap replaces it, so callers must re-
+// fetch on settings change rather than caching the handle across
+// reloads. (The same pattern as hook/resolve.go which queries the
+// mount table on every Resolve call.)
+func (h *RawHandler) MountFS(prefix string) (rawfs.RawFS, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for i := range h.mounts {
+		if h.mounts[i].Prefix == prefix {
+			return h.mounts[i].FS, true
+		}
+	}
+	return nil, false
+}
+
 // resolveMount finds the matching mount for the given request path.
 func (h *RawHandler) resolveMount(path string) (*mountEntry, string, error) {
 	prefix := path

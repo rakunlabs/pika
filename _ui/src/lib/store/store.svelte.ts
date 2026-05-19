@@ -29,6 +29,11 @@ export interface AppInfo {
   // When false, the SPA hides the /proxy link and the endpoints
   // 404; saved graphs are preserved on the server.
   proxy_enabled?: boolean;
+  // RegistryEnabled mirrors the deployment-level artifact-registry
+  // feature flag. When false, the SPA hides the /registries link
+  // and the data-plane + admin endpoints 404; configured namespaces
+  // and repositories are preserved on the server.
+  registry_enabled?: boolean;
   // VaultItemTypes is the server's known item-type vocabulary, used by
   // the new-item picker. Empty when vault is disabled.
   vault_item_types?: string[];
