@@ -61,10 +61,9 @@ func validateNamespaceRepos(ns *RegistryNamespace) error {
 		}
 		seen[r.Name] = i
 
-		switch r.Type {
-		case RegistryTypeGo, RegistryTypeNPM, RegistryTypeDocker:
-		default:
-			return fmt.Errorf("repo %q: invalid type %q (want go|npm|docker): %w", r.Name, r.Type, ErrBadRequest)
+		if !IsKnownRegistryType(r.Type) {
+			return fmt.Errorf("repo %q: invalid type %q (want one of %v): %w",
+				r.Name, r.Type, KnownRegistryTypes, ErrBadRequest)
 		}
 
 		switch r.Kind {

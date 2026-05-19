@@ -20,7 +20,7 @@ func (s *stubResolver) Lookup(_, repo string) (registry.Registry, bool) {
 	return r, ok
 }
 
-func newVirtual(t *testing.T, members []string, resolver virtualResolver) *Virtual {
+func newVirtual(t *testing.T, members []string, resolver *stubResolver) *Virtual {
 	t.Helper()
 	repo := &service.RegistryRepository{
 		Name: "v", Type: "npm", Kind: "virtual", Members: members,

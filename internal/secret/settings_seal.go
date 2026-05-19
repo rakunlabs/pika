@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/rakunlabs/pika/internal/external"
 	"github.com/rakunlabs/pika/internal/hook"
@@ -93,6 +94,32 @@ type sensitivePayload struct {
 	// FTPUserPasswd / Mounts).
 	OAuth2ClientSecrets []string `json:"oauth2_client_secrets,omitempty"`
 	LDAPBindPassword    string   `json:"ldap_bind_password,omitempty"`
+
+	// Registry upstream credentials. Each entry mirrors one
+	// Settings.Registry.Namespaces[i].Repositories[j].Auth, keyed
+	// by (namespace, repo) so a rename in either dimension carries
+	// the secret along — index-position parallelism wouldn't
+	// survive an operator reordering the namespace list.
+	//
+	// Values that started life as "secret://path" references are
+	// left in place on the public side (extract skips them); only
+	// raw plaintext passwords / tokens / header values cross over
+	// here.
+	RegistryUpstream []sealedRegistryRepo `json:"registry_upstream,omitempty"`
+}
+
+// sealedRegistryRepo is the secret subset of one
+// RegistryRepository.Auth, plus the (namespace, name) coordinate
+// the inject side needs to find the right repo. We carry the
+// coordinate inside the sealed slot so renames in Settings don't
+// orphan the secret — a parallel-index approach would lose the
+// password the moment the operator dragged a namespace up the list.
+type sealedRegistryRepo struct {
+	Namespace       string `json:"namespace"`
+	Name            string `json:"name"`
+	AuthPassword    string `json:"auth_password,omitempty"`
+	AuthToken       string `json:"auth_token,omitempty"`
+	AuthHeaderValue string `json:"auth_header_value,omitempty"`
 }
 
 // sealedMount carries the secret subset of a single RawMountEntry.
@@ -278,7 +305,66 @@ func extractSecrets(s *service.Settings) *sensitivePayload {
 		}
 	}
 
+	// Registry upstream creds. We walk every repository and pull
+	// each Auth.Password / .Token / .HeaderValue that is NOT a
+	// "secret://" reference into the sealed payload. References
+	// stay in place — they're resolved at runtime against the
+	// secret store and don't need a second layer of envelope
+	// encryption around them.
+	extractRegistryUpstream(s, p)
+
 	return p
+}
+
+// extractRegistryUpstream moves plaintext upstream credentials from
+// the public Registry tree into the sealed payload. Empty / ref-
+// scheme values are skipped so we don't waste a sealed slot on
+// values that aren't secrets.
+func extractRegistryUpstream(s *service.Settings, p *sensitivePayload) {
+	if s.Registry == nil || len(s.Registry.Namespaces) == 0 {
+		return
+	}
+	for ni := range s.Registry.Namespaces {
+		ns := &s.Registry.Namespaces[ni]
+		for ri := range ns.Repositories {
+			r := &ns.Repositories[ri]
+			if r.Auth == nil {
+				continue
+			}
+			row := sealedRegistryRepo{Namespace: ns.Name, Name: r.Name}
+			any := false
+			if isPlaintextSecret(r.Auth.Password) {
+				row.AuthPassword = r.Auth.Password
+				r.Auth.Password = ""
+				any = true
+			}
+			if isPlaintextSecret(r.Auth.Token) {
+				row.AuthToken = r.Auth.Token
+				r.Auth.Token = ""
+				any = true
+			}
+			if isPlaintextSecret(r.Auth.Value) {
+				row.AuthHeaderValue = r.Auth.Value
+				r.Auth.Value = ""
+				any = true
+			}
+			if any {
+				p.RegistryUpstream = append(p.RegistryUpstream, row)
+			}
+		}
+	}
+}
+
+// isPlaintextSecret reports whether a value is worth sealing: a
+// non-empty string that does NOT start with the "secret://" prefix.
+// The reference scheme is resolved at runtime and would survive
+// a clear-text serialisation just fine; sealing it would just
+// reduce readability without adding security.
+func isPlaintextSecret(v string) bool {
+	if v == "" {
+		return false
+	}
+	return !strings.HasPrefix(v, "secret://")
 }
 
 // extractHookSecrets factors out the hook-type dispatch so the
@@ -419,6 +505,51 @@ func injectSecrets(s *service.Settings, p *sensitivePayload) {
 		}
 		if s.Auth.LDAP != nil && p.LDAPBindPassword != "" {
 			s.Auth.LDAP.BindPassword = p.LDAPBindPassword
+		}
+	}
+
+	injectRegistryUpstream(s, p)
+}
+
+// injectRegistryUpstream restores upstream creds extracted by
+// extractRegistryUpstream. Lookup is by (namespace, name) — an
+// operator-driven rename loses the binding (the secret slot
+// surfaces with no matching repo and we silently drop it). This
+// is the same trade-off the seal layer makes elsewhere: trust the
+// operator's current Settings tree over the on-disk historical
+// payload.
+func injectRegistryUpstream(s *service.Settings, p *sensitivePayload) {
+	if s.Registry == nil || len(p.RegistryUpstream) == 0 {
+		return
+	}
+	// Build a quick lookup index for the sealed slots. (namespace,
+	// repo) tuples are tiny in practice (10s of entries); a flat
+	// scan is fine but a map keeps inject O(N).
+	idx := make(map[string]*sealedRegistryRepo, len(p.RegistryUpstream))
+	for i := range p.RegistryUpstream {
+		row := &p.RegistryUpstream[i]
+		idx[row.Namespace+"\x00"+row.Name] = row
+	}
+	for ni := range s.Registry.Namespaces {
+		ns := &s.Registry.Namespaces[ni]
+		for ri := range ns.Repositories {
+			r := &ns.Repositories[ri]
+			if r.Auth == nil {
+				continue
+			}
+			row, ok := idx[ns.Name+"\x00"+r.Name]
+			if !ok {
+				continue
+			}
+			if row.AuthPassword != "" {
+				r.Auth.Password = row.AuthPassword
+			}
+			if row.AuthToken != "" {
+				r.Auth.Token = row.AuthToken
+			}
+			if row.AuthHeaderValue != "" {
+				r.Auth.Value = row.AuthHeaderValue
+			}
 		}
 	}
 }
@@ -619,6 +750,13 @@ func isEmptyPayload(p *sensitivePayload) bool {
 	}
 	if p.SFTPHostKeyPEM != "" || p.FTPTLSKeyPEM != "" {
 		return false
+	}
+	if len(p.RegistryUpstream) > 0 {
+		for _, r := range p.RegistryUpstream {
+			if r.AuthPassword != "" || r.AuthToken != "" || r.AuthHeaderValue != "" {
+				return false
+			}
+		}
 	}
 	return true
 }

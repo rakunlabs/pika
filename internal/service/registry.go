@@ -172,6 +172,14 @@ const (
 	RegistryTypeGo     = "go"
 	RegistryTypeNPM    = "npm"
 	RegistryTypeDocker = "docker"
+	// RegistryTypeHelm is the pure-HTTP Helm chart repository
+	// (`index.yaml` + `{chart}-{version}.tgz`). Distinct from
+	// pushing Helm charts as OCI artifacts into a Docker registry;
+	// the type is reserved for the classic Helm protocol so a
+	// `helm repo add` against pika just works. The data plane
+	// optionally accepts ChartMuseum-style writes (POST /api/charts)
+	// for ergonomic publishing.
+	RegistryTypeHelm = "helm"
 
 	RegistryKindLocal   = "local"
 	RegistryKindRemote  = "remote"
@@ -181,6 +189,30 @@ const (
 	RegistryAuthBearer = "bearer"
 	RegistryAuthHeader = "header"
 )
+
+// KnownRegistryTypes is the canonical allowlist of registry types
+// pika ships with. The validator and the factory wiring both read
+// this slice — adding a new protocol means a single insertion here
+// (plus the factory registration in registry_wire.go).
+var KnownRegistryTypes = []string{
+	RegistryTypeGo,
+	RegistryTypeNPM,
+	RegistryTypeDocker,
+	RegistryTypeHelm,
+}
+
+// IsKnownRegistryType reports whether t is one of the registered
+// protocol types. Used by the validator and by any future code path
+// that needs to whitelist registry types without hard-coding the
+// switch.
+func IsKnownRegistryType(t string) bool {
+	for _, k := range KnownRegistryTypes {
+		if t == k {
+			return true
+		}
+	}
+	return false
+}
 
 // DefaultRegistryNamespace is the name of the namespace pika auto-
 // creates on first boot when RegistrySettings is empty. The bootstrap

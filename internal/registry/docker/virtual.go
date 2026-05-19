@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
-	"strings"
 
 	"github.com/rakunlabs/pika/internal/registry"
+	"github.com/rakunlabs/pika/internal/registry/virtualbase"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -33,43 +33,33 @@ import (
 // Token endpoint and uploads are rejected: virtual repos are
 // read-only and don't issue their own tokens (clients should use
 // the pika-wide bearer that authenticates the entry handler).
+//
+// Shared shell (members + resolver + first-hit + header copy +
+// PackageDetail delegation) is in internal/registry/virtualbase.
 type Virtual struct {
-	namespace   string
-	name        string
-	memberNames []string
-	resolve     func(namespace, repo string) (registry.Registry, bool)
-}
-
-// virtualResolver is the narrow surface Virtual needs from the
-// manager.
-type virtualResolver interface {
-	Lookup(namespace, repo string) (registry.Registry, bool)
+	*virtualbase.Base
 }
 
 // NewVirtualFactory returns the Factory for ("docker", "virtual").
-func NewVirtualFactory(resolver virtualResolver) registry.Factory {
+func NewVirtualFactory(resolver virtualbase.Resolver) registry.Factory {
 	return func(_ context.Context, _ registry.Deps, ns string, r *service.RegistryRepository) (registry.Registry, error) {
 		if len(r.Members) == 0 {
 			return nil, fmt.Errorf("docker/virtual %s/%s: members required", ns, r.Name)
 		}
-		members := make([]string, len(r.Members))
-		copy(members, r.Members)
 		return &Virtual{
-			namespace:   ns,
-			name:        r.Name,
-			memberNames: members,
-			resolve: func(namespace, repo string) (registry.Registry, bool) {
-				return resolver.Lookup(namespace, repo)
-			},
+			Base: virtualbase.New(ns, r.Name, r.Members, resolver),
 		}, nil
 	}
 }
 
-func (v *Virtual) Namespace() string { return v.namespace }
-func (v *Virtual) Name() string      { return v.name }
-func (v *Virtual) Type() string      { return service.RegistryTypeDocker }
-func (v *Virtual) Kind() string      { return service.RegistryKindVirtual }
-func (v *Virtual) Close() error      { return nil }
+// Type returns the protocol identifier. Kind / Namespace / Name /
+// Close come from the embedded Base.
+func (v *Virtual) Type() string { return service.RegistryTypeDocker }
+
+// PackageDetail delegates to the first member that has the image.
+func (v *Virtual) PackageDetail(ctx context.Context, name string) (*registry.PackageDetail, error) {
+	return v.DelegatePackageDetail(ctx, name)
+}
 
 // ServeHTTP dispatches.
 func (v *Virtual) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -93,59 +83,35 @@ func (v *Virtual) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case opReferrers:
 		v.serveReferrersUnion(w, r, req)
 	case opManifest, opBlob:
-		v.serveFirstHit(w, r)
+		if !v.ServeFirstHit(w, r) {
+			writeError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "no member served the request")
+		}
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "DENIED", "operation not supported on virtual")
 	}
-}
-
-// serveFirstHit forwards to each member; first 2xx wins.
-func (v *Virtual) serveFirstHit(w http.ResponseWriter, r *http.Request) {
-	for _, memberName := range v.memberNames {
-		mem, ok := v.resolve(v.namespace, memberName)
-		if !ok {
-			continue
-		}
-		rec := httptest.NewRecorder()
-		mem.ServeHTTP(rec, r)
-		if rec.Code >= 200 && rec.Code < 300 {
-			for k, vs := range rec.Header() {
-				for _, val := range vs {
-					w.Header().Add(k, val)
-				}
-			}
-			w.WriteHeader(rec.Code)
-			_, _ = w.Write(rec.Body.Bytes())
-			return
-		}
-	}
-	writeError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", "no member served the request")
 }
 
 // serveCatalogUnion merges every member's catalog and returns a
 // sorted deduped list.
 func (v *Virtual) serveCatalogUnion(w http.ResponseWriter, r *http.Request) {
 	seen := map[string]struct{}{}
-	for _, memberName := range v.memberNames {
-		mem, ok := v.resolve(v.namespace, memberName)
-		if !ok {
-			continue
-		}
+	v.ForEachMember(func(mem registry.Registry) bool {
 		rec := httptest.NewRecorder()
 		mem.ServeHTTP(rec, r)
 		if rec.Code != http.StatusOK {
-			continue
+			return false
 		}
 		var body struct {
 			Repositories []string `json:"repositories"`
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			continue
+			return false
 		}
 		for _, name := range body.Repositories {
 			seen[name] = struct{}{}
 		}
-	}
+		return false
+	})
 	repos := make([]string, 0, len(seen))
 	for n := range seen {
 		repos = append(repos, n)
@@ -158,27 +124,24 @@ func (v *Virtual) serveCatalogUnion(w http.ResponseWriter, r *http.Request) {
 // serveTagsUnion merges every member's tag list for a name.
 func (v *Virtual) serveTagsUnion(w http.ResponseWriter, r *http.Request, name string) {
 	seen := map[string]struct{}{}
-	for _, memberName := range v.memberNames {
-		mem, ok := v.resolve(v.namespace, memberName)
-		if !ok {
-			continue
-		}
+	v.ForEachMember(func(mem registry.Registry) bool {
 		rec := httptest.NewRecorder()
 		mem.ServeHTTP(rec, r)
 		if rec.Code != http.StatusOK {
-			continue
+			return false
 		}
 		var body struct {
 			Name string   `json:"name"`
 			Tags []string `json:"tags"`
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			continue
+			return false
 		}
 		for _, t := range body.Tags {
 			seen[t] = struct{}{}
 		}
-	}
+		return false
+	})
 	tags := make([]string, 0, len(seen))
 	for t := range seen {
 		tags = append(tags, t)
@@ -190,28 +153,25 @@ func (v *Virtual) serveTagsUnion(w http.ResponseWriter, r *http.Request, name st
 
 // serveReferrersUnion merges every member's referrers index for a
 // subject digest. Dedupes by referrer digest.
-func (v *Virtual) serveReferrersUnion(w http.ResponseWriter, r *http.Request, req parsedRequest) {
+func (v *Virtual) serveReferrersUnion(w http.ResponseWriter, r *http.Request, _ parsedRequest) {
 	seen := map[string]manifestDescriptor{}
-	for _, memberName := range v.memberNames {
-		mem, ok := v.resolve(v.namespace, memberName)
-		if !ok {
-			continue
-		}
+	v.ForEachMember(func(mem registry.Registry) bool {
 		rec := httptest.NewRecorder()
 		mem.ServeHTTP(rec, r)
 		if rec.Code != http.StatusOK {
-			continue
+			return false
 		}
 		var idx ociImageIndex
 		if err := json.Unmarshal(rec.Body.Bytes(), &idx); err != nil {
-			continue
+			return false
 		}
 		for _, m := range idx.Manifests {
 			if _, dup := seen[m.Digest]; !dup {
 				seen[m.Digest] = m
 			}
 		}
-	}
+		return false
+	})
 	idx := newEmptyReferrersIndex()
 	for _, m := range seen {
 		idx.Manifests = append(idx.Manifests, m)
@@ -234,6 +194,3 @@ func (v *Virtual) serveReferrersUnion(w http.ResponseWriter, r *http.Request, re
 	body, _ := json.Marshal(idx)
 	writeOK(w, "application/vnd.oci.image.index.v1+json", body)
 }
-
-// _ kept to silence unused-import linters across optional refactors.
-var _ = strings.Join

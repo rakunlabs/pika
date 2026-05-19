@@ -263,6 +263,101 @@ func TestRemote_RejectsWrite(t *testing.T) {
 	}
 }
 
+// TestRemote_PurgeMutableForcesRefetch verifies that calling
+// PurgeCache with the default (mutable-only) scope deletes cached
+// @latest pointers so a subsequent request re-hits upstream.
+// Immutable artifacts must NOT be re-fetched.
+func TestRemote_PurgeMutableForcesRefetch(t *testing.T) {
+	fu := newFakeUpstream()
+	defer fu.Close()
+	mod := "github.com/foo/bar"
+	encoded := EncodeModulePath(mod)
+	fu.Serve("/"+encoded+"/@latest", "application/json",
+		`{"Version":"v1.2.3","Time":"2024-01-15T00:00:00Z"}`)
+	fu.Serve("/"+encoded+"/@v/v1.0.0.info", "application/json",
+		`{"Version":"v1.0.0","Time":"2024-01-01T00:00:00Z"}`)
+
+	rr, _ := newRemote(t, fu.URL())
+
+	// Warm caches. .info first so it doesn't get knocked out by the
+	// WriteVersionFile-triggered @latest invalidation (a quirk of
+	// the Local store: every version write also drops the cached
+	// @latest pointer to force a rebuild).
+	for _, p := range []string{
+		"/" + encoded + "/@v/v1.0.0.info",
+		"/" + encoded + "/@latest",
+	} {
+		r := httptest.NewRequest(http.MethodGet, p, nil)
+		w := httptest.NewRecorder()
+		rr.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("warm %s: %d", p, w.Code)
+		}
+	}
+	hitsBeforePurge := fu.Hits()
+
+	stats, err := rr.PurgeCache(context.Background(), registry.PurgeOptions{All: false})
+	if err != nil {
+		t.Fatalf("PurgeCache: %v", err)
+	}
+	if stats.PurgedFiles == 0 {
+		t.Fatalf("expected >0 purged files, got %+v", stats)
+	}
+
+	// @latest must re-fetch upstream.
+	r := httptest.NewRequest(http.MethodGet, "/"+encoded+"/@latest", nil)
+	rr.ServeHTTP(httptest.NewRecorder(), r)
+	if fu.Hits() == hitsBeforePurge {
+		t.Fatalf("@latest did NOT re-fetch after mutable purge (hits stuck at %d)", hitsBeforePurge)
+	}
+	hitsAfterLatest := fu.Hits()
+
+	// .info must still be cached (immutable, mutable-only scope).
+	r2 := httptest.NewRequest(http.MethodGet, "/"+encoded+"/@v/v1.0.0.info", nil)
+	rr.ServeHTTP(httptest.NewRecorder(), r2)
+	if fu.Hits() != hitsAfterLatest {
+		t.Fatalf("immutable .info was re-fetched after mutable purge (should be kept)")
+	}
+}
+
+// TestRemote_PurgeAllDropsImmutables checks the wider scope: with
+// opts.All=true, the .info we cached previously must also be
+// gone and re-fetched on the next read.
+func TestRemote_PurgeAllDropsImmutables(t *testing.T) {
+	fu := newFakeUpstream()
+	defer fu.Close()
+	mod := "github.com/foo/bar"
+	encoded := EncodeModulePath(mod)
+	fu.Serve("/"+encoded+"/@v/v1.0.0.info", "application/json",
+		`{"Version":"v1.0.0","Time":"2024-01-01T00:00:00Z"}`)
+
+	rr, _ := newRemote(t, fu.URL())
+	// Warm.
+	for i := 0; i < 2; i++ {
+		r := httptest.NewRequest(http.MethodGet, "/"+encoded+"/@v/v1.0.0.info", nil)
+		rr.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	hitsBeforePurge := fu.Hits()
+	if hitsBeforePurge != 1 {
+		t.Fatalf("expected 1 upstream hit during warm-up, got %d", hitsBeforePurge)
+	}
+
+	if _, err := rr.PurgeCache(context.Background(), registry.PurgeOptions{All: true}); err != nil {
+		t.Fatalf("PurgeCache: %v", err)
+	}
+
+	// Next read must re-fetch.
+	r := httptest.NewRequest(http.MethodGet, "/"+encoded+"/@v/v1.0.0.info", nil)
+	w := httptest.NewRecorder()
+	rr.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("post-purge fetch %d", w.Code)
+	}
+	if fu.Hits() == hitsBeforePurge {
+		t.Fatalf(".info was NOT re-fetched after PurgeAll (hits stuck at %d)", hitsBeforePurge)
+	}
+}
+
 func TestRemote_BogusURLPath(t *testing.T) {
 	fu := newFakeUpstream()
 	defer fu.Close()

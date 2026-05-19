@@ -51,6 +51,7 @@ import (
 
 	"github.com/rakunlabs/pika/internal/rawfs"
 	"github.com/rakunlabs/pika/internal/registry/blobstore"
+	"github.com/rakunlabs/pika/internal/registry/events"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -154,6 +155,12 @@ type Deps struct {
 	// callers must re-fetch on settings change rather than caching
 	// the handle across reloads.
 	MountRawFS func(mount string) (rawfs.RawFS, error)
+
+	// Emitter publishes semantic lifecycle events (publish,
+	// delete, GC, cache purge) to pika's hook dispatcher. Optional
+	// — implementations should funnel through events.EmitSafe so a
+	// nil Emitter is a clean no-op.
+	Emitter events.Emitter
 }
 
 // SecretResolver resolves a value that may carry a "secret://" prefix
@@ -163,3 +170,290 @@ type Deps struct {
 type SecretResolver interface {
 	ResolveSecret(ctx context.Context, value string) (string, error)
 }
+
+// PurgeOptions controls the scope of a cache purge. Optional;
+// concrete registries decide which fields apply to them.
+type PurgeOptions struct {
+	// All requests a deep purge: remote-cached blobs, manifests
+	// and tarballs are deleted in addition to the mutable
+	// pointers (@v/list, packuments, floating tag pointers).
+	// Default (All=false) is the conservative "mutable only"
+	// scope — operators clear stale tag pointers without
+	// triggering a full re-download.
+	All bool
+}
+
+// PurgeStats is the post-purge accounting the handler surfaces to
+// the operator. Zero values mean "nothing matched"; an empty Errors
+// slice means "completed cleanly".
+type PurgeStats struct {
+	PurgedFiles int   `json:"purged_files"`
+	PurgedBytes int64 `json:"purged_bytes"`
+	// Skipped counts files the purge intentionally left in place
+	// (e.g. immutable content under conservative scope).
+	Skipped int      `json:"skipped"`
+	Errors  []string `json:"errors,omitempty"`
+}
+
+// CachePurger is the optional interface a Registry implementation
+// implements when it supports operator-triggered cache invalidation.
+// Local registries typically return ErrNotSupported because their
+// content is the source of truth; Remote and Virtual registries
+// hold cached upstream data that benefits from a manual refresh.
+//
+// The handler in internal/server/api/registry.go type-asserts to
+// this interface and exposes the POST .../purge endpoint only when
+// the assertion succeeds.
+type CachePurger interface {
+	PurgeCache(ctx context.Context, opts PurgeOptions) (PurgeStats, error)
+}
+
+// Stats is the response shape for GET .../stats. Fields are
+// type-specific and zero when the underlying registry doesn't
+// produce a value (e.g. a Go repo never has TagCount).
+//
+// All counts are exact at the time of the call; pika doesn't keep
+// running counters between requests — every stats query walks the
+// underlying storage. This keeps the design free of persistent
+// counter state at the cost of an O(N) walk per request. N is
+// typically small (10s of modules / hundreds of blobs), so the
+// trade-off is comfortable; large operators can layer their own
+// Prometheus collector on top later.
+type Stats struct {
+	BlobCount   int   `json:"blob_count,omitempty"`
+	TotalBytes  int64 `json:"total_bytes,omitempty"`
+	// Type-specific counters. The handler unpacks them by
+	// inspecting the Registry's Type() / Kind() so the UI sees a
+	// single shape per protocol.
+	ModuleCount     int `json:"module_count,omitempty"`     // Go
+	VersionCount    int `json:"version_count,omitempty"`    // Go / NPM
+	PackageCount    int `json:"package_count,omitempty"`    // NPM
+	RepositoryCount int `json:"repository_count,omitempty"` // Docker
+	TagCount        int `json:"tag_count,omitempty"`        // Docker
+	ManifestCount   int `json:"manifest_count,omitempty"`   // Docker
+}
+
+// StatsProvider is the optional interface a Registry implements
+// when it can report on-disk statistics. Every concrete Local /
+// Remote implementation in pika supplies one; Virtual delegates to
+// members or returns zeros (each member can be queried directly).
+type StatsProvider interface {
+	Stats(ctx context.Context) (Stats, error)
+}
+
+// PackageDetail is the response shape for per-package detail
+// queries (GET /api/v1/registries/{type}/{ns}/{repo}/packages/{name}).
+// The polymorphic payload mirrors the registry types pika supports:
+// exactly one of NPM / Go / Docker / Helm is populated per response
+// based on Type. This keeps a single endpoint while preserving the
+// distinct metadata vocabulary each protocol uses.
+//
+// Fields are intentionally large here because the detail view is
+// the UI's primary surface for discovery — every reasonable
+// metadata bit a developer might want is included up-front so the
+// UI doesn't need to fan out into multiple secondary requests for
+// a single package's overview screen.
+type PackageDetail struct {
+	Type   string             `json:"type"`             // "npm" | "go" | "docker" | "helm"
+	Name   string             `json:"name"`             // canonical package / module / image / chart name
+	NPM    *NPMPackageDetail  `json:"npm,omitempty"`    // populated when Type == "npm"
+	Go     *GoModuleDetail    `json:"go,omitempty"`     // populated when Type == "go"
+	Docker *DockerRepoDetail  `json:"docker,omitempty"` // populated when Type == "docker"
+	Helm   *HelmChartDetail   `json:"helm,omitempty"`   // populated when Type == "helm"
+}
+
+// NPMPackageDetail carries the rich metadata surfaced for one NPM
+// package. Versions are listed newest-first (semver-sorted when
+// possible, lex fallback). Every field except Name is optional —
+// a freshly-published package may not have keywords / repository /
+// homepage if the publisher omitted them.
+type NPMPackageDetail struct {
+	// LatestVersion is the version in the "latest" dist-tag, or
+	// the highest-sorted version when no dist-tag is set.
+	LatestVersion string `json:"latest_version,omitempty"`
+	// Description, Homepage, License, Repository, Bugs are pulled
+	// from the latest version's package.json. They're top-level
+	// here so the UI doesn't have to traverse Versions[latest] to
+	// render the package card.
+	Description string         `json:"description,omitempty"`
+	Homepage    string         `json:"homepage,omitempty"`
+	License     string         `json:"license,omitempty"`
+	Repository  map[string]any `json:"repository,omitempty"`
+	Bugs        map[string]any `json:"bugs,omitempty"`
+	Keywords    []string       `json:"keywords,omitempty"`
+	Author      map[string]any `json:"author,omitempty"`
+	Maintainers []any          `json:"maintainers,omitempty"`
+	// DistTags is the full tag→version map (latest, beta, next, …).
+	DistTags map[string]string `json:"dist_tags,omitempty"`
+	// HasReadme is true when a README is available for at least
+	// the latest version. The UI uses this to decide whether to
+	// render a "README" tab; the README itself is served from a
+	// dedicated sub-endpoint so the package detail payload stays
+	// small.
+	HasReadme bool `json:"has_readme,omitempty"`
+	// Versions is the per-version detail, sorted newest-first.
+	Versions []NPMVersionDetail `json:"versions,omitempty"`
+}
+
+// NPMVersionDetail is one row in NPMPackageDetail.Versions.
+type NPMVersionDetail struct {
+	Version          string         `json:"version"`
+	PublishedAt      string         `json:"published_at,omitempty"` // RFC3339 from publish-time stamp
+	Size             int64          `json:"size,omitempty"`         // tarball bytes if known
+	Integrity        string         `json:"integrity,omitempty"`    // dist.integrity (sha512-…)
+	Shasum           string         `json:"shasum,omitempty"`       // legacy dist.shasum
+	TarballURL       string         `json:"tarball_url,omitempty"`  // public tarball URL (rewritten)
+	Dependencies     map[string]any `json:"dependencies,omitempty"`
+	DevDependencies  map[string]any `json:"dev_dependencies,omitempty"`
+	PeerDependencies map[string]any `json:"peer_dependencies,omitempty"`
+	Engines          map[string]any `json:"engines,omitempty"`
+	Deprecated       string         `json:"deprecated,omitempty"` // non-empty = yanked with reason
+}
+
+// GoModuleDetail carries per-module metadata for a Go module.
+type GoModuleDetail struct {
+	// LatestVersion is the semver-highest version present.
+	LatestVersion string `json:"latest_version,omitempty"`
+	// Versions sorted newest-first by semver when possible.
+	Versions []GoVersionDetail `json:"versions,omitempty"`
+}
+
+// GoVersionDetail is one row in GoModuleDetail.Versions.
+type GoVersionDetail struct {
+	Version             string `json:"version"`
+	PublishedAt         string `json:"published_at,omitempty"`  // RFC3339 from .info Time
+	Retracted           bool   `json:"retracted,omitempty"`     // parsed from go.mod retract directive
+	RetractionRationale string `json:"retraction_rationale,omitempty"`
+	GoModSize           int64  `json:"gomod_size,omitempty"` // bytes of .mod file
+	ZipSize             int64  `json:"zip_size,omitempty"`   // bytes of .zip file
+}
+
+// DockerRepoDetail surfaces per-image tag detail with layer-level
+// breakdowns. The MVP only resolves layers for tags the operator
+// hits via the detail endpoint — listing the whole catalogue does
+// not pre-fetch every manifest.
+type DockerRepoDetail struct {
+	Tags []DockerTagDetail `json:"tags,omitempty"`
+}
+
+// DockerTagDetail mirrors dockerTagSummary but with manifest-level
+// detail (config digest, layer list, platform array for multi-arch
+// manifest lists).
+type DockerTagDetail struct {
+	Tag          string           `json:"tag"`
+	Digest       string           `json:"digest,omitempty"`
+	MediaType    string           `json:"media_type,omitempty"`
+	ArtifactType string           `json:"artifact_type,omitempty"`
+	// ManifestSize is the size of the manifest JSON document.
+	ManifestSize int64 `json:"manifest_size,omitempty"`
+	// ImageSize is the sum of layer sizes (image-on-disk size).
+	// Zero when the manifest could not be parsed (e.g. unknown
+	// artifact format) or when this entry describes a manifest
+	// list (use the per-platform entries instead).
+	ImageSize    int64           `json:"image_size,omitempty"`
+	ConfigDigest string          `json:"config_digest,omitempty"`
+	Layers       []DockerLayer   `json:"layers,omitempty"`
+	Platforms    []DockerPlatform `json:"platforms,omitempty"` // populated for manifest lists
+}
+
+// DockerLayer is one row in DockerTagDetail.Layers.
+type DockerLayer struct {
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+}
+
+// DockerPlatform is one row in DockerTagDetail.Platforms (used for
+// manifest lists / multi-arch images).
+type DockerPlatform struct {
+	OS           string `json:"os,omitempty"`
+	Architecture string `json:"architecture,omitempty"`
+	Variant      string `json:"variant,omitempty"`
+	Digest       string `json:"digest,omitempty"`
+	Size         int64  `json:"size,omitempty"`
+}
+
+// HelmChartDetail surfaces Chart.yaml-derived metadata for a Helm
+// chart. Used by the helm registry type (B3); included in the
+// shared shape so the UI can dispatch on Type uniformly.
+type HelmChartDetail struct {
+	LatestVersion string             `json:"latest_version,omitempty"`
+	Description   string             `json:"description,omitempty"`
+	Icon          string             `json:"icon,omitempty"`
+	AppVersion    string             `json:"app_version,omitempty"`
+	Keywords      []string           `json:"keywords,omitempty"`
+	Maintainers   []any              `json:"maintainers,omitempty"`
+	HasReadme     bool               `json:"has_readme,omitempty"`
+	Versions      []HelmVersionDetail `json:"versions,omitempty"`
+}
+
+// HelmVersionDetail is one row in HelmChartDetail.Versions.
+type HelmVersionDetail struct {
+	Version     string   `json:"version"`
+	AppVersion  string   `json:"app_version,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Created     string   `json:"created,omitempty"`
+	Digest      string   `json:"digest,omitempty"`
+	Size        int64    `json:"size,omitempty"`
+	URLs        []string `json:"urls,omitempty"`
+}
+
+// UpstreamHealth is the response shape for the operator-triggered
+// "test upstream" probe. Only Remote kinds implement the
+// underlying interface; Local / Virtual return 400 from the HTTP
+// handler.
+type UpstreamHealth struct {
+	OK         bool   `json:"ok"`
+	StatusCode int    `json:"status_code,omitempty"`
+	LatencyMS  int64  `json:"latency_ms,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Error      string `json:"error,omitempty"`
+	// BodyPreview is the first ~256 bytes of the response (HTML
+	// error pages from misconfigured proxies are useful diagnostic
+	// signal). Trimmed to keep the payload small.
+	BodyPreview string `json:"body_preview,omitempty"`
+}
+
+// UpstreamProber is the optional interface implemented by Remote
+// kinds that can run a connectivity check against their
+// configured upstream. The probe uses whatever auth + TLS config
+// the live registry is using, so the result reflects what an
+// actual client request would see.
+type UpstreamProber interface {
+	ProbeUpstream(ctx context.Context) (UpstreamHealth, error)
+}
+
+// PackageDetailer is the optional interface a Registry implements
+// when it can resolve detailed per-package metadata. Local
+// registries always implement it (they own the source bytes);
+// Remote registries implement it against their cache; Virtual
+// registries delegate to the first member that has the package.
+//
+// The name argument is the canonical package / module / image
+// name (NPM "@scope/pkg", Go "example.com/foo", Docker
+// "library/nginx", Helm "my-chart"). Implementations return
+// (nil, ErrPackageNotFound) when the name does not exist.
+type PackageDetailer interface {
+	PackageDetail(ctx context.Context, name string) (*PackageDetail, error)
+}
+
+// ErrPackageNotFound is the sentinel returned by PackageDetailer
+// implementations when the requested package does not exist in
+// this registry. Callers wrap with service.ErrNotFound for 404
+// mapping at the HTTP boundary.
+var ErrPackageNotFound = errSentinel("package not found")
+
+// ErrInvalidPackageName is the sentinel returned by PackageDetailer
+// implementations when the caller-supplied name is malformed for
+// the protocol (e.g. an empty NPM package name, a Go module path
+// that fails ValidateModulePath). Distinct from ErrPackageNotFound
+// because the HTTP layer maps it to 400 instead of 404 — the
+// request is malformed, not just unsatisfied.
+var ErrInvalidPackageName = errSentinel("invalid package name")
+
+// errSentinel is a string-backed error type used to define package
+// sentinels without introducing an errors-package dep at this
+// layer.
+type errSentinel string
+
+func (e errSentinel) Error() string { return string(e) }

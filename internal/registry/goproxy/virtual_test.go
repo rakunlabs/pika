@@ -14,9 +14,9 @@ import (
 	"github.com/rakunlabs/pika/internal/service"
 )
 
-// stubResolver is a virtualResolver that returns canned registries
-// by name. Tests build the chain explicitly so they don't depend on
-// the real manager.
+// stubResolver is a virtualbase.Resolver that returns canned
+// registries by name. Tests build the chain explicitly so they
+// don't depend on the real manager.
 type stubResolver struct {
 	regs map[string]registry.Registry
 }
@@ -26,7 +26,7 @@ func (s *stubResolver) Lookup(_, repo string) (registry.Registry, bool) {
 	return r, ok
 }
 
-func newVirtual(t *testing.T, members []string, resolver virtualResolver) *Virtual {
+func newVirtual(t *testing.T, members []string, resolver *stubResolver) *Virtual {
 	t.Helper()
 	repo := &service.RegistryRepository{
 		Name:    "go-virt",

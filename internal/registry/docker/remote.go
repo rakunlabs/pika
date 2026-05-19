@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/rakunlabs/pika/internal/rawfs"
 	"github.com/rakunlabs/pika/internal/registry"
 	"github.com/rakunlabs/pika/internal/registry/blobstore"
 	"github.com/rakunlabs/pika/internal/registry/common"
@@ -98,29 +100,19 @@ type cachedToken struct {
 // NewRemoteFactory returns the Factory for ("docker", "remote") repos.
 func NewRemoteFactory() registry.Factory {
 	return func(_ context.Context, deps registry.Deps, ns string, r *service.RegistryRepository) (registry.Registry, error) {
-		fs, err := deps.MountRawFS(r.Mount)
+		// Docker needs the CAS blob store in addition to the raw
+		// mount handle — BuildRemote covers the raw handle, the
+		// upstream client (with the longer 5min timeout blob
+		// fetches need), and the TTL; we layer the blobstore on
+		// top here.
+		b, err := upstream.BuildRemote(deps, "docker/remote", ns, r, 5*time.Minute,
+			upstream.RemoteBuildOptions{ClientTimeout: 5 * time.Minute})
 		if err != nil {
-			return nil, fmt.Errorf("docker/remote %s/%s: mount: %w", ns, r.Name, err)
+			return nil, err
 		}
 		blobs, err := deps.MountFor(r.Mount, r.BasePath)
 		if err != nil {
 			return nil, fmt.Errorf("docker/remote %s/%s: blobstore: %w", ns, r.Name, err)
-		}
-		client, err := upstream.NewClient(upstream.Config{
-			BaseURL:            r.URL,
-			Auth:               r.Auth,
-			Resolver:           deps.Resolver,
-			InsecureSkipVerify: r.InsecureSkipVerify,
-			Timeout:            5 * time.Minute, // blob fetches can be GB-sized
-		})
-		if err != nil {
-			return nil, err
-		}
-		ttl := 5 * time.Minute
-		if r.MutableTTL != "" {
-			if d, err := time.ParseDuration(r.MutableTTL); err == nil {
-				ttl = d
-			}
 		}
 		// Detect Docker Hub and inject the "library/" prefix
 		// automatically. Heuristic: when the upstream URL is the
@@ -133,11 +125,11 @@ func NewRemoteFactory() registry.Factory {
 		return &Remote{
 			namespace:    ns,
 			name:         r.Name,
-			store:        NewStore(fs, blobs, r.BasePath),
-			client:       client,
+			store:        NewStore(b.FS, blobs, b.BasePath),
+			client:       b.Client,
 			upstreamURL:  strings.TrimRight(r.URL, "/"),
 			pathPrefix:   pathPrefix,
-			mutableTTL:   ttl,
+			mutableTTL:   b.MutableTTL,
 			floatingTags: floating,
 			floatingAll:  floatAll,
 			sf:           common.NewSingleflight(),
@@ -156,6 +148,20 @@ func (rr *Remote) Close() error {
 		return rr.client.Close()
 	}
 	return nil
+}
+
+// PackageDetail implements registry.PackageDetailer against the
+// cached manifests/tags this Remote has pulled.
+func (rr *Remote) PackageDetail(ctx context.Context, name string) (*registry.PackageDetail, error) {
+	return buildPackageDetail(ctx, rr.store, name)
+}
+
+// ProbeUpstream implements registry.UpstreamProber. /v2/ is the
+// OCI Distribution challenge endpoint every spec-compliant
+// registry implements; a 200 (or 401 with Bearer challenge)
+// confirms reachability.
+func (rr *Remote) ProbeUpstream(ctx context.Context) (registry.UpstreamHealth, error) {
+	return upstream.Probe(ctx, rr.client, "/v2/"), nil
 }
 
 // upstreamName applies the optional path prefix to a logical repo
@@ -330,6 +336,145 @@ func (rr *Remote) tagPointerExists(path string) bool {
 		return true
 	}
 	return false
+}
+
+// Stats implements registry.StatsProvider. Returns the same shape
+// as Docker Local — for a Remote the numbers reflect what pika has
+// cached locally rather than what the upstream catalog reports.
+func (rr *Remote) Stats(_ context.Context) (registry.Stats, error) {
+	repos, tags, manifests := rr.store.CountRepositoriesTagsManifests()
+	var (
+		blobCount  int
+		totalBytes int64
+	)
+	_ = rr.store.Blobs().ListBlobs(func(_ blobstore.Digest, info *blobstore.BlobInfo) error {
+		blobCount++
+		if info != nil {
+			totalBytes += info.Size
+		}
+		return nil
+	})
+	return registry.Stats{
+		RepositoryCount: repos,
+		TagCount:        tags,
+		ManifestCount:   manifests,
+		BlobCount:       blobCount,
+		TotalBytes:      totalBytes,
+	}, nil
+}
+
+// PurgeCache implements registry.CachePurger for Docker Remote.
+//
+// opts.All=false (default, "mutable scope"): delete the cached
+// /v2/_catalog and per-repo /tags/list bodies, plus every floating
+// tag → digest pointer. Non-floating tag pointers, manifests by
+// digest, blob layers and the referrers index are kept (they're
+// content-addressed and rarely benefit from invalidation).
+//
+// opts.All=true ("nuclear"): also delete every manifest and the
+// entire blob store contents. Used when the operator suspects
+// cache corruption; forces a full re-download on the next pull.
+func (rr *Remote) PurgeCache(_ context.Context, opts registry.PurgeOptions) (registry.PurgeStats, error) {
+	wfs, ok := rr.store.RawFS().(rawfs.WritableRawFS)
+	if !ok {
+		return registry.PurgeStats{}, fmt.Errorf("docker/remote: backend is read-only")
+	}
+	var (
+		count int
+		bytes int64
+		errs  []error
+	)
+
+	// Step 1: per-repo mutable artifacts (tags/list cache + floating
+	// tag pointers). Walk the repository directory tree.
+	repos, _ := rr.store.ListRepositories()
+	for _, name := range repos {
+		// Tag list cache.
+		tagsListPath := rr.store.repoDir(name) + "/_tags_list.json"
+		if fi, err := rr.store.RawFS().Stat(tagsListPath); err == nil {
+			if delErr := wfs.Delete(tagsListPath); delErr == nil {
+				count++
+				bytes += fi.Size
+			}
+		}
+		// Floating tag pointers — read ListTags then filter by
+		// classification. With opts.All=true every tag pointer
+		// is purged (matches the "force re-resolve everything"
+		// intent).
+		tags, _ := rr.store.ListTags(name)
+		for _, tag := range tags {
+			if !opts.All && !rr.isFloatingTag(tag) {
+				continue
+			}
+			tp := rr.store.tagPath(name, tag)
+			if fi, err := rr.store.RawFS().Stat(tp); err == nil {
+				if delErr := wfs.Delete(tp); delErr == nil {
+					count++
+					bytes += fi.Size
+				} else if !isDockerNotFound(delErr) {
+					errs = append(errs, fmt.Errorf("delete %s: %w", tp, delErr))
+				}
+			}
+		}
+	}
+
+	// Step 2: with opts.All=true, drop the deeper cache layers too.
+	// Manifests + blob store. These are immutable upstream-side so
+	// the only reason to wipe them is corruption recovery.
+	if opts.All {
+		for _, name := range repos {
+			manifests := path.Join(rr.store.repoDir(name), "manifests")
+			entries, _ := rr.store.RawFS().ReadDir(manifests)
+			for _, e := range entries {
+				if e.IsDir {
+					continue
+				}
+				p := path.Join(manifests, e.Name)
+				if fi, err := rr.store.RawFS().Stat(p); err == nil {
+					if delErr := wfs.Delete(p); delErr == nil {
+						count++
+						bytes += fi.Size
+					}
+				}
+			}
+		}
+		// Blob store wipe: walk every blob and delete. The
+		// BlobStore.ListBlobs callback gives us the size for free
+		// so we don't need a separate Stat per entry.
+		_ = rr.store.Blobs().ListBlobs(func(d blobstore.Digest, info *blobstore.BlobInfo) error {
+			if err := rr.store.Blobs().Delete(d); err == nil {
+				count++
+				if info != nil {
+					bytes += info.Size
+				}
+			} else if !isDockerNotFound(err) {
+				errs = append(errs, fmt.Errorf("delete blob %s: %w", d, err))
+			}
+			return nil
+		})
+	}
+
+	out := registry.PurgeStats{
+		PurgedFiles: count,
+		PurgedBytes: bytes,
+	}
+	for _, e := range errs {
+		out.Errors = append(out.Errors, e.Error())
+	}
+	return out, nil
+}
+
+// isDockerNotFound recognises rawfs / BlobStore not-found errors
+// uniformly. Used by purge so a concurrent push that races a delete
+// doesn't surface a spurious error.
+func isDockerNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "not found") ||
+		strings.Contains(low, "no such file") ||
+		strings.Contains(low, "does not exist")
 }
 
 // isFloatingTag reports whether the operator has declared the tag

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/rakunlabs/pika/internal/registry/common/semver"
 )
 
 // Module path encoding and version validation.
@@ -132,4 +134,113 @@ func ValidateVersion(v string) error {
 		return fmt.Errorf("version %q: invalid format", v)
 	}
 	return nil
+}
+
+// CompareVersions implements a coarse semver-aware comparator
+// returning <0 / 0 / >0 for (a < b), (a == b), (a > b). The
+// algorithm mirrors golang.org/x/mod/semver semantics for the
+// subset of versions Go modules actually use; pre-release tags
+// sort *before* the matching release (1.2.3-alpha < 1.2.3) and
+// build metadata is ignored.
+//
+// Thin wrapper over common/semver.Compare in ModeStrict — Go
+// module versions always carry the leading "v". Preserved as a
+// package-level export for store_test.go and external callers.
+func CompareVersions(a, b string) int {
+	return semver.Compare(a, b, semver.ModeStrict)
+}
+
+// SortVersionsDesc sorts the slice in place from highest to
+// lowest semver. Used by the UI's package detail view which
+// wants the newest release at the top.
+func SortVersionsDesc(versions []string) {
+	semver.SortDesc(versions, semver.ModeStrict)
+}
+
+// GoModInfo captures the small subset of go.mod fields pika
+// surfaces in the package detail UI. The parser is intentionally
+// minimal — full go.mod parsing belongs in golang.org/x/mod/modfile,
+// which we avoid here for the same reason as in CompareVersions.
+//
+// Only `module` and `retract` directives are extracted. Retract
+// blocks can carry an optional comment that pika treats as the
+// retraction rationale.
+type GoModInfo struct {
+	// Module is the module path declared at the top of go.mod.
+	Module string
+	// Retracts lists every retract directive. A retract directive
+	// without an explicit version range applies to the version
+	// the .mod file describes; with a range it applies to that
+	// range. The Version field below is the literal version
+	// argument (or range), Rationale is the trailing comment.
+	Retracts []GoModRetract
+}
+
+// GoModRetract is one row in GoModInfo.Retracts.
+type GoModRetract struct {
+	// Version is the literal version argument from the retract
+	// directive. For ranges ("[v1.0.0, v1.0.4]") this is the raw
+	// argument string; the caller can split as needed.
+	Version string
+	// Rationale is the trailing // comment (the convention for
+	// "why was this retracted"). Empty when omitted.
+	Rationale string
+}
+
+// ParseGoMod extracts the small subset of go.mod fields pika needs
+// for the UI detail view. Unknown directives are ignored — this is
+// not a validating parser and a malformed go.mod won't cause an
+// error, just an empty / partial GoModInfo.
+//
+// Recognized directives:
+//
+//	module <path>
+//	retract <version> [// rationale]
+//	retract [<low>, <high>] [// rationale]
+//	retract (
+//	    <version> [// rationale]
+//	    ...
+//	)
+func ParseGoMod(body []byte) GoModInfo {
+	out := GoModInfo{}
+	lines := strings.Split(string(body), "\n")
+	inRetractBlock := false
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		// Strip "// ..." inline comment, but remember it as
+		// the rationale for retract lines.
+		comment := ""
+		if i := strings.Index(line, "//"); i >= 0 {
+			comment = strings.TrimSpace(line[i+2:])
+			line = strings.TrimSpace(line[:i])
+		}
+		if line == "" {
+			continue
+		}
+		if inRetractBlock {
+			if line == ")" {
+				inRetractBlock = false
+				continue
+			}
+			out.Retracts = append(out.Retracts, GoModRetract{
+				Version:   line,
+				Rationale: comment,
+			})
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "module "):
+			out.Module = strings.TrimSpace(strings.TrimPrefix(line, "module"))
+			out.Module = strings.Trim(out.Module, `"`)
+		case line == "retract (":
+			inRetractBlock = true
+		case strings.HasPrefix(line, "retract "):
+			arg := strings.TrimSpace(strings.TrimPrefix(line, "retract"))
+			out.Retracts = append(out.Retracts, GoModRetract{
+				Version:   arg,
+				Rationale: comment,
+			})
+		}
+	}
+	return out
 }

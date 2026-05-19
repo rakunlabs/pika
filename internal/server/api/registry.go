@@ -3,50 +3,91 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/rakunlabs/ada"
+	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/rawfs"
 	"github.com/rakunlabs/pika/internal/registry"
 	"github.com/rakunlabs/pika/internal/registry/blobstore"
 	"github.com/rakunlabs/pika/internal/registry/common"
 	"github.com/rakunlabs/pika/internal/registry/docker"
+	"github.com/rakunlabs/pika/internal/registry/events"
 	"github.com/rakunlabs/pika/internal/registry/goproxy"
+	"github.com/rakunlabs/pika/internal/registry/helm"
 	"github.com/rakunlabs/pika/internal/registry/npm"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
-// goStoreFromRegistry extracts the underlying goproxy.Store from a
-// Registry instance. Returns ok=false for kinds that don't carry a
-// store of their own (Virtual). Local and Remote both expose a
-// Store() accessor with the same signature.
-func goStoreFromRegistry(r registry.Registry) (*goproxy.Store, bool) {
-	type storer interface{ Store() *goproxy.Store }
+// storeFromRegistry extracts the underlying protocol-specific
+// store from a Registry instance via structural typing. Each
+// protocol's Local / Remote exposes a `Store() *T` accessor with
+// the same shape; Virtual kinds don't carry a store of their own
+// and return ok=false.
+//
+// Callers parameterise T with the concrete store type, e.g.:
+//
+//	store, ok := storeFromRegistry[goproxy.Store](reg)
+func storeFromRegistry[T any](r registry.Registry) (*T, bool) {
+	type storer interface{ Store() *T }
 	if s, ok := r.(storer); ok {
 		return s.Store(), true
 	}
 	return nil, false
 }
 
-// npmStoreFromRegistry mirrors goStoreFromRegistry for npm.Store.
-func npmStoreFromRegistry(r registry.Registry) (*npm.Store, bool) {
-	type storer interface{ Store() *npm.Store }
-	if s, ok := r.(storer); ok {
-		return s.Store(), true
+// resolveRegistry folds the boilerplate every admin/read handler
+// shares: feature gate, manager-nil check, path extraction,
+// lookup, and an optional registry-type guard.
+//
+// Pass requiredType="" to skip the type check (e.g. for the
+// generic detail/probe/stats endpoints which accept any type).
+// Pass a concrete service.RegistryType* constant to enforce it
+// (e.g. Docker GC requires RegistryTypeDocker).
+//
+// The returned error is already shaped for the HTTP layer — it
+// wraps service.ErrNotFound / service.ErrBadRequest with a useful
+// message; callers should `return err` directly.
+func (a *api) resolveRegistry(c *ada.Context, requiredType string) (registry.Registry, string, string, error) {
+	if err := a.registryFeatureGate(c); err != nil {
+		return nil, "", "", err
 	}
-	return nil, false
-}
-
-// dockerStoreFromRegistry mirrors the pattern for docker.Store.
-func dockerStoreFromRegistry(r registry.Registry) (*docker.Store, bool) {
-	type storer interface{ Store() *docker.Store }
-	if s, ok := r.(storer); ok {
-		return s.Store(), true
+	if a.registryMgr == nil {
+		return nil, "", "", fmt.Errorf("registry not configured: %w", service.ErrNotFound)
 	}
-	return nil, false
+	ns := c.Request.PathValue("ns")
+	repo := c.Request.PathValue("repo")
+	if ns == "" || repo == "" {
+		return nil, "", "", fmt.Errorf("namespace and repo are required: %w", service.ErrBadRequest)
+	}
+	reg, ok := a.registryMgr.Lookup(ns, repo)
+	if !ok {
+		return nil, "", "", fmt.Errorf("registry %s/%s not found: %w", ns, repo, service.ErrNotFound)
+	}
+	// Two flavours of type check:
+	//   - If the route carries a {type} segment and the caller
+	//     leaves requiredType="", we still cross-check the path
+	//     hint against the actual registry to catch URL/state
+	//     drift (e.g. an operator pasting an /npm/ URL for a Go
+	//     registry).
+	//   - If the caller supplied requiredType, that wins and the
+	//     path hint is ignored (the route may not even have a
+	//     {type} segment for protocol-specific endpoints).
+	if requiredType != "" {
+		if reg.Type() != requiredType {
+			return nil, "", "", fmt.Errorf("registry %s/%s is not a %s registry (got %s): %w",
+				ns, repo, requiredType, reg.Type(), service.ErrBadRequest)
+		}
+	} else if regType := c.Request.PathValue("type"); regType != "" && reg.Type() != regType {
+		return nil, "", "", fmt.Errorf("registry type mismatch (path=%s actual=%s): %w",
+			regType, reg.Type(), service.ErrBadRequest)
+	}
+	return reg, ns, repo, nil
 }
 
 // registry.go — HTTP wiring for the artifact registry feature.
@@ -354,11 +395,21 @@ func (a *api) listRegistryNamespaces(c *ada.Context) error {
 // tree replacement matches how proxy_servers and raw_mounts are
 // patched today — UI sends the new desired state, server validates +
 // persists + reloads.
+//
+// As a side-effect, we diff the incoming tree against the on-disk
+// previous tree and emit semantic create / update / delete events
+// for each namespace and repository that changed. This gives
+// operators a structured audit trail without forcing a separate
+// admin sub-API per CRUD verb.
 func (a *api) putRegistrySettings(c *ada.Context) error {
 	var rs service.RegistrySettings
 	if err := json.NewDecoder(c.Request.Body).Decode(&rs); err != nil {
 		return fmt.Errorf("decode registry settings: %w: %w", err, service.ErrBadRequest)
 	}
+	// Snapshot the previous tree before patching so we can diff
+	// for hook events.  GetRegistrySettings returns nil for fresh
+	// installs; treat that as the empty tree.
+	prev := a.svc.GetRegistrySettings(c.Request.Context())
 	patch := &service.PatchSettings{
 		Action:   service.ActionKeySet,
 		Registry: &rs,
@@ -367,7 +418,142 @@ func (a *api) putRegistrySettings(c *ada.Context) error {
 		return err
 	}
 	a.reloadRegistry(c.Request.Context())
+	a.emitRegistryDiff(prev, &rs)
 	return c.SetStatus(http.StatusOK).SendJSON(rs)
+}
+
+// emitRegistryDiff fires namespace_* and repository_* events for
+// every difference between two RegistrySettings trees. Called from
+// putRegistrySettings post-save so a UI rename triggers a single
+// repository_updated rather than a delete+create pair.
+//
+// The diff is name-keyed; an operator who renames a namespace ends
+// up with one delete (old name) + one create (new name), matching
+// what the UI actually does.
+func (a *api) emitRegistryDiff(prev, next *service.RegistrySettings) {
+	prevNS := map[string]service.RegistryNamespace{}
+	if prev != nil {
+		for _, n := range prev.Namespaces {
+			prevNS[n.Name] = n
+		}
+	}
+	nextNS := map[string]service.RegistryNamespace{}
+	if next != nil {
+		for _, n := range next.Namespaces {
+			nextNS[n.Name] = n
+		}
+	}
+	// Namespace-level events.
+	for name := range nextNS {
+		if _, existed := prevNS[name]; !existed {
+			a.emitRegistryEvent(hook.Event{
+				Type:  hook.EventRegistryNamespaceCreated,
+				Mount: name,
+			})
+		}
+	}
+	for name := range prevNS {
+		if _, kept := nextNS[name]; !kept {
+			a.emitRegistryEvent(hook.Event{
+				Type:  hook.EventRegistryNamespaceDeleted,
+				Mount: name,
+			})
+		}
+	}
+	// Repository-level events per (still-present) namespace.
+	for name, nNS := range nextNS {
+		pNS, existed := prevNS[name]
+		prevRepos := map[string]service.RegistryRepository{}
+		if existed {
+			for _, r := range pNS.Repositories {
+				prevRepos[r.Name] = r
+			}
+		}
+		nextRepos := map[string]service.RegistryRepository{}
+		for _, r := range nNS.Repositories {
+			nextRepos[r.Name] = r
+		}
+		for rn, r := range nextRepos {
+			pr, kept := prevRepos[rn]
+			switch {
+			case !kept:
+				a.emitRegistryEvent(hook.Event{
+					Type:     hook.EventRegistryRepositoryCreated,
+					Mount:    name,
+					Path:     rn,
+					Protocol: "registry-" + r.Type,
+				})
+			case repoChanged(pr, r):
+				a.emitRegistryEvent(hook.Event{
+					Type:     hook.EventRegistryRepositoryUpdated,
+					Mount:    name,
+					Path:     rn,
+					Protocol: "registry-" + r.Type,
+				})
+			}
+		}
+		for rn, pr := range prevRepos {
+			if _, kept := nextRepos[rn]; !kept {
+				a.emitRegistryEvent(hook.Event{
+					Type:     hook.EventRegistryRepositoryDeleted,
+					Mount:    name,
+					Path:     rn,
+					Protocol: "registry-" + pr.Type,
+				})
+			}
+		}
+	}
+}
+
+// repoChanged reports whether two repository rows differ in any
+// operator-visible way. Used by emitRegistryDiff to suppress
+// updates that are byte-for-byte identical (e.g. the UI just
+// re-posted the existing tree to flip a feature flag). A shallow
+// JSON-equality compare would also work but is more allocation;
+// the explicit shape compare avoids reflect.
+func repoChanged(a, b service.RegistryRepository) bool {
+	if a.Name != b.Name ||
+		a.Description != b.Description ||
+		a.Type != b.Type ||
+		a.Kind != b.Kind ||
+		a.Mount != b.Mount ||
+		a.BasePath != b.BasePath ||
+		a.AllowPush != b.AllowPush ||
+		a.URL != b.URL ||
+		a.MutableTTL != b.MutableTTL ||
+		a.InsecureSkipVerify != b.InsecureSkipVerify ||
+		a.DefaultLocal != b.DefaultLocal ||
+		a.MaxUploadSize != b.MaxUploadSize {
+		return true
+	}
+	if len(a.Members) != len(b.Members) {
+		return true
+	}
+	for i := range a.Members {
+		if a.Members[i] != b.Members[i] {
+			return true
+		}
+	}
+	if len(a.FloatingTags) != len(b.FloatingTags) {
+		return true
+	}
+	for i := range a.FloatingTags {
+		if a.FloatingTags[i] != b.FloatingTags[i] {
+			return true
+		}
+	}
+	if len(a.CORSOrigins) != len(b.CORSOrigins) {
+		return true
+	}
+	for i := range a.CORSOrigins {
+		if a.CORSOrigins[i] != b.CORSOrigins[i] {
+			return true
+		}
+	}
+	// Skip Auth — secret payload is sealed downstream and we don't
+	// want to log "updated" every time the seal layer rewrites the
+	// sensitive-payload blob with a fresh IV.
+	return false
 }
 
 // listRegistryRepos returns a flat list of every registry the
@@ -420,14 +606,26 @@ type npmPackageEntry struct {
 
 // dockerTagSummary surfaces per-tag metadata: digest, artifact
 // type (when the manifest is an OCI artifact rather than a plain
-// image), and content-type. Populated best-effort — manifest read
-// failures fall back to a name-only entry.
+// image), content-type, and size breakdown.
+//
+// B5 breaking change: the historical `size` field was the manifest
+// JSON's byte size, mislabelled as image size. It is now split
+// into two distinct, correctly-named fields:
+//
+//   - manifest_size: bytes of the manifest JSON itself
+//   - image_size:    sum of layer sizes (zero for OCI artifacts
+//                    whose layers are not classic image layers)
+//
+// Old clients that read the `size` field will see it absent —
+// they need to choose explicitly which value they want. This was
+// agreed at design time as a worthwhile clean break.
 type dockerTagSummary struct {
 	Tag          string `json:"tag"`
 	Digest       string `json:"digest,omitempty"`
 	ArtifactType string `json:"artifact_type,omitempty"`
 	MediaType    string `json:"media_type,omitempty"`
-	Size         int64  `json:"size,omitempty"`
+	ManifestSize int64  `json:"manifest_size,omitempty"`
+	ImageSize    int64  `json:"image_size,omitempty"`
 }
 
 // dockerRepoEntry is the per-image summary returned by
@@ -435,6 +633,37 @@ type dockerTagSummary struct {
 type dockerRepoEntry struct {
 	Name string             `json:"name"`
 	Tags []dockerTagSummary `json:"tags"`
+}
+
+// runRegistryUpstreamProbe runs a connectivity check against a
+// Remote registry's upstream. URL: POST /api/v1/registries/{type}/{ns}/{repo}/test-upstream.
+// Gated on CapRegistryAdmin because the probe uses the registry's
+// real auth credentials.
+//
+// Local and Virtual registries return 400 ("not a remote") — the
+// UI hides the button for them.
+func (a *api) runRegistryUpstreamProbe(c *ada.Context) error {
+	reg, ns, repo, err := a.resolveRegistry(c, "")
+	if err != nil {
+		return err
+	}
+	prober, ok := reg.(registry.UpstreamProber)
+	if !ok {
+		return fmt.Errorf("upstream probe not supported for %s/%s (kind=%s): %w",
+			ns, repo, reg.Kind(), service.ErrBadRequest)
+	}
+	// Bound the probe by a tight timeout so a hanging upstream
+	// doesn't block the admin connection.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+	result, err := prober.ProbeUpstream(ctx)
+	if err != nil {
+		// The Probe helper folds protocol-level errors into the
+		// UpstreamHealth struct; a non-nil error here means a
+		// genuine internal failure (e.g. context cancellation).
+		return fmt.Errorf("probe: %w", err)
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(result)
 }
 
 // runDockerGC triggers a mark-and-sweep garbage collection pass
@@ -451,24 +680,82 @@ type gcRunRequest struct {
 	MinAgeSeconds int64 `json:"min_age_seconds"`
 }
 
-func (a *api) runDockerGC(c *ada.Context) error {
-	if err := a.registryFeatureGate(c); err != nil {
+// getRegistryStats returns a snapshot of on-disk counts for one
+// registry. URL: GET /api/v1/registries/{type}/{ns}/{repo}/stats.
+// Gated on CapRegistryRead (browsing is enough; no destructive
+// action involved). Walks the underlying storage each call rather
+// than maintaining persistent counters — see registry.Stats godoc.
+func (a *api) getRegistryStats(c *ada.Context) error {
+	reg, _, _, err := a.resolveRegistry(c, "")
+	if err != nil {
 		return err
 	}
-	if a.registryMgr == nil {
-		return fmt.Errorf("registry not configured: %w", service.ErrNotFound)
-	}
-	ns := c.Request.PathValue("ns")
-	repo := c.Request.PathValue("repo")
-	if ns == "" || repo == "" {
-		return fmt.Errorf("namespace and repo are required: %w", service.ErrBadRequest)
-	}
-	reg, ok := a.registryMgr.Lookup(ns, repo)
+	provider, ok := reg.(registry.StatsProvider)
 	if !ok {
-		return fmt.Errorf("registry %s/%s not found: %w", ns, repo, service.ErrNotFound)
+		// Virtual repos delegate to members; report an empty
+		// snapshot rather than erroring so the UI can render
+		// "stats not available" gracefully.
+		return c.SetStatus(http.StatusOK).SendJSON(registry.Stats{})
 	}
-	if reg.Type() != service.RegistryTypeDocker {
-		return fmt.Errorf("GC is only available for Docker registries: %w", service.ErrBadRequest)
+	stats, err := provider.Stats(c.Request.Context())
+	if err != nil {
+		return fmt.Errorf("stats: %w", err)
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(stats)
+}
+
+// runRegistryPurge invalidates the on-disk cache for a Remote
+// registry. URL: POST /api/v1/registries/{type}/{ns}/{repo}/purge.
+//
+// Body (optional):
+//
+//	{"all": false}   default — mutable pointers only
+//	{"all": true}    deep purge — also drops manifests / tarballs / blobs
+//
+// Gated on CapRegistryAdmin: the operation deletes data and forces
+// an upstream re-fetch on the next pull, so it should not be on
+// the path of regular CapRegistryWrite tokens.
+//
+// The handler type-asserts the looked-up Registry to the package
+// CachePurger interface — Local registries don't implement it
+// (their data is the source of truth) and surface as 400 here.
+type purgeRequest struct {
+	All bool `json:"all"`
+}
+
+func (a *api) runRegistryPurge(c *ada.Context) error {
+	reg, ns, repo, err := a.resolveRegistry(c, "")
+	if err != nil {
+		return err
+	}
+	purger, ok := reg.(registry.CachePurger)
+	if !ok {
+		return fmt.Errorf("cache purge not supported for %s/%s (kind=%s): %w", ns, repo, reg.Kind(), service.ErrBadRequest)
+	}
+
+	req := purgeRequest{}
+	if c.Request.ContentLength > 0 {
+		_ = json.NewDecoder(c.Request.Body).Decode(&req)
+	}
+	stats, err := purger.PurgeCache(c.Request.Context(), registry.PurgeOptions{All: req.All})
+	if err != nil {
+		return fmt.Errorf("purge: %w", err)
+	}
+	// Semantic audit hook: surface the purge so operators can log it.
+	a.emitRegistryEvent(hook.Event{
+		Type:     hook.EventRegistryCachePurged,
+		Mount:    ns,
+		Path:     repo,
+		Protocol: "registry-" + reg.Type(),
+		Size:     stats.PurgedBytes,
+	})
+	return c.SetStatus(http.StatusOK).SendJSON(stats)
+}
+
+func (a *api) runDockerGC(c *ada.Context) error {
+	reg, _, _, err := a.resolveRegistry(c, service.RegistryTypeDocker)
+	if err != nil {
+		return err
 	}
 	local, ok := reg.(*docker.Local)
 	if !ok {
@@ -497,25 +784,11 @@ func (a *api) runDockerGC(c *ada.Context) error {
 // artifactType / config.mediaType so the UI can distinguish plain
 // images from OCI artifacts (Helm charts, cosign signatures, SBOMs).
 func (a *api) listRegistryDockerRepos(c *ada.Context) error {
-	if err := a.registryFeatureGate(c); err != nil {
+	reg, _, _, err := a.resolveRegistry(c, service.RegistryTypeDocker)
+	if err != nil {
 		return err
 	}
-	if a.registryMgr == nil {
-		return fmt.Errorf("registry not configured: %w", service.ErrNotFound)
-	}
-	ns := c.Request.PathValue("ns")
-	repo := c.Request.PathValue("repo")
-	if ns == "" || repo == "" {
-		return fmt.Errorf("namespace and repo are required: %w", service.ErrBadRequest)
-	}
-	reg, ok := a.registryMgr.Lookup(ns, repo)
-	if !ok {
-		return fmt.Errorf("registry %s/%s not found: %w", ns, repo, service.ErrNotFound)
-	}
-	if reg.Type() != service.RegistryTypeDocker {
-		return fmt.Errorf("registry %s/%s is not a Docker registry: %w", ns, repo, service.ErrBadRequest)
-	}
-	store, ok := dockerStoreFromRegistry(reg)
+	store, ok := storeFromRegistry[docker.Store](reg)
 	if !ok {
 		return c.SetStatus(http.StatusOK).SendJSON([]dockerRepoEntry{})
 	}
@@ -533,9 +806,16 @@ func (a *api) listRegistryDockerRepos(c *ada.Context) error {
 				summary.Digest = dgst.String()
 				if rec, err := store.ReadManifest(name, dgst); err == nil {
 					summary.MediaType = rec.ContentType
-					summary.Size = int64(len(rec.Body))
+					summary.ManifestSize = int64(len(rec.Body))
 					if artType := docker.ArtifactTypeOf(rec.Body); artType != "" {
 						summary.ArtifactType = artType
+					}
+					// Image size = sum of layer sizes. Cheap to
+					// compute (one JSON parse + a slice scan) and
+					// the data the UI actually wants for a "how
+					// big is this image" answer.
+					if insp := docker.InspectManifestBytes(rec.Body); insp != nil {
+						summary.ImageSize = insp.ImageSize
 					}
 				}
 			}
@@ -546,29 +826,45 @@ func (a *api) listRegistryDockerRepos(c *ada.Context) error {
 	return c.SetStatus(http.StatusOK).SendJSON(out)
 }
 
+// helmChartEntry is the per-chart summary returned by
+// listRegistryHelmCharts.
+type helmChartEntry struct {
+	Name     string   `json:"name"`
+	Versions []string `json:"versions"`
+}
+
+// listRegistryHelmCharts returns the chart/version tree for a
+// Helm registry repo. URL: GET /api/v1/registries/helm/{ns}/{repo}/charts.
+func (a *api) listRegistryHelmCharts(c *ada.Context) error {
+	reg, _, _, err := a.resolveRegistry(c, service.RegistryTypeHelm)
+	if err != nil {
+		return err
+	}
+	store, ok := storeFromRegistry[helm.Store](reg)
+	if !ok {
+		return c.SetStatus(http.StatusOK).SendJSON([]helmChartEntry{})
+	}
+	charts, err := store.ListCharts()
+	if err != nil {
+		return fmt.Errorf("list charts: %w", err)
+	}
+	out := make([]helmChartEntry, 0, len(charts))
+	for _, name := range charts {
+		versions, _ := store.ListVersions(name)
+		out = append(out, helmChartEntry{Name: name, Versions: versions})
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(out)
+}
+
 // listRegistryNPMPackages returns the package/version tree for an
 // NPM registry repo. Mirrors listRegistryGoModules in shape and
 // gating; URL: /api/v1/registries/npm/{ns}/{repo}/packages.
 func (a *api) listRegistryNPMPackages(c *ada.Context) error {
-	if err := a.registryFeatureGate(c); err != nil {
+	reg, _, _, err := a.resolveRegistry(c, service.RegistryTypeNPM)
+	if err != nil {
 		return err
 	}
-	if a.registryMgr == nil {
-		return fmt.Errorf("registry not configured: %w", service.ErrNotFound)
-	}
-	ns := c.Request.PathValue("ns")
-	repo := c.Request.PathValue("repo")
-	if ns == "" || repo == "" {
-		return fmt.Errorf("namespace and repo are required: %w", service.ErrBadRequest)
-	}
-	reg, ok := a.registryMgr.Lookup(ns, repo)
-	if !ok {
-		return fmt.Errorf("registry %s/%s not found: %w", ns, repo, service.ErrNotFound)
-	}
-	if reg.Type() != service.RegistryTypeNPM {
-		return fmt.Errorf("registry %s/%s is not an NPM registry: %w", ns, repo, service.ErrBadRequest)
-	}
-	store, ok := npmStoreFromRegistry(reg)
+	store, ok := storeFromRegistry[npm.Store](reg)
 	if !ok {
 		// Virtual NPM repos don't carry their own store; the UI
 		// shows a "browse members" hint when this slice is empty.
@@ -592,6 +888,163 @@ func (a *api) listRegistryNPMPackages(c *ada.Context) error {
 	return c.SetStatus(http.StatusOK).SendJSON(out)
 }
 
+// getRegistryPackageDetail returns the per-package detail document.
+// URL: GET /api/v1/registries/{type}/{ns}/{repo}/packages/{name...}.
+//
+// The `{name...}` wildcard segment accommodates every protocol's
+// hierarchical naming: Go modules ("example.com/foo/bar"), NPM
+// scoped packages ("@scope/pkg"), Docker image paths
+// ("library/nginx"). The handler validates the {type} segment
+// matches the resolved registry; mismatches return 400 to surface
+// caller bugs cleanly.
+//
+// Gated on CapRegistryRead — read-only browsing.
+func (a *api) getRegistryPackageDetail(c *ada.Context) error {
+	reg, ns, repo, err := a.resolveRegistry(c, "")
+	if err != nil {
+		return err
+	}
+	// PathValue strips the leading slash by ada convention, but a
+	// wildcard segment may carry one through depending on the URL
+	// pattern flavour. Normalise so downstream stores see the
+	// canonical form.
+	name := strings.TrimPrefix(c.Request.PathValue("name"), "/")
+	if name == "" {
+		return fmt.Errorf("package name is required: %w", service.ErrBadRequest)
+	}
+	detailer, ok := reg.(registry.PackageDetailer)
+	if !ok {
+		return fmt.Errorf("package detail not supported for %s/%s (kind=%s): %w",
+			ns, repo, reg.Kind(), service.ErrBadRequest)
+	}
+	out, err := detailer.PackageDetail(c.Request.Context(), name)
+	if err != nil {
+		// Map registry sentinels to the right HTTP status. Order
+		// matters: ErrInvalidPackageName means the caller supplied
+		// junk (400); ErrPackageNotFound means the request was
+		// well-formed but produced no match (404). Anything else
+		// is a genuine 500.
+		switch {
+		case errors.Is(err, registry.ErrInvalidPackageName):
+			return fmt.Errorf("invalid package name %q: %w: %w", name, err, service.ErrBadRequest)
+		case errors.Is(err, registry.ErrPackageNotFound):
+			return fmt.Errorf("package %q not found in %s/%s: %w", name, ns, repo, service.ErrNotFound)
+		}
+		return fmt.Errorf("package detail: %w", err)
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(out)
+}
+
+// getNPMPackageReadme returns the cached README markdown for an NPM
+// package. URL: GET /api/v1/registries/npm/{ns}/{repo}/packages/{name}/readme.
+//
+// If the cached file is empty, the handler attempts a lazy extract
+// from the latest version's tarball before responding. Returns 404
+// when no README is available after the lazy step.
+//
+// Response: text/markdown; charset=utf-8.
+//
+// Gated on CapRegistryRead.
+func (a *api) getNPMPackageReadme(c *ada.Context) error {
+	reg, ns, repo, err := a.resolveRegistry(c, service.RegistryTypeNPM)
+	if err != nil {
+		return err
+	}
+	name := strings.TrimPrefix(c.Request.PathValue("name"), "/")
+	if name == "" {
+		return fmt.Errorf("package name is required: %w", service.ErrBadRequest)
+	}
+	store, ok := storeFromRegistry[npm.Store](reg)
+	if !ok {
+		return fmt.Errorf("npm store unavailable for %s/%s: %w", ns, repo, service.ErrBadRequest)
+	}
+	body, err := store.ReadReadme(name)
+	if err != nil {
+		return fmt.Errorf("read readme: %w", err)
+	}
+	if body == "" {
+		// Lazy fallback: pick the latest version's tarball, extract
+		// the README, cache for next time. The detail builder has
+		// already populated HasReadme=false in that case; the UI
+		// can retry on demand if it suspects the cache was just
+		// missing.
+		tarFile := latestTarballFilename(store, name)
+		if tarFile != "" {
+			extracted, extractErr := store.LazyExtractReadme(name, tarFile)
+			if extractErr == nil && extracted != "" {
+				body = extracted
+			}
+		}
+	}
+	if body == "" {
+		return fmt.Errorf("no readme for %s: %w", name, service.ErrNotFound)
+	}
+	c.Response.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	c.Response.WriteHeader(http.StatusOK)
+	_, _ = c.Response.Write([]byte(body))
+	return nil
+}
+
+// latestTarballFilename returns the dist.tarball filename for the
+// latest version of `name`, or "" if the package has no versions /
+// no usable dist block. Used by the lazy README extractor to know
+// which tarball to pop open.
+func latestTarballFilename(store *npm.Store, name string) string {
+	versions, _ := store.ListVersions(name)
+	if len(versions) == 0 {
+		return ""
+	}
+	tags, _ := store.ReadDistTags(name)
+	latest := tags["latest"]
+	if latest == "" {
+		latest = versions[len(versions)-1]
+	}
+	meta, err := store.ReadVersionMeta(name, latest)
+	if err != nil {
+		return ""
+	}
+	dist, ok := meta["dist"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	t, _ := dist["tarball"].(string)
+	if t == "" {
+		return ""
+	}
+	if i := strings.LastIndex(t, "/"); i >= 0 {
+		return t[i+1:]
+	}
+	return t
+}
+
+// getGoModuleGoMod returns the raw go.mod bytes for a single Go
+// module version. URL: GET /api/v1/registries/go/{ns}/{repo}/modules/{name...}/versions/{version}/gomod.
+//
+// Gated on CapRegistryRead.
+func (a *api) getGoModuleGoMod(c *ada.Context) error {
+	reg, ns, repo, err := a.resolveRegistry(c, service.RegistryTypeGo)
+	if err != nil {
+		return err
+	}
+	name := strings.TrimPrefix(c.Request.PathValue("name"), "/")
+	version := c.Request.PathValue("version")
+	if name == "" || version == "" {
+		return fmt.Errorf("name and version are required: %w", service.ErrBadRequest)
+	}
+	store, ok := storeFromRegistry[goproxy.Store](reg)
+	if !ok {
+		return fmt.Errorf("go store unavailable for %s/%s: %w", ns, repo, service.ErrBadRequest)
+	}
+	body, err := store.ReadGoMod(name, version)
+	if err != nil {
+		return fmt.Errorf("go.mod for %s@%s: %w: %w", name, version, err, service.ErrNotFound)
+	}
+	c.Response.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	c.Response.WriteHeader(http.StatusOK)
+	_, _ = c.Response.Write(body)
+	return nil
+}
+
 // listRegistryGoModules returns the module/version tree for a Go
 // registry repo. URL shape: /api/v1/registries/{ns}/{repo}/go-modules.
 // The handler downcasts the resolved Registry to a type that
@@ -601,26 +1054,11 @@ func (a *api) listRegistryNPMPackages(c *ada.Context) error {
 // Used by the UI to render the module browser inside the repo
 // detail view. Read-only — gated on CapRegistryRead.
 func (a *api) listRegistryGoModules(c *ada.Context) error {
-	if err := a.registryFeatureGate(c); err != nil {
+	reg, _, _, err := a.resolveRegistry(c, service.RegistryTypeGo)
+	if err != nil {
 		return err
 	}
-	if a.registryMgr == nil {
-		return fmt.Errorf("registry not configured: %w", service.ErrNotFound)
-	}
-	ns := c.Request.PathValue("ns")
-	repo := c.Request.PathValue("repo")
-	if ns == "" || repo == "" {
-		return fmt.Errorf("namespace and repo are required: %w", service.ErrBadRequest)
-	}
-	reg, ok := a.registryMgr.Lookup(ns, repo)
-	if !ok {
-		return fmt.Errorf("registry %s/%s not found: %w", ns, repo, service.ErrNotFound)
-	}
-	if reg.Type() != service.RegistryTypeGo {
-		return fmt.Errorf("registry %s/%s is not a Go registry: %w", ns, repo, service.ErrBadRequest)
-	}
-
-	store, ok := goStoreFromRegistry(reg)
+	store, ok := storeFromRegistry[goproxy.Store](reg)
 	if !ok {
 		// Virtual registries don't carry a store of their own;
 		// they aggregate over members. For now we just return an
@@ -642,6 +1080,37 @@ func (a *api) listRegistryGoModules(c *ada.Context) error {
 	return c.SetStatus(http.StatusOK).SendJSON(out)
 }
 
+// hookEmitter adapts a *hook.Dispatcher to the registry events.Emitter
+// interface. Thin wrapper so the registry package never imports
+// hook.Dispatcher directly — only the narrow Emit method that the
+// registry impls actually call.
+type hookEmitter struct {
+	d *hook.Dispatcher
+}
+
+func (h *hookEmitter) Emit(event hook.Event) {
+	if h == nil || h.d == nil {
+		return
+	}
+	h.d.Emit(event)
+}
+
+// emitRegistryEvent is a small dispatcher-side helper for the admin
+// HTTP layer. Used by the purge endpoint and the namespace / repo
+// CRUD flow inside putRegistrySettings — those operations don't go
+// through a registry impl's emitter, so we publish straight against
+// the dispatcher pika already has wired.
+func (a *api) emitRegistryEvent(event hook.Event) {
+	if a.rawHandler == nil {
+		return
+	}
+	d := a.rawHandler.Dispatcher()
+	if d == nil {
+		return
+	}
+	d.Emit(event)
+}
+
 // BootRegistryManager constructs the registry.Manager with all
 // dependencies wired, performs the default-namespace bootstrap, and
 // loads the initial routing table. Called once from server.Start.
@@ -651,7 +1120,12 @@ func (a *api) listRegistryGoModules(c *ada.Context) error {
 // registry/npm, registry/docker) at boot, before the initial
 // Reload. The wiring code in server.go registers them right after
 // this function returns.
-func BootRegistryManager(ctx context.Context, svc *service.Service, rh *RawHandler) *registry.Manager {
+//
+// The dispatcher argument is optional: pass nil to disable semantic
+// event emission (no registry.* hooks fire). Tests typically pass
+// nil; the live server passes its main hook.Dispatcher so operators
+// can wire push / GC events to webhooks.
+func BootRegistryManager(ctx context.Context, svc *service.Service, rh *RawHandler, dispatcher *hook.Dispatcher) *registry.Manager {
 	// Non-fatal: log and continue if the bootstrap can't write.
 	// A locked encryption store, for example, will block writes
 	// until unlock; the bootstrap can run again on the next save.
@@ -659,11 +1133,16 @@ func BootRegistryManager(ctx context.Context, svc *service.Service, rh *RawHandl
 		slog.Warn("registry: default namespace bootstrap failed", "error", err)
 	}
 
+	var emitter events.Emitter
+	if dispatcher != nil {
+		emitter = &hookEmitter{d: dispatcher}
+	}
 	deps := registry.Deps{
 		Svc:        svc,
 		Resolver:   &registrySecretResolver{svc: svc, rh: rh},
 		MountFor:   buildMountForFunc(rh),
 		MountRawFS: buildMountRawFSFunc(rh),
+		Emitter:    emitter,
 	}
 	return registry.NewManager(deps)
 }

@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/registry"
+	"github.com/rakunlabs/pika/internal/registry/events"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -46,6 +48,7 @@ type Local struct {
 	allowPush  bool
 	maxUpload  int64
 	mutableTTL time.Duration
+	emitter    events.Emitter
 }
 
 // NewLocalFactory returns a goproxy.Factory that constructs Local
@@ -71,6 +74,7 @@ func NewLocalFactory() registry.Factory {
 			allowPush:  r.AllowPush,
 			maxUpload:  r.MaxUploadSize,
 			mutableTTL: ttl,
+			emitter:    deps.Emitter,
 		}, nil
 	}
 }
@@ -90,9 +94,28 @@ func (l *Local) Store() *Store { return l.store }
 // admin UI uses this to show / hide the upload form.
 func (l *Local) AllowPush() bool { return l.allowPush }
 
+// PackageDetail returns per-module metadata via the shared builder.
+// Implements registry.PackageDetailer.
+func (l *Local) PackageDetail(ctx context.Context, module string) (*registry.PackageDetail, error) {
+	return buildPackageDetail(ctx, l.store, module)
+}
+
 // Close releases any resources. Local has none; method exists to
 // satisfy registry.Registry.
 func (l *Local) Close() error { return nil }
+
+// Stats implements registry.StatsProvider for Local Go repositories.
+// Returns the count of modules, versions and total on-disk bytes by
+// walking the @v/ leaves once. No persistent counter is kept; the
+// numbers are exact at the moment of the call.
+func (l *Local) Stats(_ context.Context) (registry.Stats, error) {
+	mods, vers, bytes := l.store.CountModulesVersionsBytes()
+	return registry.Stats{
+		ModuleCount:  mods,
+		VersionCount: vers,
+		TotalBytes:   bytes,
+	}, nil
+}
 
 // ServeHTTP dispatches a request whose URL path has had the
 // /registries/{ns}/{repo} prefix stripped. Recognised verbs:
@@ -186,7 +209,37 @@ func (l *Local) serveUpload(w http.ResponseWriter, r *http.Request, req *parsedR
 		http.Error(w, "write failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Emit a semantic publish event. Only fire on the .zip slot so
+	// a three-file upload (info + mod + zip) produces one event
+	// per logical publish rather than three. The .zip is the
+	// canonical "this version is now installable" marker since the
+	// Go toolchain refuses to install a module without it.
+	if req.Ext == "zip" {
+		events.EmitSafe(l.emitter, hook.Event{
+			Type:     hook.EventRegistryPublished,
+			Mount:    l.namespace,
+			Path:     l.name + "/" + req.Module + "@" + req.Version,
+			Protocol: "registry-go",
+			Size:     contentLength,
+			User:     userFromContext(r.Context()),
+		})
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// userFromContext extracts the authenticated user identifier (token
+// id or session username) for hook event attribution. Returns ""
+// when the request has no identified actor — registry endpoints
+// always require auth but tests sometimes drive the handler with a
+// bare context.
+func userFromContext(_ context.Context) string {
+	// The registry data-mux handler stuffs the actor under a
+	// well-known key, but accessing it from here would require an
+	// import of internal/server/api and a context-key contract.
+	// For now we leave User empty in the event; operators who care
+	// can correlate via timestamps + token-id audit logs upstream.
+	// This is the same trade-off the existing file.* events make.
+	return ""
 }
 
 // maybeFillInfoTime reads an .info body, fills the Time field with

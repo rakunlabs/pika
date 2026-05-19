@@ -506,5 +506,55 @@ func TestDockerRemote_FloatingTagsEmptyExplicit(t *testing.T) {
 	}
 }
 
+// TestDockerRemote_PurgeMutableDropsFloatingTagPointer confirms a
+// mutable-only purge clears the cached "latest" tag pointer so the
+// next manifest-by-tag read re-hits upstream. A non-floating tag's
+// pointer must NOT be touched.
+func TestDockerRemote_PurgeMutableDropsFloatingTagPointer(t *testing.T) {
+	fu := newFakeDockerUpstream()
+	defer fu.Close()
+
+	name := "lib/foo"
+	manifest := []byte(`{"schemaVersion":2,"layers":[]}`)
+	fu.ServeManifest(name, "latest", "application/vnd.oci.image.manifest.v1+json", manifest)
+	fu.ServeManifest(name, "v1.2.3", "application/vnd.oci.image.manifest.v1+json", manifest)
+
+	rr := newDockerRemoteWith(t, fu.URL(), "1h") // default floating set
+
+	// Warm both tag pointers.
+	for _, tag := range []string{"latest", "v1.2.3"} {
+		r := httptest.NewRequest(http.MethodGet, "/v2/"+name+"/manifests/"+tag, nil)
+		r.Header.Set("X-Pika-Registry-Prefix", "/registries/default/docker-mirror")
+		rr.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	hitsBefore := fu.Hits()
+
+	stats, err := rr.PurgeCache(context.Background(), registry.PurgeOptions{All: false})
+	if err != nil {
+		t.Fatalf("PurgeCache: %v", err)
+	}
+	if stats.PurgedFiles == 0 {
+		t.Fatalf("expected purged files >0, got %+v", stats)
+	}
+
+	// latest pointer gone → upstream re-hit.
+	r := httptest.NewRequest(http.MethodGet, "/v2/"+name+"/manifests/latest", nil)
+	r.Header.Set("X-Pika-Registry-Prefix", "/registries/default/docker-mirror")
+	rr.ServeHTTP(httptest.NewRecorder(), r)
+	if fu.Hits() == hitsBefore {
+		t.Fatalf("floating tag was not re-fetched after purge (stuck at %d)", hitsBefore)
+	}
+	hitsAfterLatest := fu.Hits()
+
+	// v1.2.3 pointer kept → cache hit.
+	r2 := httptest.NewRequest(http.MethodGet, "/v2/"+name+"/manifests/v1.2.3", nil)
+	r2.Header.Set("X-Pika-Registry-Prefix", "/registries/default/docker-mirror")
+	rr.ServeHTTP(httptest.NewRecorder(), r2)
+	if fu.Hits() != hitsAfterLatest {
+		t.Fatalf("non-floating tag re-fetched on mutable purge — should be kept (%d → %d)", hitsAfterLatest, fu.Hits())
+	}
+}
+
 // _ silences unused-import linters across optional refactors.
 var _ = io.Copy
+var _ = registry.PurgeOptions{}

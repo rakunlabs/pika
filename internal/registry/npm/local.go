@@ -10,7 +10,9 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/registry"
+	"github.com/rakunlabs/pika/internal/registry/events"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -41,6 +43,7 @@ type Local struct {
 
 	allowPush bool
 	maxUpload int64
+	emitter   events.Emitter
 }
 
 // NewLocalFactory returns the Factory for ("npm", "local") repos.
@@ -56,6 +59,7 @@ func NewLocalFactory() registry.Factory {
 			store:     NewStore(fs, r.BasePath),
 			allowPush: r.AllowPush,
 			maxUpload: r.MaxUploadSize,
+			emitter:   deps.Emitter,
 		}, nil
 	}
 }
@@ -66,6 +70,22 @@ func (l *Local) Type() string      { return service.RegistryTypeNPM }
 func (l *Local) Kind() string      { return service.RegistryKindLocal }
 func (l *Local) Store() *Store     { return l.store }
 func (l *Local) Close() error      { return nil }
+
+// PackageDetail implements registry.PackageDetailer.
+func (l *Local) PackageDetail(ctx context.Context, name string) (*registry.PackageDetail, error) {
+	return buildPackageDetail(ctx, l.store, name)
+}
+
+// Stats implements registry.StatsProvider. Walks the packages tree
+// once and returns counts + on-disk bytes.
+func (l *Local) Stats(_ context.Context) (registry.Stats, error) {
+	pkgs, vers, bytes := l.store.CountPackagesVersionsBytes()
+	return registry.Stats{
+		PackageCount: pkgs,
+		VersionCount: vers,
+		TotalBytes:   bytes,
+	}, nil
+}
 
 // AllowPush reports whether publish endpoints are enabled.
 func (l *Local) AllowPush() bool { return l.allowPush }
@@ -158,6 +178,18 @@ func (l *Local) servePublish(w http.ResponseWriter, r *http.Request, urlName str
 	}
 	if parsed.Readme != "" {
 		_ = l.store.WriteReadme(parsed.Name, parsed.Readme)
+	} else {
+		// B2: publish-time README extraction. When the publish
+		// payload didn't carry a top-level `readme` field (older
+		// npm clients omit it, scoped private packages sometimes
+		// strip it), fall back to extracting README.md from the
+		// tarball itself. The extract happens on a bytes.Reader
+		// over the in-memory tarball — no disk re-read. Failures
+		// are non-fatal: a package without a README still
+		// publishes successfully, the UI just shows "no README".
+		if extracted, _ := extractReadmeFromTarball(bytes.NewReader(parsed.Tarball)); extracted != "" {
+			_ = l.store.WriteReadme(parsed.Name, extracted)
+		}
 	}
 
 	// Merge dist-tags. The payload may carry an explicit
@@ -177,6 +209,16 @@ func (l *Local) servePublish(w http.ResponseWriter, r *http.Request, urlName str
 		writeError(w, http.StatusInternalServerError, "write dist-tags: "+err.Error())
 		return
 	}
+
+	// Emit registry.published. Path encodes "{repo}/{pkg}@{version}"
+	// so operators get a single greppable identifier per publish.
+	events.EmitSafe(l.emitter, hook.Event{
+		Type:     hook.EventRegistryPublished,
+		Mount:    l.namespace,
+		Path:     l.name + "/" + parsed.Name + "@" + parsed.Version,
+		Protocol: "registry-npm",
+		Size:     int64(len(parsed.Tarball)),
+	})
 
 	// npm CLI accepts 200 or 201 on successful publish; 201 is the
 	// more correct choice (new resource created).

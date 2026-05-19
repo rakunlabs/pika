@@ -119,8 +119,18 @@ func (s *Storage) registerBuckets() error {
 		return fmt.Errorf("bw register %s: %w", bucketFileVersions, err)
 	}
 
+	// Version bumps for the settings bucket:
+	//
+	//   v1 — initial schema.
+	//   v2 — added Registry *service.RegistrySettings field
+	//        (artifact-registry namespace/repo tree + feature flag).
+	//        Untagged new field; existing rows decode with Registry
+	//        == nil, treated by the service layer as "feature
+	//        enabled, no namespaces configured yet". The boot-time
+	//        EnsureDefaultRegistryNamespace path materialises the
+	//        default tree on the next save.
 	if s.settings, err = bw.RegisterBucket[settingsRow](s.db, bucketSettings,
-		bw.WithVersion[settingsRow](1),
+		bw.WithVersion[settingsRow](2),
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketSettings, err)
 	}

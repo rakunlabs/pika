@@ -261,3 +261,203 @@ func TestAuthSecretRoundTrip(t *testing.T) {
 		t.Errorf("LDAP bind password lost in round-trip")
 	}
 }
+
+// TestRegistryUpstreamSecretRoundTrip — plaintext upstream creds in
+// Registry repos must be extracted into the sealed payload, cleared
+// from the source struct, then restored identically on inject.
+func TestRegistryUpstreamSecretRoundTrip(t *testing.T) {
+	build := func() *service.Settings {
+		return &service.Settings{
+			Registry: &service.RegistrySettings{
+				Namespaces: []service.RegistryNamespace{
+					{
+						Name: "default",
+						Repositories: []service.RegistryRepository{
+							{
+								Name: "private-mirror", Type: "go", Kind: "remote",
+								URL: "https://internal-proxy.example",
+								Auth: &service.RegistryUpstreamAuth{
+									Type: "basic", Username: "ops", Password: "s3cret!",
+								},
+							},
+							{
+								Name: "bearer-mirror", Type: "npm", Kind: "remote",
+								URL: "https://registry.example",
+								Auth: &service.RegistryUpstreamAuth{
+									Type: "bearer", Token: "tk_abcdef",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	working := build()
+	original := build()
+
+	payload := extractSecrets(working)
+
+	// Plaintext secrets must be moved out of the source struct.
+	if working.Registry.Namespaces[0].Repositories[0].Auth.Password != "" {
+		t.Errorf("basic password not cleared after extract")
+	}
+	if working.Registry.Namespaces[0].Repositories[1].Auth.Token != "" {
+		t.Errorf("bearer token not cleared after extract")
+	}
+	if len(payload.RegistryUpstream) != 2 {
+		t.Fatalf("RegistryUpstream len=%d, want 2", len(payload.RegistryUpstream))
+	}
+
+	injectSecrets(working, payload)
+
+	if working.Registry.Namespaces[0].Repositories[0].Auth.Password !=
+		original.Registry.Namespaces[0].Repositories[0].Auth.Password {
+		t.Errorf("basic password lost in round-trip")
+	}
+	if working.Registry.Namespaces[0].Repositories[1].Auth.Token !=
+		original.Registry.Namespaces[0].Repositories[1].Auth.Token {
+		t.Errorf("bearer token lost in round-trip")
+	}
+}
+
+// TestRegistryUpstreamPreservesSecretRefs — values that start with
+// "secret://" must NOT be moved into the sealed payload. They're
+// already references resolved against the secret store at runtime;
+// sealing them would add no security and would force a more complex
+// edit experience.
+func TestRegistryUpstreamPreservesSecretRefs(t *testing.T) {
+	s := &service.Settings{
+		Registry: &service.RegistrySettings{
+			Namespaces: []service.RegistryNamespace{
+				{
+					Name: "default",
+					Repositories: []service.RegistryRepository{
+						{
+							Name: "ref-mirror", Type: "docker", Kind: "remote",
+							URL: "https://registry-1.docker.io",
+							Auth: &service.RegistryUpstreamAuth{
+								Type: "bearer", Token: "secret://creds/docker",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	payload := extractSecrets(s)
+
+	// Reference must stay in place on the public struct.
+	if s.Registry.Namespaces[0].Repositories[0].Auth.Token != "secret://creds/docker" {
+		t.Errorf("secret:// reference was moved into payload, want preserved in-place. Got: %q",
+			s.Registry.Namespaces[0].Repositories[0].Auth.Token)
+	}
+	// Nothing should have been added to the sealed payload —
+	// references aren't secrets-to-seal.
+	for _, row := range payload.RegistryUpstream {
+		if row.AuthToken != "" {
+			t.Errorf("sealed payload picked up a secret:// reference: %+v", row)
+		}
+	}
+}
+
+// TestRegistryUpstreamMixedPlaintextAndRef — a single repo can
+// combine plaintext and secret:// values across the three slots.
+// The seal layer must split them: plaintext into the payload,
+// references kept in-place.
+func TestRegistryUpstreamMixedPlaintextAndRef(t *testing.T) {
+	s := &service.Settings{
+		Registry: &service.RegistrySettings{
+			Namespaces: []service.RegistryNamespace{
+				{
+					Name: "default",
+					Repositories: []service.RegistryRepository{
+						{
+							Name: "mixed", Type: "docker", Kind: "remote",
+							URL: "https://registry.example",
+							Auth: &service.RegistryUpstreamAuth{
+								Type:     "header",
+								Username: "ignored", // basic-only field; left alone
+								Token:    "secret://creds/token",
+								Header:   "X-Api-Key",
+								Value:    "plain-value-1234",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	payload := extractSecrets(s)
+
+	auth := s.Registry.Namespaces[0].Repositories[0].Auth
+	if auth.Token != "secret://creds/token" {
+		t.Errorf("Token reference moved: %q", auth.Token)
+	}
+	if auth.Value != "" {
+		t.Errorf("plaintext Value not cleared from source: %q", auth.Value)
+	}
+	if len(payload.RegistryUpstream) != 1 {
+		t.Fatalf("expected 1 sealed registry row, got %d", len(payload.RegistryUpstream))
+	}
+	if got := payload.RegistryUpstream[0].AuthHeaderValue; got != "plain-value-1234" {
+		t.Errorf("sealed AuthHeaderValue = %q, want plain-value-1234", got)
+	}
+}
+
+// TestRegistryUpstreamRenameLosesBinding documents the rename
+// trade-off: the seal layer keys sealed slots by (namespace, repo
+// name) rather than by parallel index. A repo rename in Settings
+// detaches the sealed secret silently — the operator's next save
+// will re-seal under the new name. This is the same behaviour the
+// External map and Hook target slots exhibit, so we pin it here.
+func TestRegistryUpstreamRenameLosesBinding(t *testing.T) {
+	// Step 1: build a settings row and seal it.
+	original := &service.Settings{
+		Registry: &service.RegistrySettings{
+			Namespaces: []service.RegistryNamespace{
+				{
+					Name: "default",
+					Repositories: []service.RegistryRepository{
+						{
+							Name: "old-name", Type: "go", Kind: "remote",
+							URL:  "https://proxy.example",
+							Auth: &service.RegistryUpstreamAuth{Type: "bearer", Token: "tk_secret"},
+						},
+					},
+				},
+			},
+		},
+	}
+	payload := extractSecrets(original)
+
+	// Step 2: simulate the operator renaming the repo via the UI.
+	// We rebuild Settings as it would arrive on the next save: the
+	// secret is no longer in the JSON (we sent only the public
+	// shape) but the sealed payload still carries the old name.
+	renamed := &service.Settings{
+		Registry: &service.RegistrySettings{
+			Namespaces: []service.RegistryNamespace{
+				{
+					Name: "default",
+					Repositories: []service.RegistryRepository{
+						{
+							Name: "new-name", Type: "go", Kind: "remote",
+							URL:  "https://proxy.example",
+							Auth: &service.RegistryUpstreamAuth{Type: "bearer"},
+						},
+					},
+				},
+			},
+		},
+	}
+	injectSecrets(renamed, payload)
+
+	if renamed.Registry.Namespaces[0].Repositories[0].Auth.Token != "" {
+		t.Errorf("rename should have lost the sealed secret, got %q",
+			renamed.Registry.Namespaces[0].Repositories[0].Auth.Token)
+	}
+}

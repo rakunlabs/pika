@@ -21,78 +21,45 @@
   //   GET  /api/v1/registries/go/{ns}/{repo}/modules   → modules + versions
 
   import { onMount } from 'svelte';
+  import { link } from 'svelte-spa-router';
   import { appStore } from '@/lib/store/store.svelte';
   import { addToast } from '@/lib/store/toast.svelte';
   import { configStore } from '@/lib/store/config.svelte';
   import {
-    Package, Container, FileBox, Library, Globe, Cloud, Loader2,
-    Copy, ChevronRight, FolderTree, Trash2, Plus, Pencil, X,
+    Loader2,
+    Copy, ChevronRight, FolderTree, Trash2, Plus, Pencil, X, RotateCw,
+    Eye, EyeOff, Search,
+    // These four are used directly in the template for per-protocol
+    // section headers and empty states; iconFor() / kindIcon() in
+    // registry/utils.ts cover the badge-icon callsites.
+    Package, FileBox, Container, Anchor,
   } from 'lucide-svelte';
   import { basePath } from '@/lib/basepath';
-
-  // Settings shape (mirrors service.RegistrySettings). Kept local
-  // rather than imported from @/lib/types/config so the page renders
-  // even when the type file evolves — the runtime contract is the
-  // /api/v1/registries response, not a TS type.
-  type UpstreamAuth = {
-    type?: 'basic' | 'bearer' | 'header';
-    username?: string;
-    password?: string;
-    token?: string;
-    header_name?: string;
-    header_value?: string;
-  };
-  type Repository = {
-    name: string;
-    description?: string;
-    type: 'go' | 'npm' | 'docker';
-    kind: 'local' | 'remote' | 'virtual';
-    // Local
-    mount?: string;
-    base_path?: string;
-    allow_push?: boolean;
-    // Remote
-    url?: string;
-    auth?: UpstreamAuth;
-    mutable_ttl?: string;
-    floating_tags?: string[];
-    insecure_skip_verify?: boolean;
-    // Virtual
-    members?: string[];
-    default_local?: string;
-  };
-  type Namespace = {
-    name: string;
-    description?: string;
-    repositories?: Repository[];
-  };
-
-  // Module browser shape (mirrors api.goModuleEntry).
-  type ModuleEntry = {
-    module: string;
-    versions: string[];
-  };
-
-  // NPM package shape (mirrors api.npmPackageEntry).
-  type PackageEntry = {
-    name: string;
-    versions: string[];
-    dist_tags: Record<string, string>;
-  };
-
-  // Docker repo shape (mirrors api.dockerRepoEntry +
-  // dockerTagSummary).
-  type DockerTag = {
-    tag: string;
-    digest?: string;
-    artifact_type?: string;
-    media_type?: string;
-    size?: number;
-  };
-  type DockerEntry = {
-    name: string;
-    tags: DockerTag[];
-  };
+  import { formatBytes } from '@/lib/format';
+  import * as registryAPI from '@/lib/store/registry.svelte';
+  import Modal from '@/lib/components/Modal.svelte';
+  import PackageDetailPanel from '@/lib/components/registry/PackageDetailPanel.svelte';
+  import type {
+    DockerEntry,
+    DockerTag,
+    HelmChartListEntry,
+    ModuleEntry,
+    Namespace,
+    PackageEntry,
+    ProbeResult,
+    RegistryStats,
+    RegistryType,
+    Repository,
+    UpstreamAuth,
+  } from '@/lib/components/registry/types';
+  import {
+    artifactTypeLabel,
+    copyToClipboard as copyToClipboardUtil,
+    endpointURL as endpointURLUtil,
+    iconFor,
+    kindIcon,
+    matchFilter,
+  } from '@/lib/components/registry/utils';
 
   let booted = $state(false);
   let namespaces = $state<Namespace[]>([]);
@@ -101,22 +68,52 @@
   let modules = $state<ModuleEntry[]>([]);
   let packages = $state<PackageEntry[]>([]);
   let images = $state<DockerEntry[]>([]);
+  let charts = $state<HelmChartListEntry[]>([]);
   let entriesLoading = $state(false);
   // For all three browsers — only one is shown at a time depending
   // on selectedRepo.type, so a single expanded-name key is enough.
   let expandedEntry = $state<string | null>(null);
 
+  // PackageDetailPanel state. When `detailPackage` is non-null, the
+  // panel renders as a right-side overlay; clicking a package row
+  // sets this and clicking the close button on the panel clears it.
+  // Kept at the page level (rather than per-browser) because the
+  // panel is a singleton — only one package can be "open" at a time.
+  let detailPackage = $state<{ name: string; type: RegistryType } | null>(null);
+  function openDetail(name: string, type: RegistryType) {
+    detailPackage = { name, type };
+  }
+  function closeDetail() {
+    detailPackage = null;
+  }
+
+  // Per-list text filters. Each browser's list is filtered against
+  // its respective state below; an empty filter shows everything.
+  // The filter inputs render inside the browser headers (see template
+  // below) and update these states in place.
+  let nsFilter = $state('');
+  let repoFilter = $state('');
+  let entryFilter = $state('');
+
   const canAdmin = $derived(appStore.hasPermission('registry.admin'));
+  // Server-side feature toggle. When disabled, the data plane and
+  // every /api/v1/registries/* endpoint return 404, so we render a
+  // dedicated empty-state instead of letting load() spam "Failed to
+  // load registries" toasts on each visit. Default true so users
+  // on an older server build (no registry_enabled field) keep the
+  // existing behaviour.
+  const registryEnabled = $derived(appStore.info?.registry_enabled ?? true);
 
   async function load() {
+    // Skip the fetch entirely when the feature is off — the API
+    // would 404 and the user is already going to see the explicit
+    // "feature disabled" panel below.
+    if (!registryEnabled) {
+      booted = true;
+      return;
+    }
     try {
-      const resp = await fetch(`${basePath}/api/v1/registries`, {
-        credentials: 'same-origin',
-      });
-      if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}`);
-      }
-      const body = await resp.json();
+      const body = await registryAPI.listRegistries();
       namespaces = body.namespaces ?? [];
       if (namespaces.length > 0 && !selectedNS) {
         selectedNS = namespaces[0].name;
@@ -132,29 +129,27 @@
     modules = [];
     packages = [];
     images = [];
+    charts = [];
     entriesLoading = true;
     try {
-      let url = '';
-      if (repo.type === 'go') {
-        url = `${basePath}/api/v1/registries/go/${encodeURIComponent(ns)}/${encodeURIComponent(repo.name)}/modules`;
-      } else if (repo.type === 'npm') {
-        url = `${basePath}/api/v1/registries/npm/${encodeURIComponent(ns)}/${encodeURIComponent(repo.name)}/packages`;
-      } else if (repo.type === 'docker') {
-        url = `${basePath}/api/v1/registries/docker/${encodeURIComponent(ns)}/${encodeURIComponent(repo.name)}/repos`;
-      } else {
-        return;
-      }
-      const resp = await fetch(url, { credentials: 'same-origin' });
-      if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}`);
-      }
-      const body = (await resp.json()) ?? [];
-      if (repo.type === 'go') {
-        modules = body;
-      } else if (repo.type === 'npm') {
-        packages = body;
-      } else if (repo.type === 'docker') {
-        images = body;
+      // Dispatch on protocol — each API call has a different
+      // response shape and a different state slot. The switch
+      // keeps the call narrow and type-safe; the alternative
+      // (a generic listEntries) would lose the per-protocol
+      // typing the rest of the page depends on.
+      switch (repo.type) {
+        case 'go':
+          modules = await registryAPI.listGoModules(ns, repo.name);
+          break;
+        case 'npm':
+          packages = await registryAPI.listNPMPackages(ns, repo.name);
+          break;
+        case 'docker':
+          images = await registryAPI.listDockerRepos(ns, repo.name);
+          break;
+        case 'helm':
+          charts = await registryAPI.listHelmCharts(ns, repo.name);
+          break;
       }
     } catch (err) {
       addToast(`Failed to load entries: ${err}`, 'alert');
@@ -168,61 +163,87 @@
     expandedEntry = null;
     if (selectedNS) {
       loadEntries(selectedNS, repo);
+      loadStats(selectedNS, repo);
     }
   }
 
-  // artifactTypeLabel maps the long media-type string to a short
-  // human-readable label for the UI badge. Unknown types fall back
-  // to "artifact".
-  function artifactTypeLabel(mediaType: string): string {
-    const known: Record<string, string> = {
-      'application/vnd.cncf.helm.config.v1+json': 'helm',
-      'application/vnd.dev.cosign.simplesigning.v1+json': 'cosign',
-      'application/vnd.cncf.notary.signature': 'notary',
-      'application/vnd.in-toto+json': 'in-toto',
-      'application/spdx+json': 'sbom-spdx',
-      'application/vnd.cyclonedx+json': 'sbom-cyclonedx',
-      'application/vnd.aquasec.trivy.config.v1+json': 'trivy',
-      'application/vnd.wasm.config.v1+json': 'wasm',
-    };
-    return known[mediaType] ?? 'artifact';
-  }
+  // Thin local wrappers — the page uses these names extensively in
+  // the template, so we re-bind the utils versions to the original
+  // local identifiers rather than touching dozens of callsites.
+  const copyToClipboard = (text: string) => copyToClipboardUtil(text, addToast);
 
-  // formatSize returns a humanised byte count for the tag size
-  // column ("1.4 MB", "823 B", ...).
-  function formatSize(n: number): string {
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    let i = 0;
-    let v = n;
-    while (v >= 1024 && i < units.length - 1) {
-      v /= 1024;
-      i++;
+  // Per-repo on-disk statistics. Lazy-loaded the first time a repo
+  // is selected, then re-fetched whenever the repo changes. Server
+  // walks the storage on every call (no persistent counter), so we
+  // keep the call rate low — refresh button instead of polling.
+  let stats = $state<RegistryStats | null>(null);
+  let statsLoading = $state(false);
+  async function loadStats(ns: string, repo: Repository) {
+    stats = null;
+    if (repo.kind === 'virtual') {
+      // Virtual repos delegate to members. The server returns {}
+      // for them; surface a clean "n/a" rather than the empty
+      // object so the UI doesn't render a card full of zeros.
+      return;
     }
-    return v.toFixed(v < 10 && i > 0 ? 1 : 0) + ' ' + units[i];
-  }
-
-  function iconFor(type: Repository['type']) {
-    switch (type) {
-      case 'go': return FileBox;
-      case 'npm': return Package;
-      case 'docker': return Container;
-    }
-  }
-
-  function kindIcon(kind: Repository['kind']) {
-    switch (kind) {
-      case 'local': return Library;
-      case 'remote': return Cloud;
-      case 'virtual': return Globe;
-    }
-  }
-
-  async function copyToClipboard(text: string) {
+    statsLoading = true;
     try {
-      await navigator.clipboard.writeText(text);
-      addToast('Copied to clipboard', 'success');
-    } catch {
-      addToast('Clipboard write failed', 'alert');
+      stats = await registryAPI.getStats(repo.type, ns, repo.name);
+    } catch (err) {
+      // Non-fatal — the panel just hides the card.
+      stats = null;
+    } finally {
+      statsLoading = false;
+    }
+  }
+
+  // humanBytes is the format-with-zero variant used by the stats
+  // card. Renamed from a local function to the shared formatBytes
+  // helper but kept as an alias to avoid a template-wide rename.
+  const humanBytes = formatBytes;
+
+  // Cache purge for Remote repos. Mirrors the GC pattern: confirm,
+  // POST, toast the stats, then reload the per-repo browser so any
+  // freshly-dropped entries disappear immediately. Default scope is
+  // "mutable" — operator can opt into a full purge through the
+  // confirm prompt.
+  let purgeRunning = $state(false);
+  async function runCachePurge(ns: string, repo: Repository) {
+    const wide = window.confirm(
+      `Refresh upstream cache for ${ns}/${repo.name}?\n\n` +
+      `OK = drop mutable pointers (next read re-fetches version lists / floating tags).\n` +
+      `Cancel = abort.\n\n` +
+      `Hold Shift while clicking OK to also drop cached artifacts (forces a full re-download).`
+    );
+    if (!wide) return;
+    // window.confirm doesn't expose modifier state, so we use a
+    // second prompt for the wide scope. Simple but explicit.
+    const all = window.confirm(
+      `Also drop cached artifacts (manifests / tarballs / blobs)?\n\n` +
+      `OK = full purge (heavier, forces re-download on every pull).\n` +
+      `Cancel = mutable-only purge (recommended).`
+    );
+    purgeRunning = true;
+    try {
+      const stats = await registryAPI.purgeCache(repo.type, ns, repo.name, all) as {
+        purged_bytes?: number;
+        purged_files?: number;
+      };
+      const bytes = stats.purged_bytes ?? 0;
+      const human = bytes >= 1024 * 1024
+        ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+        : `${(bytes / 1024).toFixed(0)} KB`;
+      addToast(
+        `Purged ${stats.purged_files} file${stats.purged_files === 1 ? '' : 's'} (${human}).`,
+        'success'
+      );
+      if (selectedRepo && selectedNS) {
+        await loadEntries(selectedNS, selectedRepo);
+      }
+    } catch (err) {
+      addToast(`Cache purge failed: ${err}`, 'alert');
+    } finally {
+      purgeRunning = false;
     }
   }
 
@@ -236,19 +257,11 @@
     }
     gcRunning = true;
     try {
-      const resp = await fetch(
-        `${basePath}/api/v1/registries/docker/${encodeURIComponent(ns)}/${encodeURIComponent(repoName)}/gc`,
-        {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ min_age_seconds: 3600 }),
-        }
-      );
-      if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}`);
-      }
-      const stats = await resp.json();
+      const stats = await registryAPI.dockerGC(ns, repoName) as {
+        SweptBlobs?: number;
+        SweptManifests?: number;
+        MarkedBlobs?: number;
+      };
       const msg = `Swept ${stats.SweptBlobs} blob${stats.SweptBlobs === 1 ? '' : 's'}, ` +
                   `${stats.SweptManifests} manifest${stats.SweptManifests === 1 ? '' : 's'}. ` +
                   `Kept ${stats.MarkedBlobs} marked.`;
@@ -263,15 +276,9 @@
     }
   }
 
-  // The endpoint URL the registry exposes to clients. The browser's
-  // own origin is correct for the typical "same host as the UI"
-  // deployment; operators behind a custom DNS get exact-match URLs
-  // by browsing from that host.
-  function endpointURL(ns: string, repo: string): string {
-    const origin = window.location.origin;
-    const bp = basePath;
-    return `${origin}${bp}/registries/${ns}/${repo}`;
-  }
+  // endpointURL wraps the shared util so the template keeps its
+  // 2-arg shape (basePath is bound here at the page level).
+  const endpointURL = (ns: string, repo: string) => endpointURLUtil(basePath, ns, repo);
 
   // ─── Admin actions: CRUD over namespaces + repositories ───
   //
@@ -292,6 +299,36 @@
   let mode = $state<Mode | null>(null);
   let saving = $state(false);
 
+  // ── Mode discriminator helpers ──
+  //
+  // Svelte 5's reactive `$derived.by` closures and template-side
+  // ternaries on a 4-variant union don't always narrow cleanly in
+  // svelte-check — the type checker can't follow `mode.kind ===
+  // 'new-repository' || mode.kind === 'edit-repository'` to prove
+  // that `.namespace` exists. These helpers do the narrowing in
+  // one place so call sites can use a single accessor without
+  // non-null assertions.
+  function modeNamespace(m: Mode | null): string {
+    if (!m) return '';
+    if (m.kind === 'new-repository' || m.kind === 'edit-repository') return m.namespace;
+    return '';
+  }
+  function modeOriginal(m: Mode | null): string {
+    if (!m) return '';
+    if (m.kind === 'edit-namespace' || m.kind === 'edit-repository') return m.original;
+    return '';
+  }
+  function isRepoMode(m: Mode | null): m is
+    | { kind: 'new-repository'; namespace: string }
+    | { kind: 'edit-repository'; namespace: string; original: string } {
+    return !!m && (m.kind === 'new-repository' || m.kind === 'edit-repository');
+  }
+  function isNamespaceMode(m: Mode | null): m is
+    | { kind: 'new-namespace' }
+    | { kind: 'edit-namespace'; original: string } {
+    return !!m && (m.kind === 'new-namespace' || m.kind === 'edit-namespace');
+  }
+
   // Draft buffers — separate from the live tree so cancel is cheap
   // (just clear `mode`).
   let nsDraft = $state<Namespace>({ name: '', description: '', repositories: [] });
@@ -309,6 +346,51 @@
   // Floating-tags editor (Docker Remote only) — same comma-string
   // convention. Empty input means "use server default".
   let floatingTagsText = $state('');
+  // CORS origins editor — comma-separated origins string. Same
+  // pattern as virtualMembersText. The backend stores them as a
+  // string slice; the UI keeps the editor flat for keyboard
+  // efficiency (one input vs a chip array with per-chip buttons).
+  let corsOriginsText = $state('');
+  // Max upload size editor: number + unit dropdown. We persist the
+  // bytes value in repoDraft.max_upload_size; the inputs below
+  // expose a friendlier MB/GB unit picker. Zero (or empty) means
+  // "type default" — preserved by omitting the field at save time.
+  let maxUploadValue = $state(0);
+  let maxUploadUnit = $state<'MB' | 'GB'>('MB');
+
+  // Reveal toggles for the credential inputs. We render the fields
+  // as type="password" by default — the value comes back plaintext
+  // from the server (the seal layer transparently injects it) but
+  // the browser masks it. Click 👁 to flip the input to type=text.
+  // Reset to false each time the modal opens.
+  let revealPassword = $state(false);
+  let revealToken = $state(false);
+  let revealHeaderValue = $state(false);
+
+  // Upstream probe state. Lives at the page level (rather than
+  // inside the modal subtree) so a long-running probe survives
+  // briefly closing/reopening the modal — and so the result panel
+  // can be cleared when the modal opens fresh.
+  let probeResult = $state<ProbeResult | null>(null);
+  let probeRunning = $state(false);
+  async function runProbe() {
+    if (!isRepoMode(mode)) return;
+    const ns = mode.namespace;
+    const repoName = (repoDraft.name ?? '').trim().toLowerCase();
+    if (!repoName) {
+      addToast('Save the repository once before testing the upstream.', 'alert');
+      return;
+    }
+    probeRunning = true;
+    probeResult = null;
+    try {
+      probeResult = await registryAPI.probeUpstream(repoDraft.type, ns, repoName);
+    } catch (err) {
+      probeResult = { ok: false, error: String(err) };
+    } finally {
+      probeRunning = false;
+    }
+  }
 
   // rawMounts feeds the mount dropdown for Local repos. Pulled from
   // /api/v1/info (already loaded by the app store at boot).
@@ -334,6 +416,13 @@
     };
     virtualMembersText = '';
     floatingTagsText = '';
+    corsOriginsText = '';
+    maxUploadValue = 0;
+    maxUploadUnit = 'MB';
+    revealPassword = false;
+    revealToken = false;
+    revealHeaderValue = false;
+    probeResult = null;
     mode = { kind: 'new-repository', namespace: namespaceName };
   }
 
@@ -341,6 +430,26 @@
     repoDraft = JSON.parse(JSON.stringify(repo)); // deep copy
     virtualMembersText = (repo.members ?? []).join(', ');
     floatingTagsText = (repo.floating_tags ?? []).join(', ');
+    corsOriginsText = (repo.cors_origins ?? []).join(', ');
+    // Reconstruct the friendly value+unit pair from the stored
+    // bytes. Round-trip prefers GB when the value is a clean
+    // multiple, else MB. Sub-MB values (operator typed bytes
+    // directly through a previous version) round up to 1 MB for
+    // the display; saving overwrites with the new (value * unit).
+    const bytes = repo.max_upload_size ?? 0;
+    if (bytes <= 0) {
+      maxUploadValue = 0;
+      maxUploadUnit = 'MB';
+    } else if (bytes >= 1024 * 1024 * 1024 && bytes % (1024 * 1024 * 1024) === 0) {
+      maxUploadValue = bytes / (1024 * 1024 * 1024);
+      maxUploadUnit = 'GB';
+    } else {
+      maxUploadValue = Math.max(1, Math.round(bytes / (1024 * 1024)));
+      maxUploadUnit = 'MB';
+    }
+    revealPassword = false;
+    revealToken = false;
+    revealHeaderValue = false;
     mode = { kind: 'edit-repository', namespace: namespaceName, original: repo.name };
   }
 
@@ -375,7 +484,8 @@
   }
 
   async function saveNamespace() {
-    if (!mode || (mode.kind !== 'new-namespace' && mode.kind !== 'edit-namespace')) return;
+    const m = mode;
+    if (!isNamespaceMode(m)) return;
     const name = (nsDraft.name ?? '').trim().toLowerCase();
     if (!name) {
       addToast('Namespace name is required.', 'alert');
@@ -386,14 +496,14 @@
       return;
     }
     const tree = JSON.parse(JSON.stringify(namespaces)) as Namespace[];
-    if (mode.kind === 'new-namespace') {
+    if (m.kind === 'new-namespace') {
       if (tree.some((n) => n.name === name)) {
         addToast(`Namespace "${name}" already exists.`, 'alert');
         return;
       }
       tree.push({ name, description: nsDraft.description, repositories: [] });
     } else {
-      const original = mode.original;
+      const original = m.original;
       const idx = tree.findIndex((n) => n.name === original);
       if (idx === -1) {
         addToast('Original namespace not found — tree was edited elsewhere.', 'alert');
@@ -427,7 +537,8 @@
   }
 
   async function saveRepository() {
-    if (!mode || (mode.kind !== 'new-repository' && mode.kind !== 'edit-repository')) return;
+    const m = mode;
+    if (!isRepoMode(m)) return;
     const name = (repoDraft.name ?? '').trim().toLowerCase();
     if (!name) {
       addToast('Repository name is required.', 'alert');
@@ -462,7 +573,7 @@
     }
 
     const tree = JSON.parse(JSON.stringify(namespaces)) as Namespace[];
-    const nsIdx = tree.findIndex((n) => n.name === mode.namespace);
+    const nsIdx = tree.findIndex((n) => n.name === m.namespace);
     if (nsIdx === -1) {
       addToast('Target namespace not found.', 'alert');
       return;
@@ -505,8 +616,8 @@
         } else if (repoDraft.auth.type === 'bearer') {
           row.auth.token = repoDraft.auth.token;
         } else if (repoDraft.auth.type === 'header') {
-          row.auth.header_name = repoDraft.auth.header_name;
-          row.auth.header_value = repoDraft.auth.header_value;
+          row.auth.header = repoDraft.auth.header;
+          row.auth.value = repoDraft.auth.value;
         }
       }
     } else if (repoDraft.kind === 'virtual') {
@@ -514,14 +625,27 @@
       if (repoDraft.default_local) row.default_local = repoDraft.default_local;
     }
 
-    if (mode.kind === 'new-repository') {
+    // Common per-repo overrides — applicable across kinds, so live
+    // outside the kind-switch. Empty inputs are dropped to preserve
+    // the canonical "field absent" shape over "field empty".
+    const cors = corsOriginsText
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (cors.length > 0) row.cors_origins = cors;
+    if (maxUploadValue && maxUploadValue > 0) {
+      const mult = maxUploadUnit === 'GB' ? 1024 * 1024 * 1024 : 1024 * 1024;
+      row.max_upload_size = Math.floor(maxUploadValue) * mult;
+    }
+
+    if (m.kind === 'new-repository') {
       if (ns.repositories.some((r) => r.name === name)) {
         addToast(`Repository "${name}" already exists in this namespace.`, 'alert');
         return;
       }
       ns.repositories.push(row);
     } else {
-      const original = mode.original;
+      const original = m.original;
       const rIdx = ns.repositories.findIndex((r) => r.name === original);
       if (rIdx === -1) {
         addToast('Original repository not found.', 'alert');
@@ -553,18 +677,26 @@
   // Sibling-repo list for the virtual-members hint. Helps the user
   // type valid names without leaving the page.
   const siblingRepoNames = $derived.by(() => {
-    if (!mode || (mode.kind !== 'new-repository' && mode.kind !== 'edit-repository')) return [];
-    const ns = namespaces.find((n) => n.name === mode.namespace);
+    const m = mode;
+    if (!isRepoMode(m)) return [];
+    const ns = namespaces.find((n) => n.name === m.namespace);
     return (ns?.repositories ?? [])
       .filter((r) => r.kind !== 'virtual')
-      .filter((r) => mode!.kind !== 'edit-repository' || r.name !== mode!.original)
+      .filter((r) => m.kind !== 'edit-repository' || r.name !== m.original)
       .map((r) => r.name);
   });
 
   const selectedRepos = $derived.by(() => {
     if (!selectedNS) return [];
     const ns = namespaces.find((n) => n.name === selectedNS);
-    return ns?.repositories ?? [];
+    const all = ns?.repositories ?? [];
+    if (!repoFilter) return all;
+    return all.filter((r) => matchFilter(r.name, repoFilter));
+  });
+  const selectedReposTotal = $derived.by(() => {
+    if (!selectedNS) return 0;
+    const ns = namespaces.find((n) => n.name === selectedNS);
+    return ns?.repositories?.length ?? 0;
   });
 
   onMount(async () => {
@@ -606,6 +738,31 @@
       <Loader2 size={20} class="animate-spin mr-2" />
       Loading registries…
     </div>
+  {:else if !registryEnabled}
+    <!--
+      Feature is server-disabled. Operators reach this page through a
+      bookmark or direct URL even after the navbar link is hidden;
+      give them a single self-service hint instead of a stack of
+      failed-to-load toasts.
+    -->
+    <div class="flex-1 flex items-center justify-center">
+      <div class="max-w-md text-center px-4">
+        <Package size={48} class="mx-auto text-warm-400 mb-4" />
+        <h2 class="text-lg font-semibold mb-2">Registry feature is disabled</h2>
+        <p class="text-sm text-warm-500 dark:text-warm-400 mb-4">
+          An administrator has turned off the artifact registry for this deployment.
+          Existing namespaces and repositories are preserved — re-enable the feature
+          to make them serve again.
+        </p>
+        <a
+          href="/settings"
+          use:link
+          class="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded border border-warm-300 dark:border-warm-700 hover:bg-warm-100 dark:hover:bg-warm-800"
+        >
+          Go to Settings → Features
+        </a>
+      </div>
+    </div>
   {:else if namespaces.length === 0}
     <div class="flex-1 flex items-center justify-center">
       <div class="max-w-md text-center px-4">
@@ -636,11 +793,22 @@
     <div class="flex-1 flex overflow-hidden">
       <!-- Namespaces sidebar -->
       <aside class="w-48 border-r border-warm-200 dark:border-warm-800 bg-white dark:bg-warm-900 overflow-y-auto shrink-0">
-        <div class="px-3 py-2 text-[10px] uppercase tracking-wide text-warm-500">
-          Namespaces
+        <div class="px-3 py-2 text-[10px] uppercase tracking-wide text-warm-500 flex items-center justify-between">
+          <span>Namespaces</span>
+          <span class="text-[9px] normal-case text-warm-400">{namespaces.length}</span>
         </div>
+        {#if namespaces.length > 5}
+          <div class="px-2 pb-2">
+            <input
+              type="text"
+              placeholder="Filter…"
+              bind:value={nsFilter}
+              class="w-full text-[11px] px-2 py-1 bg-warm-50 dark:bg-warm-800 border border-warm-200 dark:border-warm-700 rounded focus:border-accent-500 outline-none"
+            />
+          </div>
+        {/if}
         <ul>
-          {#each namespaces as ns (ns.name)}
+          {#each namespaces.filter((n) => matchFilter(n.name, nsFilter)) as ns (ns.name)}
             <li class="group relative">
               <button
                 class="w-full text-left px-3 py-2 hover:bg-warm-100 dark:hover:bg-warm-800 text-sm flex items-center justify-between"
@@ -679,7 +847,7 @@
       <!-- Repositories panel -->
       <section class="w-72 border-r border-warm-200 dark:border-warm-800 bg-white dark:bg-warm-900 overflow-y-auto shrink-0">
         <div class="px-3 py-2 text-[10px] uppercase tracking-wide text-warm-500 flex items-center justify-between">
-          <span>Repositories</span>
+          <span>Repositories {#if selectedReposTotal > 0}<span class="normal-case text-warm-400">({selectedRepos.length}{repoFilter ? ' / ' + selectedReposTotal : ''})</span>{/if}</span>
           {#if canAdmin && selectedNS}
             <button
               class="flex items-center gap-1 text-[10px] normal-case tracking-normal px-1.5 py-0.5 rounded border border-warm-300 dark:border-warm-700 hover:bg-warm-100 dark:hover:bg-warm-800"
@@ -691,6 +859,16 @@
             </button>
           {/if}
         </div>
+        {#if selectedReposTotal > 5}
+          <div class="px-2 pb-2">
+            <input
+              type="text"
+              placeholder="Filter repositories…"
+              bind:value={repoFilter}
+              class="w-full text-[11px] px-2 py-1 bg-warm-50 dark:bg-warm-800 border border-warm-200 dark:border-warm-700 rounded focus:border-accent-500 outline-none"
+            />
+          </div>
+        {/if}
         {#if selectedRepos.length === 0}
           <div class="px-3 py-2 text-xs text-warm-500">
             Namespace has no repositories yet.
@@ -777,6 +955,23 @@
               <span class="text-[10px] uppercase text-warm-500 px-1.5 py-0.5 rounded border border-warm-300 dark:border-warm-700">
                 {repo.type}
               </span>
+              {#if (repo.kind === 'remote' || repo.kind === 'virtual') && canAdmin}
+                <button
+                  class="ml-auto flex items-center gap-1 text-xs px-2 py-1 rounded border border-warm-300 dark:border-warm-700 hover:bg-warm-100 dark:hover:bg-warm-800 disabled:opacity-50"
+                  disabled={purgeRunning || repo.kind === 'virtual'}
+                  onclick={() => runCachePurge(selectedNS ?? '', repo)}
+                  title={repo.kind === 'virtual'
+                    ? 'Virtual repos delegate to their members — purge each member individually'
+                    : 'Drop cached upstream responses so the next read re-fetches'}
+                >
+                  {#if purgeRunning}
+                    <Loader2 size={12} class="animate-spin" />
+                  {:else}
+                    <RotateCw size={12} />
+                  {/if}
+                  Refresh cache
+                </button>
+              {/if}
               {#if repo.type === 'docker' && repo.kind === 'local' && canAdmin}
                 <button
                   class="ml-auto flex items-center gap-1 text-xs px-2 py-1 rounded border border-warm-300 dark:border-warm-700 hover:bg-warm-100 dark:hover:bg-warm-800 disabled:opacity-50"
@@ -834,6 +1029,11 @@
                   <br />
                   <code class="font-mono">docker push {endpoint.replace(/^https?:\/\//, '')}/v2/&lt;image&gt;:&lt;tag&gt;</code>
                 </div>
+              {:else if repo.type === 'helm'}
+                <div class="mt-2 text-[11px] text-warm-500">
+                  <span class="font-medium">Client setup:</span>
+                  <code class="font-mono">helm repo add {repo.name} {endpoint}</code>
+                </div>
               {/if}
             </div>
 
@@ -871,15 +1071,89 @@
               {/if}
             </div>
 
+            <!-- Statistics card. Hidden for Virtual repos (no
+                 backing store of their own — they delegate to
+                 members). Re-fetched on each repo selection; the
+                 server walks storage live so we don't poll. -->
+            {#if repo.kind !== 'virtual'}
+              <div class="mb-4 border border-warm-200 dark:border-warm-800 rounded-md bg-white dark:bg-warm-900 p-3">
+                <div class="flex items-center justify-between mb-2">
+                  <div class="text-[10px] uppercase tracking-wide text-warm-500">Statistics</div>
+                  <button
+                    class="text-[10px] flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-warm-100 dark:hover:bg-warm-800"
+                    title="Re-fetch counts"
+                    disabled={statsLoading}
+                    onclick={() => selectedNS && loadStats(selectedNS, repo)}
+                  >
+                    {#if statsLoading}
+                      <Loader2 size={10} class="animate-spin" />
+                    {:else}
+                      <RotateCw size={10} />
+                    {/if}
+                    refresh
+                  </button>
+                </div>
+                {#if statsLoading && !stats}
+                  <div class="text-xs text-warm-500">Loading…</div>
+                {:else if !stats}
+                  <div class="text-xs text-warm-500">Statistics unavailable.</div>
+                {:else}
+                  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 text-xs">
+                    {#if repo.type === 'go'}
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Modules</div>
+                        <div class="font-mono">{stats.module_count ?? 0}</div>
+                      </div>
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Versions</div>
+                        <div class="font-mono">{stats.version_count ?? 0}</div>
+                      </div>
+                    {:else if repo.type === 'npm'}
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Packages</div>
+                        <div class="font-mono">{stats.package_count ?? 0}</div>
+                      </div>
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Versions</div>
+                        <div class="font-mono">{stats.version_count ?? 0}</div>
+                      </div>
+                    {:else if repo.type === 'docker'}
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Repos</div>
+                        <div class="font-mono">{stats.repository_count ?? 0}</div>
+                      </div>
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Tags</div>
+                        <div class="font-mono">{stats.tag_count ?? 0}</div>
+                      </div>
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Manifests</div>
+                        <div class="font-mono">{stats.manifest_count ?? 0}</div>
+                      </div>
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Blobs</div>
+                        <div class="font-mono">{stats.blob_count ?? 0}</div>
+                      </div>
+                    {/if}
+                    <div>
+                      <div class="text-[10px] uppercase text-warm-500">Total size</div>
+                      <div class="font-mono">{humanBytes(stats.total_bytes ?? 0)}</div>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+
             <!-- Browser. Go shows modules; NPM shows packages;
                  Docker shows image repositories. All three share
                  the same expand-to-see-children interaction model. -->
-            {#if repo.type === 'go' || repo.type === 'npm' || repo.type === 'docker'}
+            {#if repo.type === 'go' || repo.type === 'npm' || repo.type === 'docker' || repo.type === 'helm'}
               {@const isGo = repo.type === 'go'}
               {@const isNpm = repo.type === 'npm'}
               {@const isDocker = repo.type === 'docker'}
-              {@const entryLabel = isGo ? 'Modules' : isNpm ? 'Packages' : 'Repositories'}
-              {@const entryCount = isGo ? modules.length : isNpm ? packages.length : images.length}
+              {@const isHelm = repo.type === 'helm'}
+              {@const entryLabel = isGo ? 'Modules' : isNpm ? 'Packages' : isDocker ? 'Repositories' : 'Charts'}
+              {@const entryCount = isGo ? modules.length : isNpm ? packages.length : isDocker ? images.length : charts.length}
               <div class="border border-warm-200 dark:border-warm-800 rounded-md bg-white dark:bg-warm-900">
                 <div class="px-3 py-2 border-b border-warm-200 dark:border-warm-800 flex items-center gap-2">
                   <FolderTree size={14} class="text-accent-500" />
@@ -888,6 +1162,17 @@
                     <Loader2 size={12} class="animate-spin text-warm-500" />
                   {:else if repo.kind !== 'virtual'}
                     <span class="text-[10px] text-warm-500">({entryCount})</span>
+                  {/if}
+                  {#if repo.kind !== 'virtual' && entryCount > 0}
+                    <div class="ml-auto flex items-center gap-1">
+                      <Search size={10} class="text-warm-500" />
+                      <input
+                        type="text"
+                        placeholder="Filter…"
+                        bind:value={entryFilter}
+                        class="text-[11px] px-1.5 py-0.5 w-32 bg-warm-50 dark:bg-warm-800 border border-warm-200 dark:border-warm-700 rounded focus:border-accent-500 outline-none"
+                      />
+                    </div>
                   {/if}
                 </div>
                 {#if repo.kind === 'virtual'}
@@ -918,6 +1203,13 @@
                           docker tag &lt;img&gt; {endpoint.replace(/^https?:\/\//, '')}/v2/&lt;img&gt;:&lt;tag&gt;{'\n'}
                           docker push {endpoint.replace(/^https?:\/\//, '')}/v2/&lt;img&gt;:&lt;tag&gt;
                         </div>
+                      {:else if isHelm && repo.allow_push}
+                        <div class="mt-2 text-[11px] font-mono text-left bg-warm-100 dark:bg-warm-800 p-2 rounded">
+                          # publish via curl (ChartMuseum-compatible){'\n'}
+                          curl -XPOST -H "Authorization: Bearer $TOKEN" \{'\n'}
+                          {'  '}--data-binary @mychart-1.0.0.tgz \{'\n'}
+                          {'  '}{endpoint}/api/charts
+                        </div>
                       {/if}
                     {:else}
                       Nothing in cache yet — the first client request will
@@ -926,46 +1218,34 @@
                   </div>
                 {:else if isGo}
                   <ul class="text-sm">
-                    {#each modules as m (m.module)}
+                    {#each modules.filter((m) => matchFilter(m.module, entryFilter)) as m (m.module)}
                       <li class="border-b border-warm-100 dark:border-warm-800/50 last:border-b-0">
                         <button
                           class="w-full text-left px-3 py-2 hover:bg-warm-50 dark:hover:bg-warm-800/50 flex items-center gap-2"
-                          onclick={() => expandedEntry = (expandedEntry === m.module ? null : m.module)}
+                          onclick={() => openDetail(m.module, 'go')}
+                          title="View details"
                         >
-                          <ChevronRight
-                            size={14}
-                            class="text-warm-500 transition-transform {expandedEntry === m.module ? 'rotate-90' : ''}"
-                          />
+                          <FileBox size={14} class="text-warm-500" />
                           <span class="font-mono text-xs">{m.module}</span>
                           <span class="ml-auto text-[10px] text-warm-500">
                             {m.versions.length} version{m.versions.length === 1 ? '' : 's'}
                           </span>
+                          <ChevronRight size={12} class="text-warm-400" />
                         </button>
-                        {#if expandedEntry === m.module}
-                          <ul class="bg-warm-50 dark:bg-warm-950/40">
-                            {#each m.versions as v}
-                              <li class="px-9 py-1 text-[11px] font-mono text-warm-600 dark:text-warm-400">
-                                {v}
-                              </li>
-                            {/each}
-                          </ul>
-                        {/if}
                       </li>
                     {/each}
                   </ul>
                 {:else if isDocker}
                   <ul class="text-sm">
-                    {#each images as img (img.name)}
+                    {#each images.filter((i) => matchFilter(i.name, entryFilter)) as img (img.name)}
                       {@const hasArtifacts = img.tags.some((t) => t.artifact_type)}
                       <li class="border-b border-warm-100 dark:border-warm-800/50 last:border-b-0">
                         <button
                           class="w-full text-left px-3 py-2 hover:bg-warm-50 dark:hover:bg-warm-800/50 flex items-center gap-2"
-                          onclick={() => expandedEntry = (expandedEntry === img.name ? null : img.name)}
+                          onclick={() => openDetail(img.name, 'docker')}
+                          title="View details"
                         >
-                          <ChevronRight
-                            size={14}
-                            class="text-warm-500 transition-transform {expandedEntry === img.name ? 'rotate-90' : ''}"
-                          />
+                          <Container size={14} class="text-warm-500" />
                           <span class="font-mono text-xs">{img.name}</span>
                           {#if hasArtifacts}
                             <span class="text-[9px] uppercase px-1 py-0.5 rounded bg-accent-500/10 text-accent-500 border border-accent-500/30">
@@ -975,44 +1255,21 @@
                           <span class="ml-auto text-[10px] text-warm-500">
                             {img.tags.length} tag{img.tags.length === 1 ? '' : 's'}
                           </span>
+                          <ChevronRight size={12} class="text-warm-400" />
                         </button>
-                        {#if expandedEntry === img.name}
-                          <ul class="bg-warm-50 dark:bg-warm-950/40">
-                            {#each img.tags as t (t.tag)}
-                              <li class="px-9 py-1.5 text-[11px] font-mono text-warm-600 dark:text-warm-400">
-                                <div class="flex items-center gap-2">
-                                  <span class="font-semibold text-warm-700 dark:text-warm-300">{t.tag}</span>
-                                  {#if t.artifact_type}
-                                    <span class="text-[9px] uppercase px-1 rounded bg-accent-500/10 text-accent-500">
-                                      {artifactTypeLabel(t.artifact_type)}
-                                    </span>
-                                  {/if}
-                                  {#if t.size}
-                                    <span class="text-[9px] text-warm-500 ml-auto">{formatSize(t.size)}</span>
-                                  {/if}
-                                </div>
-                                {#if t.digest}
-                                  <div class="text-[10px] text-warm-500 truncate">{t.digest}</div>
-                                {/if}
-                              </li>
-                            {/each}
-                          </ul>
-                        {/if}
                       </li>
                     {/each}
                   </ul>
-                {:else}
+                {:else if isNpm}
                   <ul class="text-sm">
-                    {#each packages as p (p.name)}
+                    {#each packages.filter((p) => matchFilter(p.name, entryFilter)) as p (p.name)}
                       <li class="border-b border-warm-100 dark:border-warm-800/50 last:border-b-0">
                         <button
                           class="w-full text-left px-3 py-2 hover:bg-warm-50 dark:hover:bg-warm-800/50 flex items-center gap-2"
-                          onclick={() => expandedEntry = (expandedEntry === p.name ? null : p.name)}
+                          onclick={() => openDetail(p.name, 'npm')}
+                          title="View details"
                         >
-                          <ChevronRight
-                            size={14}
-                            class="text-warm-500 transition-transform {expandedEntry === p.name ? 'rotate-90' : ''}"
-                          />
+                          <Package size={14} class="text-warm-500" />
                           <span class="font-mono text-xs">{p.name}</span>
                           {#if p.dist_tags?.latest}
                             <span class="text-[10px] text-accent-500 font-mono">@{p.dist_tags.latest}</span>
@@ -1020,25 +1277,27 @@
                           <span class="ml-auto text-[10px] text-warm-500">
                             {p.versions.length} version{p.versions.length === 1 ? '' : 's'}
                           </span>
+                          <ChevronRight size={12} class="text-warm-400" />
                         </button>
-                        {#if expandedEntry === p.name}
-                          <div class="bg-warm-50 dark:bg-warm-950/40">
-                            {#if Object.keys(p.dist_tags ?? {}).length > 0}
-                              <div class="px-9 py-1 text-[10px] uppercase text-warm-500">dist-tags</div>
-                              {#each Object.entries(p.dist_tags) as [tag, ver]}
-                                <div class="px-9 py-0.5 text-[11px] font-mono text-warm-600 dark:text-warm-400">
-                                  {tag}: {ver}
-                                </div>
-                              {/each}
-                            {/if}
-                            <div class="px-9 py-1 text-[10px] uppercase text-warm-500">versions</div>
-                            {#each p.versions as v}
-                              <div class="px-9 py-0.5 text-[11px] font-mono text-warm-600 dark:text-warm-400">
-                                {v}
-                              </div>
-                            {/each}
-                          </div>
-                        {/if}
+                      </li>
+                    {/each}
+                  </ul>
+                {:else if isHelm}
+                  <ul class="text-sm">
+                    {#each charts.filter((ch) => matchFilter(ch.name, entryFilter)) as ch (ch.name)}
+                      <li class="border-b border-warm-100 dark:border-warm-800/50 last:border-b-0">
+                        <button
+                          class="w-full text-left px-3 py-2 hover:bg-warm-50 dark:hover:bg-warm-800/50 flex items-center gap-2"
+                          onclick={() => openDetail(ch.name, 'helm')}
+                          title="View details"
+                        >
+                          <Anchor size={14} class="text-warm-500" />
+                          <span class="font-mono text-xs">{ch.name}</span>
+                          <span class="ml-auto text-[10px] text-warm-500">
+                            {ch.versions.length} version{ch.versions.length === 1 ? '' : 's'}
+                          </span>
+                          <ChevronRight size={12} class="text-warm-400" />
+                        </button>
                       </li>
                     {/each}
                   </ul>
@@ -1057,31 +1316,23 @@
   {/if}
 
   <!-- ─── Admin modal (new/edit namespace + repository) ─────────── -->
-  {#if mode}
-    <div
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      onclick={cancelModal}
-    >
-      <div
-        class="bg-white dark:bg-warm-900 rounded-lg shadow-xl w-[min(90vw,560px)] max-h-[90vh] overflow-y-auto"
-        onclick={(e) => e.stopPropagation()}
-        role="document"
-      >
-        <header class="flex items-center justify-between px-4 py-3 border-b border-warm-200 dark:border-warm-800">
-          <h2 class="text-base font-semibold">
-            {#if mode.kind === 'new-namespace'}New namespace
-            {:else if mode.kind === 'edit-namespace'}Edit namespace
-            {:else if mode.kind === 'new-repository'}New repository in {mode.namespace}
-            {:else}Edit repository in {mode.namespace}
-            {/if}
-          </h2>
-          <button class="p-1 rounded hover:bg-warm-100 dark:hover:bg-warm-800" onclick={cancelModal} title="Cancel">
-            <X size={16} />
-          </button>
-        </header>
+  <Modal open={!!mode} onClose={cancelModal} size="sm">
+    {#snippet header()}
+      {#if mode}
+        <h2 class="text-base font-semibold">
+          {#if mode.kind === 'new-namespace'}New namespace
+          {:else if mode.kind === 'edit-namespace'}Edit namespace
+          {:else if mode.kind === 'new-repository'}New repository in {modeNamespace(mode)}
+          {:else}Edit repository in {modeNamespace(mode)}
+          {/if}
+        </h2>
+        <button class="p-1 rounded hover:bg-warm-100 dark:hover:bg-warm-800" onclick={cancelModal} title="Cancel">
+          <X size={16} />
+        </button>
+      {/if}
+    {/snippet}
 
+    {#if mode}
         <div class="p-4 space-y-3 text-sm">
           {#if mode.kind === 'new-namespace' || mode.kind === 'edit-namespace'}
             <!-- ── Namespace form ── -->
@@ -1147,6 +1398,7 @@
                   <option value="go">Go modules</option>
                   <option value="npm">NPM packages</option>
                   <option value="docker">Docker / OCI</option>
+                  <option value="helm">Helm charts</option>
                 </select>
               </label>
 
@@ -1197,7 +1449,7 @@
                     type="text"
                     class="w-full px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
                     bind:value={repoDraft.base_path}
-                    placeholder={repoDraft.type === 'go' ? 'go/' : repoDraft.type === 'npm' ? 'npm/' : 'docker/'}
+                    placeholder={repoDraft.type === 'go' ? 'go/' : repoDraft.type === 'npm' ? 'npm/' : repoDraft.type === 'helm' ? 'charts/' : 'docker/'}
                   />
                   <span class="block mt-1 text-[10px] text-warm-500">
                     Path inside the mount where artifacts will be stored.
@@ -1225,9 +1477,45 @@
                     type="url"
                     class="w-full px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
                     bind:value={repoDraft.url}
-                    placeholder={repoDraft.type === 'go' ? 'https://proxy.golang.org' : repoDraft.type === 'npm' ? 'https://registry.npmjs.org' : 'https://registry-1.docker.io'}
+                    placeholder={repoDraft.type === 'go' ? 'https://proxy.golang.org' : repoDraft.type === 'npm' ? 'https://registry.npmjs.org' : repoDraft.type === 'helm' ? 'https://charts.bitnami.com/bitnami' : 'https://registry-1.docker.io'}
                   />
                 </label>
+
+                <!-- B8: connectivity probe button. Only enabled
+                     when editing an existing repo (the probe uses
+                     the persisted credentials, so the draft state
+                     must already be saved). For new repos the
+                     button is hidden — operators publish first,
+                     then probe. -->
+                {#if mode?.kind === 'edit-repository'}
+                  <div class="flex items-center gap-2 text-xs">
+                    <button
+                      class="px-2 py-1 rounded border border-warm-300 dark:border-warm-700 hover:bg-warm-100 dark:hover:bg-warm-800 flex items-center gap-1 disabled:opacity-50"
+                      onclick={runProbe}
+                      disabled={probeRunning}
+                    >
+                      {#if probeRunning}<Loader2 size={10} class="animate-spin" />{:else}<RotateCw size={10} />{/if}
+                      Test upstream
+                    </button>
+                    {#if probeResult}
+                      {#if probeResult.ok}
+                        <span class="text-green-600 dark:text-green-400">
+                          ✓ {probeResult.status_code} · {probeResult.latency_ms} ms
+                        </span>
+                      {:else}
+                        <span class="text-red-500" title={probeResult.error}>
+                          ✗ {probeResult.status_code || 'error'}
+                        </span>
+                      {/if}
+                    {/if}
+                  </div>
+                  {#if probeResult && probeResult.body_preview}
+                    <details class="text-[10px] text-warm-500">
+                      <summary class="cursor-pointer">Response preview</summary>
+                      <pre class="mt-1 font-mono whitespace-pre-wrap break-all">{probeResult.body_preview}</pre>
+                    </details>
+                  {/if}
+                {/if}
 
                 <label class="block">
                   <span class="block text-xs font-medium text-warm-600 dark:text-warm-400 mb-1">
@@ -1337,34 +1625,72 @@
                       placeholder="username"
                       bind:value={repoDraft.auth.username}
                     />
-                    <input
-                      type="text"
-                      class="px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
-                      placeholder="password or secret://path"
-                      bind:value={repoDraft.auth.password}
-                    />
+                    <!--
+                      Password field. Rendered as type=password by
+                      default so casual screen-watching doesn't leak
+                      the value; click 👁 to flip the input type to
+                      text. The on-disk value is sealed via the
+                      secret layer; the server transparently injects
+                      plaintext back into the form on edit.
+                    -->
+                    <div class="relative">
+                      <input
+                        type={revealPassword ? 'text' : 'password'}
+                        class="w-full px-2 py-1 pr-7 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
+                        placeholder="password or secret://path"
+                        bind:value={repoDraft.auth.password}
+                      />
+                      <button
+                        type="button"
+                        class="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-warm-100 dark:hover:bg-warm-700"
+                        onclick={() => (revealPassword = !revealPassword)}
+                        title={revealPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {#if revealPassword}<EyeOff size={11} />{:else}<Eye size={11} />{/if}
+                      </button>
+                    </div>
                   </div>
                 {:else if repoDraft.auth?.type === 'bearer'}
-                  <input
-                    type="text"
-                    class="w-full px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
-                    placeholder="token or secret://path"
-                    bind:value={repoDraft.auth.token}
-                  />
+                  <div class="relative">
+                    <input
+                      type={revealToken ? 'text' : 'password'}
+                      class="w-full px-2 py-1 pr-7 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
+                      placeholder="token or secret://path"
+                      bind:value={repoDraft.auth.token}
+                    />
+                    <button
+                      type="button"
+                      class="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-warm-100 dark:hover:bg-warm-700"
+                      onclick={() => (revealToken = !revealToken)}
+                      title={revealToken ? 'Hide token' : 'Show token'}
+                    >
+                      {#if revealToken}<EyeOff size={11} />{:else}<Eye size={11} />{/if}
+                    </button>
+                  </div>
                 {:else if repoDraft.auth?.type === 'header'}
                   <div class="grid grid-cols-2 gap-3">
                     <input
                       type="text"
                       class="px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
                       placeholder="X-Header-Name"
-                      bind:value={repoDraft.auth.header_name}
+                      bind:value={repoDraft.auth.header}
                     />
-                    <input
-                      type="text"
-                      class="px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
-                      placeholder="value or secret://path"
-                      bind:value={repoDraft.auth.header_value}
-                    />
+                    <div class="relative">
+                      <input
+                        type={revealHeaderValue ? 'text' : 'password'}
+                        class="w-full px-2 py-1 pr-7 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
+                        placeholder="value or secret://path"
+                        bind:value={repoDraft.auth.value}
+                      />
+                      <button
+                        type="button"
+                        class="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-warm-100 dark:hover:bg-warm-700"
+                        onclick={() => (revealHeaderValue = !revealHeaderValue)}
+                        title={revealHeaderValue ? 'Hide value' : 'Show value'}
+                      >
+                        {#if revealHeaderValue}<EyeOff size={11} />{:else}<Eye size={11} />{/if}
+                      </button>
+                    </div>
                   </div>
                 {/if}
 
@@ -1388,7 +1714,7 @@
                     placeholder="local-repo, proxy-cache"
                   />
                   <span class="block mt-1 text-[10px] text-warm-500">
-                    Comma-separated sibling repository names (within {mode.kind === 'new-repository' ? mode.namespace : (mode.kind === 'edit-repository' ? mode.namespace : '')}). Lookup tries them in order; first match wins.
+                    Comma-separated sibling repository names (within {modeNamespace(mode)}). Lookup tries them in order; first match wins.
                   </span>
                   {#if siblingRepoNames.length > 0}
                     <span class="block mt-1 text-[10px] text-warm-500">
@@ -1408,30 +1734,103 @@
                 </label>
               </div>
             {/if}
+
+            <!-- ── B6: common per-repo overrides ────────────────────
+                 cors_origins and max_upload_size apply to any kind
+                 (local/remote/virtual). Live below the kind-specific
+                 fields so the form reads top-to-bottom: identity →
+                 kind selector → kind-specific fields → common
+                 overrides. -->
+            <details class="border-t border-warm-200 dark:border-warm-800 pt-3 mt-3">
+              <summary class="cursor-pointer text-xs font-medium text-warm-600 dark:text-warm-400 hover:text-warm-900 dark:hover:text-warm-100">
+                Advanced (CORS, upload size)
+              </summary>
+              <div class="space-y-3 mt-3">
+                <label class="block">
+                  <span class="block text-xs font-medium text-warm-600 dark:text-warm-400 mb-1">
+                    CORS origins
+                  </span>
+                  <input
+                    type="text"
+                    class="w-full px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
+                    bind:value={corsOriginsText}
+                    placeholder="https://app.example.com, *"
+                  />
+                  <span class="block mt-1 text-[10px] text-warm-500">
+                    Comma-separated origins allowed for browser-based clients.
+                    Use <code class="font-mono">*</code> as a single entry for
+                    permissive CORS. Empty disables CORS headers (server-default
+                    behaviour).
+                  </span>
+                </label>
+
+                <div>
+                  <span class="block text-xs font-medium text-warm-600 dark:text-warm-400 mb-1">
+                    Max upload size
+                  </span>
+                  <div class="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      class="w-24 px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
+                      bind:value={maxUploadValue}
+                      placeholder="0"
+                    />
+                    <select
+                      class="px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 text-xs"
+                      bind:value={maxUploadUnit}
+                    >
+                      <option value="MB">MB</option>
+                      <option value="GB">GB</option>
+                    </select>
+                    <span class="text-[10px] text-warm-500">0 = type default</span>
+                  </div>
+                  <span class="block mt-1 text-[10px] text-warm-500">
+                    Caps the publish / push body size. Server-side defaults: NPM
+                    200 MB, Docker (per-blob) varies by upload session.
+                  </span>
+                </div>
+              </div>
+            </details>
           {/if}
         </div>
+    {/if}
 
-        <footer class="flex items-center justify-end gap-2 px-4 py-3 border-t border-warm-200 dark:border-warm-800 bg-warm-50/50 dark:bg-warm-950/30">
-          <button
-            class="px-3 py-1 text-xs rounded border border-warm-300 dark:border-warm-700 hover:bg-warm-100 dark:hover:bg-warm-800"
-            onclick={cancelModal}
-            disabled={saving}
-          >
-            Cancel
-          </button>
-          <button
-            class="px-3 py-1 text-xs rounded bg-accent-500 hover:bg-accent-600 text-white disabled:opacity-50 flex items-center gap-1"
-            onclick={() => {
-              if (mode?.kind === 'new-namespace' || mode?.kind === 'edit-namespace') saveNamespace();
-              else if (mode?.kind === 'new-repository' || mode?.kind === 'edit-repository') saveRepository();
-            }}
-            disabled={saving}
-          >
-            {#if saving}<Loader2 size={12} class="animate-spin" />{/if}
-            Save
-          </button>
-        </footer>
-      </div>
-    </div>
+    {#snippet footer()}
+      <button
+        class="px-3 py-1 text-xs rounded border border-warm-300 dark:border-warm-700 hover:bg-warm-100 dark:hover:bg-warm-800"
+        onclick={cancelModal}
+        disabled={saving}
+      >
+        Cancel
+      </button>
+      <button
+        class="px-3 py-1 text-xs rounded bg-accent-500 hover:bg-accent-600 text-white disabled:opacity-50 flex items-center gap-1"
+        onclick={() => {
+          if (mode?.kind === 'new-namespace' || mode?.kind === 'edit-namespace') saveNamespace();
+          else if (mode?.kind === 'new-repository' || mode?.kind === 'edit-repository') saveRepository();
+        }}
+        disabled={saving}
+      >
+        {#if saving}<Loader2 size={12} class="animate-spin" />{/if}
+        Save
+      </button>
+    {/snippet}
+  </Modal>
+
+  <!-- Side-panel package detail. Mounted at the page root so it
+       overlays everything (namespace sidebar, repo list, detail
+       column) instead of nesting inside the detail column where
+       it would be clipped by the column's overflow rules. -->
+  {#if detailPackage && selectedRepo && selectedNS}
+    <PackageDetailPanel
+      namespace={selectedNS}
+      repoName={selectedRepo.name}
+      repoType={detailPackage.type}
+      packageName={detailPackage.name}
+      endpoint={endpointURL(selectedNS, selectedRepo.name)}
+      onclose={closeDetail}
+    />
   {/if}
 </div>

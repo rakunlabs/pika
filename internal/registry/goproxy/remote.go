@@ -52,31 +52,16 @@ type Remote struct {
 // NewRemoteFactory returns the Factory for ("go", "remote") repos.
 func NewRemoteFactory() registry.Factory {
 	return func(_ context.Context, deps registry.Deps, ns string, r *service.RegistryRepository) (registry.Registry, error) {
-		fs, err := deps.MountRawFS(r.Mount)
+		b, err := upstream.BuildRemote(deps, "goproxy/remote", ns, r, 5*time.Minute)
 		if err != nil {
-			return nil, fmt.Errorf("goproxy/remote %s/%s: mount: %w", ns, r.Name, err)
-		}
-		client, err := upstream.NewClient(upstream.Config{
-			BaseURL:            r.URL,
-			Auth:               r.Auth,
-			Resolver:           deps.Resolver,
-			InsecureSkipVerify: r.InsecureSkipVerify,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("goproxy/remote %s/%s: client: %w", ns, r.Name, err)
-		}
-		ttl := 5 * time.Minute
-		if r.MutableTTL != "" {
-			if d, err := time.ParseDuration(r.MutableTTL); err == nil {
-				ttl = d
-			}
+			return nil, err
 		}
 		return &Remote{
 			namespace:  ns,
 			name:       r.Name,
-			store:      NewStore(fs, r.BasePath),
-			client:     client,
-			mutableTTL: ttl,
+			store:      NewStore(b.FS, b.BasePath),
+			client:     b.Client,
+			mutableTTL: b.MutableTTL,
 			sf:         common.NewSingleflight(),
 		}, nil
 	}
@@ -94,6 +79,65 @@ func (rr *Remote) Close() error {
 		return rr.client.Close()
 	}
 	return nil
+}
+
+// PackageDetail returns per-module metadata for the cached view of
+// a Remote. Implements registry.PackageDetailer. A module that has
+// never been fetched returns ErrPackageNotFound — Remote does NOT
+// trigger an upstream warm-up for the detail endpoint; warming is
+// the explicit purpose of the data-plane endpoints.
+func (rr *Remote) PackageDetail(ctx context.Context, module string) (*registry.PackageDetail, error) {
+	return buildPackageDetail(ctx, rr.store, module)
+}
+
+// ProbeUpstream implements registry.UpstreamProber. Hits the root
+// of the configured GOPROXY upstream; proxy.golang.org returns
+// the "Go module mirror" landing page (200), self-hosted Athens
+// instances return their dashboard, etc.
+func (rr *Remote) ProbeUpstream(ctx context.Context) (registry.UpstreamHealth, error) {
+	return upstream.Probe(ctx, rr.client, "/"), nil
+}
+
+// Stats implements registry.StatsProvider. Reports the same on-disk
+// metrics as Local — for a Remote registry these reflect cached
+// upstream artifacts (everything pika has actually pulled), so a
+// fresh repo with no traffic reports zeros.
+func (rr *Remote) Stats(_ context.Context) (registry.Stats, error) {
+	mods, vers, bytes := rr.store.CountModulesVersionsBytes()
+	return registry.Stats{
+		ModuleCount:  mods,
+		VersionCount: vers,
+		TotalBytes:   bytes,
+	}, nil
+}
+
+// PurgeCache implements registry.CachePurger. With All=false (the
+// default), only the mutable pointers (@v/list, @latest) are
+// deleted — the next request for either re-resolves through
+// upstream while immutable artifacts continue to serve from cache
+// at zero cost. With All=true, the entire module cache (every
+// .info, .mod, .zip under the BasePath) is wiped, forcing a full
+// re-download on the next pull. Callers should pick the wider
+// scope only when they suspect cache corruption.
+func (rr *Remote) PurgeCache(_ context.Context, opts registry.PurgeOptions) (registry.PurgeStats, error) {
+	var (
+		count int
+		bytes int64
+		errs  []error
+	)
+	if opts.All {
+		count, bytes, errs = rr.store.PurgeAll()
+	} else {
+		count, bytes, errs = rr.store.PurgeMutable()
+	}
+	out := registry.PurgeStats{
+		PurgedFiles: count,
+		PurgedBytes: bytes,
+	}
+	for _, e := range errs {
+		out.Errors = append(out.Errors, e.Error())
+	}
+	return out, nil
 }
 
 // ServeHTTP dispatches a request. Only safe verbs (GET / HEAD) are

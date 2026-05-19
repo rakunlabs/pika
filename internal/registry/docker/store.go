@@ -41,6 +41,35 @@ func NewStore(fs rawfs.RawFS, blobs blobstore.BlobStore, basePath string) *Store
 // RawFS returns the underlying rawfs handle.
 func (s *Store) RawFS() rawfs.RawFS { return s.fs }
 
+// CountRepositoriesTagsManifests walks the repositories/ tree once
+// and returns (#repos, #tags across all repos, #manifest-by-digest
+// files). Used by the stats endpoint; cheap because manifest files
+// are small and the tree is flat (one repo = one tags/ + one
+// manifests/ subdir).
+func (s *Store) CountRepositoriesTagsManifests() (repos int, tags int, manifests int) {
+	names, _ := s.ListRepositories()
+	repos = len(names)
+	for _, name := range names {
+		tagsDir := path.Join(s.repoDir(name), "tags")
+		if entries, err := s.fs.ReadDir(tagsDir); err == nil {
+			for _, e := range entries {
+				if !e.IsDir {
+					tags++
+				}
+			}
+		}
+		manifestsDir := path.Join(s.repoDir(name), "manifests")
+		if entries, err := s.fs.ReadDir(manifestsDir); err == nil {
+			for _, e := range entries {
+				if !e.IsDir {
+					manifests++
+				}
+			}
+		}
+	}
+	return
+}
+
 // Blobs returns the underlying BlobStore.
 func (s *Store) Blobs() blobstore.BlobStore { return s.blobs }
 
@@ -148,6 +177,141 @@ func (s *Store) DeleteManifest(name string, dgst blobstore.Digest) error {
 	}
 	_ = wfs.Delete(s.manifestPath(name, dgst) + ".media")
 	return nil
+}
+
+// ─── Manifest layer / platform inspection ─────────────────────────
+
+// LayerInfo describes one layer inside an image manifest.
+type LayerInfo struct {
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+}
+
+// PlatformInfo describes one descriptor inside an image index
+// (manifest list) — used for multi-arch images.
+type PlatformInfo struct {
+	OS           string `json:"os,omitempty"`
+	Architecture string `json:"architecture,omitempty"`
+	Variant      string `json:"variant,omitempty"`
+	Digest       string `json:"digest"`
+	Size         int64  `json:"size,omitempty"`
+}
+
+// ManifestInspection is the parsed shape of a manifest body for
+// the package-detail UI. ConfigDigest / Layers are populated for
+// image manifests; Platforms for image indexes (multi-arch).
+type ManifestInspection struct {
+	MediaType    string
+	ArtifactType string
+	ConfigDigest string
+	ImageSize    int64
+	Layers       []LayerInfo
+	Platforms    []PlatformInfo
+}
+
+// inspectManifestDetail is the shared parser used by the detail
+// endpoint. The shape is intentionally lax (every field optional)
+// so we don't reject manifests that omit pieces a strict OCI
+// validator would flag.
+type inspectManifestDetail struct {
+	MediaType    string                `json:"mediaType,omitempty"`
+	ArtifactType string                `json:"artifactType,omitempty"`
+	Config       *manifestConfig       `json:"config,omitempty"`
+	Layers       []manifestLayer       `json:"layers,omitempty"`
+	Manifests    []manifestListEntry   `json:"manifests,omitempty"`
+}
+
+type manifestConfig struct {
+	Digest    string `json:"digest,omitempty"`
+	MediaType string `json:"mediaType,omitempty"`
+}
+
+type manifestLayer struct {
+	Digest    string `json:"digest"`
+	Size      int64  `json:"size,omitempty"`
+	MediaType string `json:"mediaType,omitempty"`
+}
+
+type manifestListEntry struct {
+	Digest    string                  `json:"digest"`
+	Size      int64                   `json:"size,omitempty"`
+	MediaType string                  `json:"mediaType,omitempty"`
+	Platform  *manifestListEntryPlat  `json:"platform,omitempty"`
+}
+
+type manifestListEntryPlat struct {
+	OS           string `json:"os,omitempty"`
+	Architecture string `json:"architecture,omitempty"`
+	Variant      string `json:"variant,omitempty"`
+}
+
+// InspectManifestBytes parses a manifest body and returns a
+// detail-oriented view: layer breakdown for image manifests,
+// platform descriptors for image indexes. Returns nil for bodies
+// that don't parse as JSON.
+func InspectManifestBytes(body []byte) *ManifestInspection {
+	var m inspectManifestDetail
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil
+	}
+	out := &ManifestInspection{
+		MediaType: m.MediaType,
+		ArtifactType: m.ArtifactType,
+	}
+	if m.Config != nil {
+		out.ConfigDigest = m.Config.Digest
+		// Fall back to the config mediaType as artifact type when
+		// the manifest didn't carry an explicit artifactType and
+		// the config is not a generic image config.
+		if out.ArtifactType == "" && m.Config.MediaType != "" {
+			switch m.Config.MediaType {
+			case "application/vnd.oci.image.config.v1+json",
+				"application/vnd.docker.container.image.v1+json":
+				// generic; ignore
+			default:
+				out.ArtifactType = m.Config.MediaType
+			}
+		}
+	}
+	if len(m.Layers) > 0 {
+		out.Layers = make([]LayerInfo, 0, len(m.Layers))
+		for _, l := range m.Layers {
+			out.Layers = append(out.Layers, LayerInfo{
+				Digest:    l.Digest,
+				Size:      l.Size,
+				MediaType: l.MediaType,
+			})
+			out.ImageSize += l.Size
+		}
+	}
+	if len(m.Manifests) > 0 {
+		out.Platforms = make([]PlatformInfo, 0, len(m.Manifests))
+		for _, e := range m.Manifests {
+			p := PlatformInfo{
+				Digest: e.Digest,
+				Size:   e.Size,
+			}
+			if e.Platform != nil {
+				p.OS = e.Platform.OS
+				p.Architecture = e.Platform.Architecture
+				p.Variant = e.Platform.Variant
+			}
+			out.Platforms = append(out.Platforms, p)
+		}
+	}
+	return out
+}
+
+// ManifestModTime returns the modification time (unix seconds) of
+// a manifest blob, or 0 when the file does not exist. Used by the
+// detail UI to surface "pushed at" timestamps.
+func (s *Store) ManifestModTime(name string, dgst blobstore.Digest) int64 {
+	fi, err := s.fs.Stat(s.manifestPath(name, dgst))
+	if err != nil {
+		return 0
+	}
+	return fi.ModTime.Unix()
 }
 
 // ─── Tags ──────────────────────────────────────────────────────────

@@ -13,8 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/registry"
 	"github.com/rakunlabs/pika/internal/registry/blobstore"
+	"github.com/rakunlabs/pika/internal/registry/events"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -35,6 +37,7 @@ type Local struct {
 	maxUpload int64
 
 	uploads *uploadSessions
+	emitter events.Emitter
 }
 
 // NewLocalFactory returns the Factory for ("docker", "local").
@@ -63,6 +66,7 @@ func NewLocalFactory() registry.Factory {
 			allowPush: r.AllowPush,
 			maxUpload: r.MaxUploadSize,
 			uploads:   newUploadSessions(),
+			emitter:   deps.Emitter,
 		}, nil
 	}
 }
@@ -73,6 +77,35 @@ func (l *Local) Type() string      { return service.RegistryTypeDocker }
 func (l *Local) Kind() string      { return service.RegistryKindLocal }
 func (l *Local) Store() *Store     { return l.store }
 func (l *Local) Close() error      { return nil }
+
+// PackageDetail implements registry.PackageDetailer.
+func (l *Local) PackageDetail(ctx context.Context, name string) (*registry.PackageDetail, error) {
+	return buildPackageDetail(ctx, l.store, name)
+}
+
+// Stats implements registry.StatsProvider. Walks the on-disk
+// repositories and blob store to produce a snapshot count.
+func (l *Local) Stats(_ context.Context) (registry.Stats, error) {
+	repos, tags, manifests := l.store.CountRepositoriesTagsManifests()
+	var (
+		blobCount  int
+		totalBytes int64
+	)
+	_ = l.store.Blobs().ListBlobs(func(_ blobstore.Digest, info *blobstore.BlobInfo) error {
+		blobCount++
+		if info != nil {
+			totalBytes += info.Size
+		}
+		return nil
+	})
+	return registry.Stats{
+		RepositoryCount: repos,
+		TagCount:        tags,
+		ManifestCount:   manifests,
+		BlobCount:       blobCount,
+		TotalBytes:      totalBytes,
+	}, nil
+}
 
 // AllowPush reports whether push operations are enabled.
 func (l *Local) AllowPush() bool { return l.allowPush }
@@ -341,6 +374,20 @@ func (l *Local) putManifest(w http.ResponseWriter, r *http.Request, req parsedRe
 		w.Header().Set("OCI-Subject", insp.Subject.Digest)
 	}
 
+	// Emit registry.published. Path encodes "{repo}/{image}:{tag-or-digest}"
+	// so operators see a single greppable identifier per push.
+	subject := req.Name + "@" + dgst.String()
+	if !IsDigestReference(req.Ref) && req.Ref != "" {
+		subject = req.Name + ":" + req.Ref
+	}
+	events.EmitSafe(l.emitter, hook.Event{
+		Type:     hook.EventRegistryPublished,
+		Mount:    l.namespace,
+		Path:     l.name + "/" + subject,
+		Protocol: "registry-docker",
+		Size:     int64(len(body)),
+	})
+
 	prefix := r.Header.Get("X-Pika-Registry-Prefix")
 	w.Header().Set("Location", prefix+"/v2/"+req.Name+"/manifests/"+dgst.String())
 	w.Header().Set("Docker-Content-Digest", dgst.String())
@@ -359,6 +406,12 @@ func (l *Local) deleteManifest(w http.ResponseWriter, r *http.Request, req parse
 			mapError(w, err)
 			return
 		}
+		events.EmitSafe(l.emitter, hook.Event{
+			Type:     hook.EventRegistryDeleted,
+			Mount:    l.namespace,
+			Path:     l.name + "/" + req.Name + ":" + req.Ref,
+			Protocol: "registry-docker",
+		})
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
@@ -378,6 +431,12 @@ func (l *Local) deleteManifest(w http.ResponseWriter, r *http.Request, req parse
 		mapError(w, err)
 		return
 	}
+	events.EmitSafe(l.emitter, hook.Event{
+		Type:     hook.EventRegistryDeleted,
+		Mount:    l.namespace,
+		Path:     l.name + "/" + req.Name + "@" + dgst.String(),
+		Protocol: "registry-docker",
+	})
 	w.WriteHeader(http.StatusAccepted)
 }
 

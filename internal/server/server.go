@@ -173,7 +173,7 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	// initial Reload that api.Handle triggers — otherwise
 	// Settings.Registry rows of those types would be silently
 	// skipped on cold boot.
-	registryMgr := api.BootRegistryManager(ctx, svc, rh)
+	registryMgr := api.BootRegistryManager(ctx, svc, rh, rh.Dispatcher())
 	if err := registerRegistryFactories(registryMgr); err != nil {
 		return fmt.Errorf("register registry factories: %w", err)
 	}

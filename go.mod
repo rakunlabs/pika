@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/abbot/go-http-auth v0.4.1-0.20220112235402-e1cee1c72f2f
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/dgraph-io/badger/v4 v4.9.1
 	github.com/fclairamb/ftpserverlib v0.30.0
@@ -15,7 +16,7 @@ require (
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/pin/tftp/v3 v3.2.0
 	github.com/pkg/sftp v1.13.10
-	github.com/rakunlabs/ada v0.4.1
+	github.com/rakunlabs/ada v0.4.2
 	github.com/rakunlabs/ada/handler/folder v0.4.1
 	github.com/rakunlabs/ada/middleware/auth v0.4.1
 	github.com/rakunlabs/ada/middleware/cors v0.4.1
@@ -44,7 +45,6 @@ require (
 
 require (
 	github.com/Azure/go-ntlmssp v0.1.0 // indirect
-	github.com/abbot/go-http-auth v0.4.1-0.20220112235402-e1cee1c72f2f // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dgraph-io/ristretto/v2 v2.2.0 // indirect

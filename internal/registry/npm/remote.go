@@ -44,31 +44,16 @@ type Remote struct {
 // NewRemoteFactory returns the Factory for ("npm", "remote") repos.
 func NewRemoteFactory() registry.Factory {
 	return func(_ context.Context, deps registry.Deps, ns string, r *service.RegistryRepository) (registry.Registry, error) {
-		fs, err := deps.MountRawFS(r.Mount)
-		if err != nil {
-			return nil, fmt.Errorf("npm/remote %s/%s: %w", ns, r.Name, err)
-		}
-		client, err := upstream.NewClient(upstream.Config{
-			BaseURL:            r.URL,
-			Auth:               r.Auth,
-			Resolver:           deps.Resolver,
-			InsecureSkipVerify: r.InsecureSkipVerify,
-		})
+		b, err := upstream.BuildRemote(deps, "npm/remote", ns, r, 5*time.Minute)
 		if err != nil {
 			return nil, err
-		}
-		ttl := 5 * time.Minute
-		if r.MutableTTL != "" {
-			if d, err := time.ParseDuration(r.MutableTTL); err == nil {
-				ttl = d
-			}
 		}
 		return &Remote{
 			namespace:  ns,
 			name:       r.Name,
-			store:      NewStore(fs, r.BasePath),
-			client:     client,
-			mutableTTL: ttl,
+			store:      NewStore(b.FS, b.BasePath),
+			client:     b.Client,
+			mutableTTL: b.MutableTTL,
 			sf:         common.NewSingleflight(),
 		}, nil
 	}
@@ -85,6 +70,60 @@ func (rr *Remote) Close() error {
 		return rr.client.Close()
 	}
 	return nil
+}
+
+// PackageDetail implements registry.PackageDetailer against the
+// Remote's cache. Like the goproxy Remote, this is a cache-only
+// read — it never triggers an upstream packument fetch. Operators
+// who want a warm view should `npm install` once first.
+func (rr *Remote) PackageDetail(ctx context.Context, name string) (*registry.PackageDetail, error) {
+	return buildPackageDetail(ctx, rr.store, name)
+}
+
+// ProbeUpstream implements registry.UpstreamProber. /-/ping is the
+// canonical npm health endpoint; registry.npmjs.org returns 200,
+// Verdaccio responds the same. Self-hosted Sonatype Nexus does
+// not implement /-/ping but the probe surfaces that as a non-2xx
+// status code rather than a hard failure.
+func (rr *Remote) ProbeUpstream(ctx context.Context) (registry.UpstreamHealth, error) {
+	return upstream.Probe(ctx, rr.client, "/-/ping"), nil
+}
+
+// Stats implements registry.StatsProvider. Reports cached package
+// metadata + tarball footprint for the Remote repo.
+func (rr *Remote) Stats(_ context.Context) (registry.Stats, error) {
+	pkgs, vers, bytes := rr.store.CountPackagesVersionsBytes()
+	return registry.Stats{
+		PackageCount: pkgs,
+		VersionCount: vers,
+		TotalBytes:   bytes,
+	}, nil
+}
+
+// PurgeCache implements registry.CachePurger. opts.All=false (the
+// default) clears every cached packument so the next read re-fetches
+// upstream metadata; tarballs are kept (content-addressed by sha512
+// integrity). opts.All=true wipes the entire NPM cache including
+// tarballs — picked when the operator suspects cache corruption.
+func (rr *Remote) PurgeCache(_ context.Context, opts registry.PurgeOptions) (registry.PurgeStats, error) {
+	var (
+		count int
+		bytes int64
+		errs  []error
+	)
+	if opts.All {
+		count, bytes, errs = rr.store.PurgeAll()
+	} else {
+		count, bytes, errs = rr.store.PurgeMutable()
+	}
+	out := registry.PurgeStats{
+		PurgedFiles: count,
+		PurgedBytes: bytes,
+	}
+	for _, e := range errs {
+		out.Errors = append(out.Errors, e.Error())
+	}
+	return out, nil
 }
 
 // ServeHTTP dispatches.

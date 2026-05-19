@@ -1,16 +1,15 @@
 package npm
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
-	"strings"
 
 	"github.com/rakunlabs/pika/internal/registry"
+	"github.com/rakunlabs/pika/internal/registry/virtualbase"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -26,43 +25,37 @@ import (
 // are taken from the first member that supplies them. This matches
 // Artifactory's behaviour: deeper members augment, shallower members
 // shadow.
+//
+// Shared shell (members + resolver + first-hit + header copy +
+// PackageDetail delegation) is in internal/registry/virtualbase.
 type Virtual struct {
-	namespace   string
-	name        string
-	memberNames []string
-	resolve     func(namespace, repo string) (registry.Registry, bool)
-}
-
-// virtualResolver is the narrow surface Virtual needs from the
-// manager.
-type virtualResolver interface {
-	Lookup(namespace, repo string) (registry.Registry, bool)
+	*virtualbase.Base
 }
 
 // NewVirtualFactory returns the Factory for ("npm", "virtual").
-func NewVirtualFactory(resolver virtualResolver) registry.Factory {
+func NewVirtualFactory(resolver virtualbase.Resolver) registry.Factory {
 	return func(_ context.Context, _ registry.Deps, ns string, r *service.RegistryRepository) (registry.Registry, error) {
 		if len(r.Members) == 0 {
 			return nil, fmt.Errorf("npm/virtual %s/%s: members required", ns, r.Name)
 		}
-		members := make([]string, len(r.Members))
-		copy(members, r.Members)
 		return &Virtual{
-			namespace:   ns,
-			name:        r.Name,
-			memberNames: members,
-			resolve: func(namespace, repo string) (registry.Registry, bool) {
-				return resolver.Lookup(namespace, repo)
-			},
+			Base: virtualbase.New(ns, r.Name, r.Members, resolver),
 		}, nil
 	}
 }
 
-func (v *Virtual) Namespace() string { return v.namespace }
-func (v *Virtual) Name() string      { return v.name }
-func (v *Virtual) Type() string      { return service.RegistryTypeNPM }
-func (v *Virtual) Kind() string      { return service.RegistryKindVirtual }
-func (v *Virtual) Close() error      { return nil }
+// Type returns the protocol identifier. Kind / Namespace / Name /
+// Close come from the embedded Base.
+func (v *Virtual) Type() string { return service.RegistryTypeNPM }
+
+// PackageDetail returns the first member that has the package. We
+// don't merge across members for the detail view because dependency
+// / metadata shadowing across registries is rarely what an operator
+// wants to see in the UI — the data-plane packument merge below is
+// the right place for that.
+func (v *Virtual) PackageDetail(ctx context.Context, name string) (*registry.PackageDetail, error) {
+	return v.DelegatePackageDetail(ctx, name)
+}
 
 // ServeHTTP dispatches.
 func (v *Virtual) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +68,9 @@ func (v *Virtual) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "packument":
 		v.servePackumentUnion(w, r, req.Pkg)
 	case "tarball", "dist-tags":
-		v.serveFirstHit(w, r)
+		if !v.ServeFirstHit(w, r) {
+			writeNotFound(w, "no member served the request")
+		}
 	case "search":
 		v.serveSearchUnion(w, r)
 	case "whoami":
@@ -93,19 +88,15 @@ func (v *Virtual) servePackumentUnion(w http.ResponseWriter, r *http.Request, na
 		"dist-tags": map[string]any{},
 	}
 	hit := false
-	for _, memberName := range v.memberNames {
-		mem, ok := v.resolve(v.namespace, memberName)
-		if !ok {
-			continue
-		}
+	v.ForEachMember(func(mem registry.Registry) bool {
 		rec := httptest.NewRecorder()
 		mem.ServeHTTP(rec, r)
 		if rec.Code != http.StatusOK {
-			continue
+			return false
 		}
 		var memPkg map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &memPkg); err != nil {
-			continue
+			return false
 		}
 		hit = true
 
@@ -136,7 +127,8 @@ func (v *Virtual) servePackumentUnion(w http.ResponseWriter, r *http.Request, na
 				merged[k] = mv
 			}
 		}
-	}
+		return false // keep iterating, this is a union
+	})
 	if !hit {
 		writeNotFound(w, name+": no member served the package")
 		return
@@ -151,25 +143,6 @@ func (v *Virtual) servePackumentUnion(w http.ResponseWriter, r *http.Request, na
 	_, _ = w.Write(body)
 }
 
-// serveFirstHit forwards to each member; first 2xx wins.
-func (v *Virtual) serveFirstHit(w http.ResponseWriter, r *http.Request) {
-	for _, memberName := range v.memberNames {
-		mem, ok := v.resolve(v.namespace, memberName)
-		if !ok {
-			continue
-		}
-		rec := httptest.NewRecorder()
-		mem.ServeHTTP(rec, r)
-		if rec.Code >= 200 && rec.Code < 300 {
-			copyResponseHeaders(w.Header(), rec.Header())
-			w.WriteHeader(rec.Code)
-			_, _ = w.Write(rec.Body.Bytes())
-			return
-		}
-	}
-	writeNotFound(w, "no member served the request")
-}
-
 // serveSearchUnion is the search-result union across members. The
 // shape mirrors a Local member's search response.
 func (v *Virtual) serveSearchUnion(w http.ResponseWriter, r *http.Request) {
@@ -179,34 +152,31 @@ func (v *Virtual) serveSearchUnion(w http.ResponseWriter, r *http.Request) {
 	}
 	results := []searchObject{}
 
-	for _, memberName := range v.memberNames {
-		mem, ok := v.resolve(v.namespace, memberName)
-		if !ok {
-			continue
-		}
+	v.ForEachMember(func(mem registry.Registry) bool {
 		rec := httptest.NewRecorder()
 		mem.ServeHTTP(rec, r)
 		if rec.Code != http.StatusOK {
-			continue
+			return false
 		}
 		var resp struct {
 			Objects []searchObject `json:"objects"`
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-			continue
+			return false
 		}
 		for _, obj := range resp.Objects {
-			name, _ := obj.Package["name"].(string)
-			if name == "" {
+			n, _ := obj.Package["name"].(string)
+			if n == "" {
 				continue
 			}
-			if _, dup := seenNames[name]; dup {
+			if _, dup := seenNames[n]; dup {
 				continue
 			}
-			seenNames[name] = struct{}{}
+			seenNames[n] = struct{}{}
 			results = append(results, obj)
 		}
-	}
+		return false // keep iterating, this is a union
+	})
 
 	sort.Slice(results, func(i, j int) bool {
 		a, _ := results[i].Package["name"].(string)
@@ -222,18 +192,3 @@ func (v *Virtual) serveSearchUnion(w http.ResponseWriter, r *http.Request) {
 		Total:   len(results),
 	})
 }
-
-func copyResponseHeaders(dst, src http.Header) {
-	for k, vs := range src {
-		switch strings.ToLower(k) {
-		case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-			"te", "trailer", "transfer-encoding", "upgrade":
-			continue
-		}
-		for _, val := range vs {
-			dst.Add(k, val)
-		}
-	}
-}
-
-var _ = bytes.NewReader

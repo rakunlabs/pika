@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/rawfs"
 	"github.com/rakunlabs/pika/internal/rawfs/localfs"
 	"github.com/rakunlabs/pika/internal/registry"
@@ -278,6 +279,86 @@ func TestLocal_MethodNotAllowed(t *testing.T) {
 	l.ServeHTTP(w, r)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST: status %d", w.Code)
+	}
+}
+
+// captureEmitter is a minimal events.Emitter used by tests to
+// inspect emitted hook events. Thread-safe via the slice append
+// happening on the same goroutine as ServeHTTP.
+type captureEmitter struct {
+	events []hook.Event
+}
+
+func (c *captureEmitter) Emit(e hook.Event) {
+	c.events = append(c.events, e)
+}
+
+// TestLocal_PublishEmitsEvent confirms a successful module publish
+// (info + mod + zip) fires exactly one registry.published event,
+// keyed on the .zip slot (the canonical "this version is now
+// installable" marker).
+func TestLocal_PublishEmitsEvent(t *testing.T) {
+	dir := t.TempDir()
+	fs, _ := localfs.New(dir)
+	cap := &captureEmitter{}
+	deps := registry.Deps{
+		MountRawFS: func(string) (rawfs.RawFS, error) { return fs, nil },
+		Emitter:    cap,
+	}
+	repo := &service.RegistryRepository{
+		Name: "go-local", Type: service.RegistryTypeGo, Kind: service.RegistryKindLocal,
+		Mount: "m", BasePath: "go", AllowPush: true,
+	}
+	r, err := NewLocalFactory()(context.Background(), deps, "default", repo)
+	if err != nil {
+		t.Fatalf("Factory: %v", err)
+	}
+	l := r.(*Local)
+
+	uploadInfo(t, l, "github.com/foo/bar", "v1.0.0")
+	uploadMod(t, l, "github.com/foo/bar", "v1.0.0", "module github.com/foo/bar")
+	uploadZip(t, l, "github.com/foo/bar", "v1.0.0", []byte("ZIPDATA"))
+
+	if len(cap.events) != 1 {
+		t.Fatalf("expected 1 event, got %d: %+v", len(cap.events), cap.events)
+	}
+	e := cap.events[0]
+	if e.Type != hook.EventRegistryPublished {
+		t.Errorf("type = %s, want %s", e.Type, hook.EventRegistryPublished)
+	}
+	if e.Mount != "default" {
+		t.Errorf("Mount = %s, want default", e.Mount)
+	}
+	if e.Path != "go-local/github.com/foo/bar@v1.0.0" {
+		t.Errorf("Path = %s, want go-local/github.com/foo/bar@v1.0.0", e.Path)
+	}
+	if e.Protocol != "registry-go" {
+		t.Errorf("Protocol = %s, want registry-go", e.Protocol)
+	}
+}
+
+// TestLocal_StatsCountsModulesAndVersions confirms the Stats
+// provider returns accurate counts after a few uploads. Two
+// modules, three total versions; bytes > 0.
+func TestLocal_StatsCountsModulesAndVersions(t *testing.T) {
+	l := newLocal(t, true)
+
+	uploadInfo(t, l, "github.com/foo/a", "v0.1.0")
+	uploadInfo(t, l, "github.com/foo/a", "v0.2.0")
+	uploadInfo(t, l, "github.com/foo/b", "v1.0.0")
+
+	stats, err := l.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if stats.ModuleCount != 2 {
+		t.Errorf("ModuleCount = %d, want 2", stats.ModuleCount)
+	}
+	if stats.VersionCount != 3 {
+		t.Errorf("VersionCount = %d, want 3", stats.VersionCount)
+	}
+	if stats.TotalBytes <= 0 {
+		t.Errorf("TotalBytes = %d, want > 0", stats.TotalBytes)
 	}
 }
 

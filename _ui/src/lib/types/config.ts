@@ -575,7 +575,7 @@ export interface RegistryNamespace {
 export interface RegistryRepository {
   name: string;
   description?: string;
-  type: 'go' | 'npm' | 'docker';
+  type: 'go' | 'npm' | 'docker' | 'helm';
   kind: 'local' | 'remote' | 'virtual';
   // Local fields
   mount?: string;
@@ -608,8 +608,13 @@ export interface RegistryUpstreamAuth {
   username?: string;
   password?: string;
   token?: string;
-  header_name?: string;
-  header_value?: string;
+  // Custom-header auth: 'header' = header name, 'value' = header
+  // value. Both fields ship to the Go struct of the same name —
+  // the server JSON tags are { header, value } (not header_name /
+  // header_value), so renaming them here would break the wire
+  // contract.
+  header?: string;
+  value?: string;
 }
 
 // VaultSettings is the admin-level feature flag for the personal

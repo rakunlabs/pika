@@ -11,8 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/rawfs"
 	"github.com/rakunlabs/pika/internal/registry/blobstore"
+	"github.com/rakunlabs/pika/internal/registry/events"
 )
 
 // Garbage collection for Docker / OCI registries.
@@ -360,9 +362,21 @@ func sweepUnreferencedManifests(s *Store, wfs rawfs.WritableRawFS, name string, 
 }
 
 // GarbageCollect runs a GC pass against this Local registry.
-// Exported so the admin API can trigger a sweep on demand.
+// Exported so the admin API can trigger a sweep on demand. Emits
+// a registry.gc_completed event on success so operators can wire a
+// notification webhook to the cleanup run.
 func (l *Local) GarbageCollect(ctx context.Context, opt GCOptions) (*GCStats, error) {
-	return runGC(ctx, l.store, opt)
+	stats, err := runGC(ctx, l.store, opt)
+	if err == nil && stats != nil {
+		events.EmitSafe(l.emitter, hook.Event{
+			Type:     hook.EventRegistryGCCompleted,
+			Mount:    l.namespace,
+			Path:     l.name,
+			Protocol: "registry-docker",
+			Size:     int64(stats.SweptBlobs + stats.SweptManifests),
+		})
+	}
+	return stats, err
 }
 
 // nowSeconds returns the current Unix time. Wrapped so tests can

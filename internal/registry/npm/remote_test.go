@@ -173,3 +173,51 @@ func TestNPMRemote_RejectsPublish(t *testing.T) {
 		t.Fatalf("expected 405, got %d", w.Code)
 	}
 }
+
+// TestNPMRemote_PurgeMutableForcesPackumentRefetch verifies that a
+// mutable-only purge drops the cached packument so the next read
+// re-fetches from upstream.
+func TestNPMRemote_PurgeMutableForcesPackumentRefetch(t *testing.T) {
+	fu := newFakeNPMUpstream()
+	defer fu.Close()
+	fu.ServeJSON("/lodash", `{
+		"name":"lodash",
+		"dist-tags":{"latest":"1.0.0"},
+		"versions":{
+			"1.0.0":{
+				"name":"lodash","version":"1.0.0",
+				"dist":{"tarball":"`+fu.URL()+`/lodash/-/lodash-1.0.0.tgz"}
+			}
+		}
+	}`)
+
+	rr := newRemote(t, fu.URL())
+	warm := func() {
+		r := httptest.NewRequest(http.MethodGet, "/lodash", nil)
+		r.Header.Set("X-Pika-Registry-Prefix", "/registries/default/npm-mirror")
+		w := httptest.NewRecorder()
+		rr.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("warm %d", w.Code)
+		}
+	}
+	warm()
+	hitsBefore := fu.Hits()
+	warm() // confirms cache hit
+	if fu.Hits() != hitsBefore {
+		t.Fatalf("packument should have cached, got %d → %d", hitsBefore, fu.Hits())
+	}
+
+	stats, err := rr.PurgeCache(context.Background(), registry.PurgeOptions{All: false})
+	if err != nil {
+		t.Fatalf("PurgeCache: %v", err)
+	}
+	if stats.PurgedFiles == 0 {
+		t.Fatalf("expected purged files >0, got %+v", stats)
+	}
+
+	warm() // must hit upstream again
+	if fu.Hits() == hitsBefore {
+		t.Fatalf("packument was not re-fetched after purge (stuck at %d)", hitsBefore)
+	}
+}

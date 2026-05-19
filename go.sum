@@ -2,8 +2,6 @@ github.com/Azure/go-ntlmssp v0.1.0 h1:DjFo6YtWzNqNvQdrwEyr/e4nhU3vRiwenz5QX7sFz+
 github.com/Azure/go-ntlmssp v0.1.0/go.mod h1:NYqdhxd/8aAct/s4qSYZEerdPuH1liG2/X9DiVTbhpk=
 github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
-github.com/abbot/go-http-auth v0.4.0 h1:QjmvZ5gSC7jm3Zg54DqWE/T5m1t2AfDu6QlXJT0EVT0=
-github.com/abbot/go-http-auth v0.4.0/go.mod h1:Cz6ARTIzApMJDzh5bRMSUou6UMSp0IEXg9km/ci7TJM=
 github.com/abbot/go-http-auth v0.4.1-0.20220112235402-e1cee1c72f2f h1:R2ZVGCZzU95oXFJxncosHS9LsX8N4/MYUdGGWOb2cFk=
 github.com/abbot/go-http-auth v0.4.1-0.20220112235402-e1cee1c72f2f/go.mod h1:l2P3JyHa+fjy5Bxol6y1u2o4DV/mv3QMBdBu2cNR53w=
 github.com/alexbrainman/sspi v0.0.0-20250919150558-7d374ff0d59e h1:4dAU9FXIyQktpoUAgOJK3OTFc/xug0PCXYCqU0FgDKI=
@@ -125,8 +123,8 @@ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZb
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/quic-go/quic-go v0.59.0 h1:OLJkp1Mlm/aS7dpKgTc6cnpynnD2Xg7C1pwL6vy/SAw=
 github.com/quic-go/quic-go v0.59.0/go.mod h1:upnsH4Ju1YkqpLXC305eW3yDZ4NfnNbmQRCMWS58IKU=
-github.com/rakunlabs/ada v0.4.1 h1:1QQNYzBETqTCbc9ac0ou2g2T4Z6ViAq1Yzoz4jCwafc=
-github.com/rakunlabs/ada v0.4.1/go.mod h1:ydvdDjaJd7d7W+JDW0n3cU2vRSlYRwdOIj0g1ZXLYn0=
+github.com/rakunlabs/ada v0.4.2 h1:P8p6fRtLiD11PSGIhnzeAC0GWQKa5xa8KCcqxQ+Gf2w=
+github.com/rakunlabs/ada v0.4.2/go.mod h1:ydvdDjaJd7d7W+JDW0n3cU2vRSlYRwdOIj0g1ZXLYn0=
 github.com/rakunlabs/ada/handler/folder v0.4.1 h1:j8o+i+czIrNz/Xk9Wa9mhuxrTujoeS0LmQG52C9QJ0s=
 github.com/rakunlabs/ada/handler/folder v0.4.1/go.mod h1:6MZISfcOYNmQgmOdnlU6NemvCPgIatTWEZG9HM0nOAE=
 github.com/rakunlabs/ada/middleware/auth v0.4.1 h1:Cmu9WNRlM3/6SVqcq5qATCmprxR7tYywvAYVLJ/h3OA=

@@ -14,8 +14,7 @@ import (
 	"github.com/rakunlabs/pika/internal/service"
 )
 
-// stubResolver — local copy because each package has its own
-// virtualResolver definition.
+// stubResolver — implements virtualbase.Resolver for tests.
 type stubResolver struct {
 	regs map[string]registry.Registry
 }
@@ -25,7 +24,7 @@ func (s *stubResolver) Lookup(_, repo string) (registry.Registry, bool) {
 	return r, ok
 }
 
-func newVirtual(t *testing.T, members []string, resolver virtualResolver) *Virtual {
+func newVirtual(t *testing.T, members []string, resolver *stubResolver) *Virtual {
 	t.Helper()
 	repo := &service.RegistryRepository{
 		Name: "v", Type: service.RegistryTypeDocker, Kind: service.RegistryKindVirtual,

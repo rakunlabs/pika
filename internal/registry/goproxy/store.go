@@ -272,12 +272,11 @@ func (s *Store) CachedLatest(modulePath string, ttl time.Duration) ([]byte, erro
 	if len(versions) == 0 {
 		return nil, ErrNotFound
 	}
-	// Sort is lexicographic; for proper semver "latest" we'd want
-	// golang.org/x/mod/semver.Sort. For MVP, take the last entry —
-	// most published modules follow vX.Y.Z and lexicographic order
-	// matches semver order for two-digit components. Real-world
-	// sorting can be added when the first user reports drift.
-	latestVer := versions[len(versions)-1]
+	// Sort semver-aware so v10.x.y outranks v2.x.y. ListVersions
+	// returns lex order; SortVersionsDesc gives us newest-first,
+	// from which we pick index 0.
+	SortVersionsDesc(versions)
+	latestVer := versions[0]
 	rc, _, err := s.OpenVersionFile(modulePath, latestVer, "info")
 	if err != nil {
 		return nil, fmt.Errorf("goproxy: read latest info: %w", err)
@@ -371,6 +370,196 @@ func (s *Store) WriteInfo(modulePath, version string, info VersionInfo) error {
 // The same versions in the same order produce the same etag.
 func EtagForList(body []byte) string {
 	return common.EtagFor(string(body))
+}
+
+// ReadVersionInfo reads and JSON-decodes the @v/{version}.info
+// file into a VersionInfo. Returns (zero, ErrNotFound) when the
+// file is missing. Used by the package-detail builder to gather
+// publish timestamps.
+func (s *Store) ReadVersionInfo(modulePath, version string) (VersionInfo, error) {
+	rc, _, err := s.OpenVersionFile(modulePath, version, "info")
+	if err != nil {
+		return VersionInfo{}, err
+	}
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
+	if err != nil {
+		return VersionInfo{}, err
+	}
+	var info VersionInfo
+	if jerr := json.Unmarshal(body, &info); jerr != nil {
+		// .info is supposed to be JSON {Version,Time}; treat a
+		// parse failure as a soft miss so the caller can still
+		// render the version row with whatever it has.
+		return VersionInfo{Version: version}, nil
+	}
+	return info, nil
+}
+
+// ReadGoMod returns the raw bytes of the @v/{version}.mod file.
+// Used by the detail UI's go.mod viewer.
+func (s *Store) ReadGoMod(modulePath, version string) ([]byte, error) {
+	rc, _, err := s.OpenVersionFile(modulePath, version, "mod")
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
+}
+
+// VersionSize returns the size in bytes of the .{ext} file for the
+// given version, or 0 (no error) when the file does not exist.
+// Used by the detail UI to surface per-version artifact sizes
+// without forcing the caller to open the file.
+func (s *Store) VersionSize(modulePath, version, ext string) int64 {
+	fi, err := s.fs.Stat(s.versionPath(modulePath, version, ext))
+	if err != nil {
+		return 0
+	}
+	return fi.Size
+}
+
+// LatestVersionSemver picks the semver-highest version present in
+// @v/. Returns "" when the module has no versions. Mirrors the
+// CachedLatest logic but without the JSON wrapping — the caller
+// (e.g. detail builder) wants just the version string.
+func (s *Store) LatestVersionSemver(modulePath string) string {
+	versions, _ := s.ListVersions(modulePath)
+	if len(versions) == 0 {
+		return ""
+	}
+	SortVersionsDesc(versions)
+	return versions[0]
+}
+
+// CountModulesVersionsBytes walks the modules tree once and returns
+// (#modules, #versions across all modules, total bytes of every
+// .info/.mod/.zip plus the cached list/latest files). Used by the
+// stats endpoint; intentionally a single function so both Local
+// and Remote share the implementation.
+//
+// Errors during traversal are non-fatal: the walk continues so the
+// caller sees a best-effort accounting rather than a zero.
+func (s *Store) CountModulesVersionsBytes() (modules int, versions int, bytes int64) {
+	mods, _ := s.ListModules()
+	modules = len(mods)
+	for _, mod := range mods {
+		atV := path.Join(s.moduleDir(mod), "@v")
+		entries, err := s.fs.ReadDir(atV)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir {
+				continue
+			}
+			// .info files are the canonical "this version exists"
+			// marker. Counting them matches the spec ("list" is
+			// derived from .info presence) so a partial upload
+			// without .info doesn't inflate the count.
+			if strings.HasSuffix(e.Name, ".info") {
+				versions++
+			}
+			if fi, err := s.fs.Stat(path.Join(atV, e.Name)); err == nil {
+				bytes += fi.Size
+			}
+		}
+		// Also account the latestPath if present.
+		if fi, err := s.fs.Stat(s.latestPath(mod)); err == nil {
+			bytes += fi.Size
+		}
+	}
+	return
+}
+
+// PurgeMutable removes every cached "mutable" pointer (the
+// per-module @v/list and @latest files) so the next request for
+// either re-resolves through upstream. Immutable .info / .mod /
+// .zip files are intentionally preserved — they're content-tagged
+// by version and never change upstream-side.
+//
+// Returns (count, bytes) of files actually deleted. The walk is
+// best-effort: a Delete failure on one file is recorded in the
+// returned error slice but does not stop the rest of the purge.
+func (s *Store) PurgeMutable() (int, int64, []error) {
+	wfs, ok := s.fs.(rawfs.WritableRawFS)
+	if !ok {
+		return 0, 0, []error{fmt.Errorf("goproxy: backend is read-only")}
+	}
+	modules, _ := s.ListModules()
+	var (
+		count int
+		bytes int64
+		errs  []error
+	)
+	for _, mod := range modules {
+		for _, p := range []string{s.listPath(mod), s.latestPath(mod)} {
+			if fi, err := s.fs.Stat(p); err == nil {
+				if delErr := wfs.Delete(p); delErr == nil {
+					count++
+					bytes += fi.Size
+				} else if !isNotFound(delErr) {
+					errs = append(errs, fmt.Errorf("delete %s: %w", p, delErr))
+				}
+			}
+		}
+	}
+	return count, bytes, errs
+}
+
+// PurgeAll wipes the entire module cache: every @v/list, @latest,
+// .info, .mod and .zip under {base}/modules/. Used by Remote
+// repositories to force a complete re-download on the next pull.
+// Local repositories should NOT call this — it would discard
+// operator-uploaded artifacts.
+//
+// Returns (count, bytes) of files actually deleted, plus any
+// per-file errors (walk continues on error).
+func (s *Store) PurgeAll() (int, int64, []error) {
+	wfs, ok := s.fs.(rawfs.WritableRawFS)
+	if !ok {
+		return 0, 0, []error{fmt.Errorf("goproxy: backend is read-only")}
+	}
+	modules, _ := s.ListModules()
+	var (
+		count int
+		bytes int64
+		errs  []error
+	)
+	for _, mod := range modules {
+		// Mutable pointers first.
+		for _, p := range []string{s.listPath(mod), s.latestPath(mod)} {
+			if fi, err := s.fs.Stat(p); err == nil {
+				if delErr := wfs.Delete(p); delErr == nil {
+					count++
+					bytes += fi.Size
+				}
+			}
+		}
+		// Then every .info / .mod / .zip under @v.
+		atV := path.Join(s.moduleDir(mod), "@v")
+		entries, err := s.fs.ReadDir(atV)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir {
+				continue
+			}
+			p := path.Join(atV, e.Name)
+			fi, statErr := s.fs.Stat(p)
+			if statErr != nil {
+				continue
+			}
+			if delErr := wfs.Delete(p); delErr == nil {
+				count++
+				bytes += fi.Size
+			} else if !isNotFound(delErr) {
+				errs = append(errs, fmt.Errorf("delete %s: %w", p, delErr))
+			}
+		}
+	}
+	return count, bytes, errs
 }
 
 // mapNotFound translates a rawfs "not found" error into the package

@@ -287,9 +287,37 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.GET("/api/v1/registries/npm/{ns}/{repo}/packages", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryNPMPackages)))
 	// Per-repo image/tag browser for Docker registries.
 	m.GET("/api/v1/registries/docker/{ns}/{repo}/repos", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryDockerRepos)))
+	// Per-repo chart browser for Helm registries.
+	m.GET("/api/v1/registries/helm/{ns}/{repo}/charts", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryHelmCharts)))
 	// Docker GC trigger (mark-and-sweep). Admin only because it
 	// deletes content from the underlying blob store.
 	m.POST("/api/v1/registries/docker/{ns}/{repo}/gc", m.Wrap(api.withPerm(service.CapRegistryAdmin, api.runDockerGC)))
+	// Cache purge for Remote registries (Go / NPM / Docker share
+	// one handler — the {type} segment lets the UI hit a clean URL
+	// per protocol and lets the handler reject Local registries
+	// with a helpful 400). Admin-gated because it forces an
+	// upstream re-fetch that may be expensive.
+	m.POST("/api/v1/registries/{type}/{ns}/{repo}/purge", m.Wrap(api.withPerm(service.CapRegistryAdmin, api.runRegistryPurge)))
+	// Snapshot statistics for a single registry. Read-only,
+	// CapRegistryRead is enough — the UI uses this for the
+	// "Statistics" card in the repo detail panel.
+	m.GET("/api/v1/registries/{type}/{ns}/{repo}/stats", m.Wrap(api.withPerm(service.CapRegistryRead, api.getRegistryStats)))
+	// Per-package detail. The {name...} wildcard catches the rest
+	// of the path so Go ("example.com/foo/bar"), NPM scoped
+	// ("@scope/pkg"), and Docker ("library/nginx") names all
+	// route into the same handler.
+	m.GET("/api/v1/registries/{type}/{ns}/{repo}/packages/{name...}", m.Wrap(api.withPerm(service.CapRegistryRead, api.getRegistryPackageDetail)))
+	// NPM-only: cached README markdown for the package's latest
+	// version. Falls back to a lazy tarball extract when the
+	// cache is empty.
+	m.GET("/api/v1/registries/npm/{ns}/{repo}/packages/{name}/readme", m.Wrap(api.withPerm(service.CapRegistryRead, api.getNPMPackageReadme)))
+	// Go-only: raw go.mod bytes for one module version. Used by
+	// the detail UI's go.mod viewer.
+	m.GET("/api/v1/registries/go/{ns}/{repo}/modules/{name...}/versions/{version}/gomod", m.Wrap(api.withPerm(service.CapRegistryRead, api.getGoModuleGoMod)))
+	// Remote-only: connectivity probe against the configured
+	// upstream. Admin-gated because the probe uses the registry's
+	// real auth credentials.
+	m.POST("/api/v1/registries/{type}/{ns}/{repo}/test-upstream", m.Wrap(api.withPerm(service.CapRegistryAdmin, api.runRegistryUpstreamProbe)))
 
 	// Proxy: split into read vs. manage caps. Read covers the
 	// dashboard, status panel, catalog discovery and the in-app

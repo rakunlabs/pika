@@ -289,6 +289,68 @@ func (s *Store) ReadReadme(name string) (string, error) {
 	return string(body), nil
 }
 
+// HasReadme is a cheap existence probe for the cached README. Used
+// by the package detail endpoint to set HasReadme without paying
+// the cost of reading the file body.
+func (s *Store) HasReadme(name string) bool {
+	_, err := s.fs.Stat(s.readmePath(name))
+	return err == nil
+}
+
+// TarballSize returns the size in bytes of a tarball file, or 0
+// when missing. Mirrors goproxy.Store.VersionSize: the detail
+// endpoint surfaces sizes without forcing an open.
+func (s *Store) TarballSize(name, file string) int64 {
+	fi, err := s.fs.Stat(s.tarballPath(name, file))
+	if err != nil {
+		return 0
+	}
+	return fi.Size
+}
+
+// LazyExtractReadme reads the tarball for (name, version), unpacks
+// the gzip+tar, and tries to extract a README file. The extracted
+// content is cached via WriteReadme so subsequent calls are cheap.
+//
+// Returns ("", nil) when the tarball is missing or contains no
+// README. The caller is responsible for choosing which version's
+// tarball to look at (typically the latest).
+//
+// Recognized README filenames (case-insensitive): README.md,
+// README.markdown, README. The first match wins. Tarballs use the
+// "package/" prefix per npm convention; the function strips that
+// prefix when matching.
+func (s *Store) LazyExtractReadme(name, file string) (string, error) {
+	rc, _, err := s.fs.Open(s.tarballPath(name, file))
+	if err != nil {
+		if isNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("npm: open tarball: %w", err)
+	}
+	defer rc.Close()
+	content, err := extractReadmeFromTarball(rc)
+	if err != nil {
+		return "", err
+	}
+	if content == "" {
+		return "", nil
+	}
+	// Cache the extracted README so subsequent reads bypass the
+	// tar walk. Failure here is non-fatal — the caller still gets
+	// the content; next call just re-extracts.
+	_ = s.WriteReadme(name, content)
+	return content, nil
+}
+
+// PackageDirExists reports whether the package directory exists.
+// Used by ListVersions callers that want to distinguish "no
+// versions yet" from "package does not exist".
+func (s *Store) PackageDirExists(name string) bool {
+	_, err := s.fs.Stat(s.packageDir(name))
+	return err == nil
+}
+
 // ListPackages walks the packages/ tree and returns every package
 // name (canonical "@scope/name" or "name") with at least one
 // version stored. Used by search + the admin UI's package browser.
@@ -338,6 +400,177 @@ func walkPackages(fs rawfs.RawFS, dir, prefix string) ([]string, error) {
 		out = append(out, sub...)
 	}
 	return out, nil
+}
+
+// CountPackagesVersionsBytes walks the packages tree and reports
+// (#packages, sum of versions across all packages, total bytes).
+// Both Local and Remote share the helper so the stats endpoint has
+// uniform semantics.
+func (s *Store) CountPackagesVersionsBytes() (packages int, versions int, bytes int64) {
+	walkNPMPackages(s.fs, s.join("packages"), "", func(name string) {
+		packages++
+		// versions/ may not exist on a Remote repo that only
+		// cached the packument — ListVersions handles the
+		// missing-dir case.
+		vs, _ := s.ListVersions(name)
+		versions += len(vs)
+	})
+	// Total bytes: walk the packages/ tree end-to-end. This
+	// includes packument caches, tarballs, dist-tags and version
+	// metadata — the operator wants "total disk used by this
+	// repo".
+	walkBytes(s.fs, s.join("packages"), &bytes)
+	return
+}
+
+// walkBytes is a depth-first byte tally helper. Errors are
+// swallowed — partial accounting beats a hard failure.
+func walkBytes(fs rawfs.RawFS, root string, total *int64) {
+	entries, err := fs.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		full := path.Join(root, e.Name)
+		if e.IsDir {
+			walkBytes(fs, full, total)
+			continue
+		}
+		if fi, err := fs.Stat(full); err == nil {
+			*total += fi.Size
+		}
+	}
+}
+
+// PurgeMutable deletes every cached packument across the repo.
+// Mutable in NPM-land means the packument document (the per-package
+// JSON listing all versions + dist-tags). Tarballs themselves are
+// content-addressed by sha512 integrity and are kept. Used by
+// Remote registries to force a re-fetch on the next read.
+//
+// Walks the packages/ tree directly instead of routing through
+// ListPackages — a Remote repo never persists per-version metadata,
+// so the "has versions/" leaf detector that ListPackages uses
+// would miss every cached packument. This walker keys on the
+// presence of the packument.json file itself.
+func (s *Store) PurgeMutable() (int, int64, []error) {
+	wfs, ok := s.fs.(rawfs.WritableRawFS)
+	if !ok {
+		return 0, 0, []error{fmt.Errorf("npm: backend is read-only")}
+	}
+	var (
+		count int
+		bytes int64
+		errs  []error
+	)
+	walkNPMPackages(s.fs, s.join("packages"), "", func(name string) {
+		p := s.packumentCachePath(name)
+		if fi, err := s.fs.Stat(p); err == nil {
+			if delErr := wfs.Delete(p); delErr == nil {
+				count++
+				bytes += fi.Size
+			} else if !isNotFound(delErr) {
+				errs = append(errs, fmt.Errorf("delete %s: %w", p, delErr))
+			}
+		}
+	})
+	return count, bytes, errs
+}
+
+// walkNPMPackages descends "packages/" looking for any directory
+// that holds a packument cache, dist-tags.json or versions/ subdir.
+// Calls fn(canonicalName) once per package. Includes Remote repos
+// that only have a packument.json (no versions/ leaf).
+func walkNPMPackages(fs rawfs.RawFS, dir, prefix string, fn func(name string)) {
+	entries, err := fs.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir {
+			continue
+		}
+		// Is this a package leaf? Check for any of the three
+		// canonical markers we leave behind.
+		pkgDir := path.Join(dir, e.Name)
+		isLeaf := false
+		for _, marker := range []string{"packument.json", "dist-tags.json", "versions"} {
+			if _, err := fs.Stat(path.Join(pkgDir, marker)); err == nil {
+				isLeaf = true
+				break
+			}
+		}
+		if isLeaf {
+			name := e.Name
+			if prefix != "" {
+				name = prefix + "/" + e.Name
+			}
+			fn(name)
+			continue
+		}
+		// Descend one level for @scope/.
+		if prefix == "" {
+			walkNPMPackages(fs, pkgDir, e.Name, fn)
+		}
+	}
+}
+
+// PurgeAll wipes the entire NPM cache: every packument, version
+// metadata file, tarball and dist-tags JSON under {base}/packages/.
+// Use only on Remote registries; on Local, this would delete the
+// publisher's own artifacts.
+func (s *Store) PurgeAll() (int, int64, []error) {
+	wfs, ok := s.fs.(rawfs.WritableRawFS)
+	if !ok {
+		return 0, 0, []error{fmt.Errorf("npm: backend is read-only")}
+	}
+	var (
+		count int
+		bytes int64
+		errs  []error
+	)
+	walkNPMPackages(s.fs, s.join("packages"), "", func(name string) {
+		count, bytes = purgePackageDir(s, wfs, name, count, bytes, &errs)
+	})
+	return count, bytes, errs
+}
+
+func purgePackageDir(s *Store, wfs rawfs.WritableRawFS, name string, count int, bytes int64, errs *[]error) (int, int64) {
+	dir := s.packageDir(name)
+	// Top-level packument cache + dist-tags.
+	for _, p := range []string{s.packumentCachePath(name), s.distTagsPath(name)} {
+		if fi, err := s.fs.Stat(p); err == nil {
+			if delErr := wfs.Delete(p); delErr == nil {
+				count++
+				bytes += fi.Size
+			}
+		}
+	}
+	// versions/*.json
+	for _, sub := range []string{"versions", "tarballs"} {
+		d := path.Join(dir, sub)
+		entries, err := s.fs.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir {
+				continue
+			}
+			p := path.Join(d, e.Name)
+			fi, statErr := s.fs.Stat(p)
+			if statErr != nil {
+				continue
+			}
+			if delErr := wfs.Delete(p); delErr == nil {
+				count++
+				bytes += fi.Size
+			} else if !isNotFound(delErr) {
+				*errs = append(*errs, fmt.Errorf("delete %s: %w", p, delErr))
+			}
+		}
+	}
+	return count, bytes
 }
 
 // isNotFound — same shape as the goproxy store's helper.

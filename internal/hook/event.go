@@ -36,6 +36,38 @@ const (
 	EventVaultItemDeleted  EventType = "vault.item.deleted"
 	EventVaultUnlockFailed EventType = "vault.unlock.failed"
 
+	// Artifact registry events. Mirror the file.* shape: semantic
+	// fields (namespace, repository name, subject — module/package/
+	// image:tag) carry the operation context; numeric fields carry
+	// counts / bytes where meaningful. Body payloads (manifests,
+	// tarballs, blobs) are NEVER included — the event tells you
+	// what changed; the artifact is downloadable through the
+	// regular /registries/* endpoints.
+	//
+	// Field mapping for registry events:
+	//   Mount    — namespace
+	//   Path     — "{repository}/{subject}"  (e.g. "mirror/lib/foo:1.2")
+	//   Protocol — "registry-go" | "registry-npm" | "registry-docker"
+	//   User     — actor (session user or token id)
+	//   Size     — artifact size in bytes (publish events; 0 for delete)
+	//
+	// EventRegistryPublished fires when a local push completes
+	// (Go upload, NPM publish, Docker manifest+tag PUT).
+	// EventRegistryDeleted fires on tag/manifest/version delete.
+	// EventRegistryCachePurged fires from the operator-triggered
+	// purge endpoint. EventRegistryGCCompleted fires after Docker
+	// mark-and-sweep finishes. The namespace/repo lifecycle
+	// events report admin-side CRUD on the settings tree.
+	EventRegistryPublished       EventType = "registry.published"
+	EventRegistryDeleted         EventType = "registry.deleted"
+	EventRegistryCachePurged     EventType = "registry.cache_purged"
+	EventRegistryGCCompleted     EventType = "registry.gc_completed"
+	EventRegistryNamespaceCreated EventType = "registry.namespace_created"
+	EventRegistryNamespaceDeleted EventType = "registry.namespace_deleted"
+	EventRegistryRepositoryCreated EventType = "registry.repository_created"
+	EventRegistryRepositoryUpdated EventType = "registry.repository_updated"
+	EventRegistryRepositoryDeleted EventType = "registry.repository_deleted"
+
 	// Wildcard — matches all event types in a hook filter.
 	EventAll EventType = "*"
 )
