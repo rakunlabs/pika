@@ -14,7 +14,7 @@ import (
 )
 
 // stubResolver is a SecretResolver that returns canned plaintexts
-// for "secret://" references. Used by tests that exercise the
+// for raw:// and config:// references. Used by tests that exercise the
 // auth path without depending on the real secret store.
 type stubResolver struct {
 	values map[string]string
@@ -136,7 +136,7 @@ func TestClient_BasicAuth(t *testing.T) {
 	resp.Body.Close()
 }
 
-func TestClient_BearerWithSecretRef(t *testing.T) {
+func TestClient_BearerWithRawRef(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got := r.Header.Get("Authorization")
 		if got != "Bearer real-token-from-secret" {
@@ -149,11 +149,11 @@ func TestClient_BearerWithSecretRef(t *testing.T) {
 	defer srv.Close()
 
 	resolver := &stubResolver{values: map[string]string{
-		"secret://upstream/go/token": "real-token-from-secret",
+		"raw://upstream/go/token": "real-token-from-secret",
 	}}
 	c, _ := NewClient(Config{
 		BaseURL:  srv.URL,
-		Auth:     &service.RegistryUpstreamAuth{Type: service.RegistryAuthBearer, Token: "secret://upstream/go/token"},
+		Auth:     &service.RegistryUpstreamAuth{Type: service.RegistryAuthBearer, Token: "raw://upstream/go/token"},
 		Resolver: resolver,
 	})
 	resp, err := c.Get(context.Background(), "/")
@@ -164,7 +164,7 @@ func TestClient_BearerWithSecretRef(t *testing.T) {
 }
 
 func TestClient_BearerInlineToken(t *testing.T) {
-	// Without "secret://" prefix the value is used verbatim, even
+	// Without a supported reference prefix the value is used verbatim, even
 	// when a resolver is configured.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer plain-text-token" {
@@ -270,11 +270,23 @@ func TestClient_Timeout(t *testing.T) {
 func TestClient_ResolveSecretError(t *testing.T) {
 	c, _ := NewClient(Config{
 		BaseURL:  "http://127.0.0.1:1",
-		Auth:     &service.RegistryUpstreamAuth{Type: service.RegistryAuthBearer, Token: "secret://unknown"},
+		Auth:     &service.RegistryUpstreamAuth{Type: service.RegistryAuthBearer, Token: "raw://unknown"},
 		Resolver: &stubResolver{values: map[string]string{}},
 	})
 	_, err := c.Get(context.Background(), "/")
 	if err == nil || !strings.Contains(err.Error(), "resolve bearer token") {
 		t.Fatalf("expected secret resolution error, got %v", err)
+	}
+}
+
+func TestClient_SecretSchemeRejected(t *testing.T) {
+	c, _ := NewClient(Config{
+		BaseURL:  "http://127.0.0.1:1",
+		Auth:     &service.RegistryUpstreamAuth{Type: service.RegistryAuthBearer, Token: "secret://old-style"},
+		Resolver: &stubResolver{},
+	})
+	_, err := c.Get(context.Background(), "/")
+	if err == nil || !strings.Contains(err.Error(), "secret:// references are no longer supported") {
+		t.Fatalf("expected secret:// rejection, got %v", err)
 	}
 }

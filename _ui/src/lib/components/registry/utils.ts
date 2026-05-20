@@ -71,6 +71,9 @@ export function iconFor(type: RegistryType) {
     case 'npm': return Package;
     case 'docker': return Container;
     case 'helm': return Anchor;
+    case 'maven': return Package;
+    case 'pypi': return Package;
+    case 'cargo': return Package;
   }
 }
 

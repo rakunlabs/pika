@@ -26,7 +26,7 @@
 //
 //   - One HTTP client per remote repo (reuses connections).
 //   - Auth header injection from RegistryUpstreamAuth (basic /
-//     bearer / header), with secret:// reference resolution.
+//     bearer / header), with raw:// / config:// reference resolution.
 //   - Sensible defaults (timeouts, redirect policy, retry on
 //     transient errors) so every caller doesn't reinvent them.
 package upstream
@@ -49,7 +49,7 @@ import (
 // comparisons. ErrNotFound is the cache key for "upstream said 404"
 // — callers usually surface that to their own clients as 404 too.
 var (
-	ErrNotFound    = errors.New("upstream: not found")
+	ErrNotFound     = errors.New("upstream: not found")
 	ErrUnauthorized = errors.New("upstream: unauthorized")
 	ErrTransient    = errors.New("upstream: transient")
 )
@@ -96,7 +96,7 @@ type Config struct {
 	// token / value fields are resolved via Resolver at request time
 	// so plaintext never lives in the Client struct.
 	Auth *service.RegistryUpstreamAuth
-	// Resolver expands secret:// references in Auth field values.
+	// Resolver expands raw:// and config:// references in Auth field values.
 	// Nil means "no expansion" — values are used verbatim.
 	Resolver registry.SecretResolver
 	// InsecureSkipVerify disables TLS verification. Off by default;
@@ -214,7 +214,7 @@ func (c *Client) resolveURL(pathOrURL string) string {
 	return c.base + pathOrURL
 }
 
-// applyAuth resolves any secret:// references in the auth config
+// applyAuth resolves any raw:// or config:// references in the auth config
 // and writes the appropriate header onto the request.
 func (c *Client) applyAuth(ctx context.Context, req *http.Request) error {
 	if c.auth == nil {
@@ -245,15 +245,22 @@ func (c *Client) applyAuth(ctx context.Context, req *http.Request) error {
 	return nil
 }
 
-// resolveSecret expands "secret://..." references via the configured
-// resolver. Values without a scheme are returned verbatim. Nil
-// resolver also returns the value verbatim (acceptable for tests
-// that don't exercise reference resolution).
+// resolveSecret expands supported references via the configured
+// resolver. Values without a supported scheme are returned verbatim.
+// The removed secret:// wrapper is rejected explicitly so old config
+// does not silently become an upstream credential literal.
 func (c *Client) resolveSecret(ctx context.Context, value string) (string, error) {
-	if c.resolver == nil || !strings.HasPrefix(value, "secret://") {
+	if strings.HasPrefix(value, "secret://") {
+		return "", fmt.Errorf("secret:// references are no longer supported; use raw://mount/path or config://key")
+	}
+	if c.resolver == nil || !isReference(value) {
 		return value, nil
 	}
 	return c.resolver.ResolveSecret(ctx, value)
+}
+
+func isReference(value string) bool {
+	return strings.HasPrefix(value, "raw://") || strings.HasPrefix(value, "config://")
 }
 
 // Close releases the underlying HTTP client's idle connections.

@@ -73,7 +73,10 @@ func TestValidate_RepoType(t *testing.T) {
 		{"go", false},
 		{"npm", false},
 		{"docker", false},
-		{"maven", true},
+		{"helm", false},
+		{"maven", false},
+		{"pypi", false},
+		{"cargo", false},
 		{"", true},
 	}
 	for _, tc := range cases {
@@ -113,6 +116,23 @@ func TestValidate_LocalRequiresMount(t *testing.T) {
 	}
 }
 
+func TestValidate_LocalRequiresBasePath(t *testing.T) {
+	rs := &RegistrySettings{Namespaces: []RegistryNamespace{{
+		Name: "ns",
+		Repositories: []RegistryRepository{{
+			Name:  "r1",
+			Type:  RegistryTypeGo,
+			Kind:  RegistryKindLocal,
+			Mount: "m",
+			// BasePath intentionally missing
+		}},
+	}}}
+	err := rs.Validate()
+	if err == nil || !strings.Contains(err.Error(), "requires base_path") {
+		t.Fatalf("expected base_path required error, got %v", err)
+	}
+}
+
 func TestValidate_RemoteRequiresURL(t *testing.T) {
 	rs := &RegistrySettings{Namespaces: []RegistryNamespace{{
 		Name: "ns",
@@ -128,6 +148,41 @@ func TestValidate_RemoteRequiresURL(t *testing.T) {
 	}
 }
 
+func TestValidate_RemoteRequiresCacheStorage(t *testing.T) {
+	t.Run("missing cache mount", func(t *testing.T) {
+		rs := &RegistrySettings{Namespaces: []RegistryNamespace{{
+			Name: "ns",
+			Repositories: []RegistryRepository{{
+				Name:     "r1",
+				Type:     RegistryTypeGo,
+				Kind:     RegistryKindRemote,
+				URL:      "https://proxy.golang.org",
+				BasePath: "go-cache",
+			}},
+		}}}
+		err := rs.Validate()
+		if err == nil || !strings.Contains(err.Error(), "cache mount") {
+			t.Fatalf("expected cache mount error, got %v", err)
+		}
+	})
+	t.Run("missing cache base_path", func(t *testing.T) {
+		rs := &RegistrySettings{Namespaces: []RegistryNamespace{{
+			Name: "ns",
+			Repositories: []RegistryRepository{{
+				Name:  "r1",
+				Type:  RegistryTypeGo,
+				Kind:  RegistryKindRemote,
+				URL:   "https://proxy.golang.org",
+				Mount: "m",
+			}},
+		}}}
+		err := rs.Validate()
+		if err == nil || !strings.Contains(err.Error(), "cache base_path") {
+			t.Fatalf("expected cache base_path error, got %v", err)
+		}
+	})
+}
+
 func TestValidate_RemoteURLScheme(t *testing.T) {
 	rs := &RegistrySettings{Namespaces: []RegistryNamespace{{
 		Name: "ns",
@@ -135,7 +190,7 @@ func TestValidate_RemoteURLScheme(t *testing.T) {
 			Name: "r1",
 			Type: RegistryTypeGo,
 			Kind: RegistryKindRemote,
-			URL:  "ftp://nope",
+			URL:  "ftp://nope", Mount: "m", BasePath: "go-cache",
 		}},
 	}}}
 	err := rs.Validate()
@@ -152,12 +207,129 @@ func TestValidate_RemoteMutableTTL(t *testing.T) {
 			Type:       RegistryTypeGo,
 			Kind:       RegistryKindRemote,
 			URL:        "https://proxy.golang.org",
+			Mount:      "m",
+			BasePath:   "go-cache",
 			MutableTTL: "not-a-duration",
 		}},
 	}}}
 	err := rs.Validate()
 	if err == nil || !strings.Contains(err.Error(), "invalid mutable_ttl") {
 		t.Fatalf("expected mutable_ttl error, got %v", err)
+	}
+}
+
+func TestValidate_MaxUploadSizeNonNegative(t *testing.T) {
+	rs := &RegistrySettings{Namespaces: []RegistryNamespace{{
+		Name: "ns",
+		Repositories: []RegistryRepository{{
+			Name:          "r1",
+			Type:          RegistryTypeGo,
+			Kind:          RegistryKindLocal,
+			Mount:         "m",
+			BasePath:      "go",
+			MaxUploadSize: -1,
+		}},
+	}}}
+	err := rs.Validate()
+	if err == nil || !strings.Contains(err.Error(), "max_upload_size") {
+		t.Fatalf("expected max_upload_size error, got %v", err)
+	}
+}
+
+func TestValidate_KindSpecificFields(t *testing.T) {
+	cases := []struct {
+		name string
+		repo RegistryRepository
+		want string
+	}{
+		{
+			name: "local rejects remote url",
+			repo: RegistryRepository{Name: "r1", Type: RegistryTypeGo, Kind: RegistryKindLocal, Mount: "m", BasePath: "go", URL: "https://proxy.golang.org"},
+			want: "does not support url",
+		},
+		{
+			name: "remote rejects allow push",
+			repo: RegistryRepository{Name: "r1", Type: RegistryTypeGo, Kind: RegistryKindRemote, URL: "https://proxy.golang.org", Mount: "m", BasePath: "go-cache", AllowPush: true},
+			want: "does not support allow_push",
+		},
+		{
+			name: "virtual rejects storage",
+			repo: RegistryRepository{Name: "v1", Type: RegistryTypeGo, Kind: RegistryKindVirtual, Mount: "m", Members: []string{"a"}},
+			want: "does not support mount",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rs := &RegistrySettings{Namespaces: []RegistryNamespace{{
+				Name: "ns",
+				Repositories: []RegistryRepository{
+					{Name: "a", Type: RegistryTypeGo, Kind: RegistryKindLocal, Mount: "m", BasePath: "go"},
+					tc.repo,
+				},
+			}}}
+			err := rs.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q error, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestValidate_RegistryPolicy(t *testing.T) {
+	cases := []struct {
+		name    string
+		repo    RegistryRepository
+		wantErr bool
+	}{
+		{
+			name: "docker local policy ok",
+			repo: RegistryRepository{
+				Name: "r1", Type: RegistryTypeDocker, Kind: RegistryKindLocal, Mount: "m", BasePath: "docker",
+				Policy: &RegistryPolicy{
+					ImmutableTags: []string{"prod", "v*"},
+					Retention: &RegistryRetentionPolicy{
+						GCMinAgeSeconds:              7200,
+						AbandonedUploadMaxAgeSeconds: 86400,
+					},
+				},
+			},
+		},
+		{
+			name: "policy rejected on non docker",
+			repo: RegistryRepository{
+				Name: "r1", Type: RegistryTypeGo, Kind: RegistryKindLocal, Mount: "m", BasePath: "go",
+				Policy: &RegistryPolicy{ImmutableTags: []string{"prod"}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty immutable pattern",
+			repo: RegistryRepository{
+				Name: "r1", Type: RegistryTypeDocker, Kind: RegistryKindLocal, Mount: "m", BasePath: "docker",
+				Policy: &RegistryPolicy{ImmutableTags: []string{""}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative retention",
+			repo: RegistryRepository{
+				Name: "r1", Type: RegistryTypeDocker, Kind: RegistryKindLocal, Mount: "m", BasePath: "docker",
+				Policy: &RegistryPolicy{Retention: &RegistryRetentionPolicy{GCMinAgeSeconds: -1}},
+			},
+			wantErr: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rs := &RegistrySettings{Namespaces: []RegistryNamespace{{
+				Name:         "ns",
+				Repositories: []RegistryRepository{tc.repo},
+			}}}
+			err := rs.Validate()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Validate() err=%v wantErr=%v", err, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -210,7 +382,7 @@ func TestValidate_VirtualMembers(t *testing.T) {
 		rs := &RegistrySettings{Namespaces: []RegistryNamespace{{
 			Name: "ns",
 			Repositories: []RegistryRepository{
-				{Name: "a", Type: RegistryTypeNPM, Kind: RegistryKindLocal, Mount: "m"},
+				{Name: "a", Type: RegistryTypeNPM, Kind: RegistryKindLocal, Mount: "m", BasePath: "npm"},
 				{Name: "v", Type: RegistryTypeGo, Kind: RegistryKindVirtual, Members: []string{"a"}},
 			},
 		}}}
@@ -223,7 +395,7 @@ func TestValidate_VirtualMembers(t *testing.T) {
 		rs := &RegistrySettings{Namespaces: []RegistryNamespace{{
 			Name: "ns",
 			Repositories: []RegistryRepository{
-				{Name: "a", Type: RegistryTypeGo, Kind: RegistryKindLocal, Mount: "m"},
+				{Name: "a", Type: RegistryTypeGo, Kind: RegistryKindLocal, Mount: "m", BasePath: "go"},
 				{Name: "v1", Type: RegistryTypeGo, Kind: RegistryKindVirtual, Members: []string{"a"}},
 				{Name: "v2", Type: RegistryTypeGo, Kind: RegistryKindVirtual, Members: []string{"v1"}},
 			},
@@ -240,7 +412,7 @@ func TestValidate_VirtualMembers(t *testing.T) {
 			Name: "ns",
 			Repositories: []RegistryRepository{
 				{Name: "v", Type: RegistryTypeGo, Kind: RegistryKindVirtual, Members: []string{"a"}},
-				{Name: "a", Type: RegistryTypeGo, Kind: RegistryKindLocal, Mount: "m"},
+				{Name: "a", Type: RegistryTypeGo, Kind: RegistryKindLocal, Mount: "m", BasePath: "go"},
 			},
 		}}}
 		if err := rs.Validate(); err != nil {
@@ -256,7 +428,7 @@ func TestValidate_DefaultLocal(t *testing.T) {
 			Repositories: []RegistryRepository{
 				{Name: "v", Type: RegistryTypeGo, Kind: RegistryKindVirtual,
 					Members: []string{"a"}, DefaultLocal: "ghost"},
-				{Name: "a", Type: RegistryTypeGo, Kind: RegistryKindLocal, Mount: "m"},
+				{Name: "a", Type: RegistryTypeGo, Kind: RegistryKindLocal, Mount: "m", BasePath: "go"},
 			},
 		}}}
 		err := rs.Validate()
@@ -271,7 +443,7 @@ func TestValidate_DefaultLocal(t *testing.T) {
 				{Name: "v", Type: RegistryTypeGo, Kind: RegistryKindVirtual,
 					Members: []string{"r"}, DefaultLocal: "r"},
 				{Name: "r", Type: RegistryTypeGo, Kind: RegistryKindRemote,
-					URL: "https://proxy.golang.org"},
+					URL: "https://proxy.golang.org", Mount: "m", BasePath: "go-cache"},
 			},
 		}}}
 		err := rs.Validate()
@@ -290,9 +462,14 @@ func TestValidate_UpstreamAuth(t *testing.T) {
 		{"basic ok", &RegistryUpstreamAuth{Type: "basic", Username: "u", Password: "p"}, false},
 		{"basic no user", &RegistryUpstreamAuth{Type: "basic", Password: "p"}, true},
 		{"bearer ok", &RegistryUpstreamAuth{Type: "bearer", Token: "t"}, false},
+		{"bearer raw ref ok", &RegistryUpstreamAuth{Type: "bearer", Token: "raw://secrets/npm-token"}, false},
+		{"bearer config ref ok", &RegistryUpstreamAuth{Type: "bearer", Token: "config://secrets/npm-token"}, false},
+		{"bearer secret ref rejected", &RegistryUpstreamAuth{Type: "bearer", Token: "secret://secrets/npm-token"}, true},
+		{"bearer malformed raw ref", &RegistryUpstreamAuth{Type: "bearer", Token: "raw://secrets"}, true},
 		{"bearer no token", &RegistryUpstreamAuth{Type: "bearer"}, true},
 		{"header ok", &RegistryUpstreamAuth{Type: "header", Header: "X-Token", Value: "v"}, false},
 		{"header no name", &RegistryUpstreamAuth{Type: "header", Value: "v"}, true},
+		{"header no value", &RegistryUpstreamAuth{Type: "header", Header: "X-Token"}, true},
 		{"unknown type", &RegistryUpstreamAuth{Type: "magic"}, true},
 	}
 	for _, tc := range cases {
@@ -301,7 +478,7 @@ func TestValidate_UpstreamAuth(t *testing.T) {
 				Name: "ns",
 				Repositories: []RegistryRepository{{
 					Name: "r1", Type: RegistryTypeGo, Kind: RegistryKindRemote,
-					URL: "https://x", Auth: tc.auth,
+					URL: "https://x", Mount: "m", BasePath: "go-cache", Auth: tc.auth,
 				}},
 			}}}
 			err := rs.Validate()

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,8 +35,11 @@ type Local struct {
 	store     *Store
 	signer    TokenSigner
 
-	allowPush bool
-	maxUpload int64
+	allowPush                    bool
+	maxUpload                    int64
+	immutableTags                []string
+	gcMinAgeSeconds              int64
+	abandonedUploadMaxAgeSeconds int64
 
 	uploads *uploadSessions
 	emitter events.Emitter
@@ -50,9 +54,8 @@ type Local struct {
 	// cascadeMinAge is the grace window applied during the
 	// delete-triggered cascade. Mirrors the manual-GC default so
 	// a recently-pushed sub-manifest can't be reaped by a
-	// concurrent delete of its parent image index. Configurable
-	// via Repository settings in a future iteration; today this
-	// is a constant derived from the factory.
+	// concurrent delete of its parent image index. Derived from
+	// the repository retention policy by the factory.
 	cascadeMinAge int64
 }
 
@@ -74,18 +77,44 @@ func NewLocalFactory() registry.Factory {
 		// encryption key through Deps as the signer source.
 		signer := NewStaticSigner(randomKey())
 
+		immutableTags, gcMinAge, abandonedUploadMaxAge := policyDefaults(r.Policy)
+
 		return &Local{
-			namespace:     ns,
-			name:          r.Name,
-			store:         NewStore(fs, blobs, r.BasePath),
-			signer:        signer,
-			allowPush:     r.AllowPush,
-			maxUpload:     r.MaxUploadSize,
-			uploads:       newUploadSessions(),
-			emitter:       deps.Emitter,
-			cascadeMinAge: 3600, // 1h default — matches admin GC default
+			namespace:                    ns,
+			name:                         r.Name,
+			store:                        NewStore(fs, blobs, r.BasePath),
+			signer:                       signer,
+			allowPush:                    r.AllowPush,
+			maxUpload:                    r.MaxUploadSize,
+			immutableTags:                immutableTags,
+			gcMinAgeSeconds:              gcMinAge,
+			abandonedUploadMaxAgeSeconds: abandonedUploadMaxAge,
+			uploads:                      newUploadSessions(),
+			emitter:                      deps.Emitter,
+			cascadeMinAge:                gcMinAge,
 		}, nil
 	}
+}
+
+func policyDefaults(policy *service.RegistryPolicy) ([]string, int64, int64) {
+	immutableTags := []string(nil)
+	gcMinAge := int64(3600)
+	abandonedUploadMaxAge := int64(86400)
+	if policy == nil {
+		return immutableTags, gcMinAge, abandonedUploadMaxAge
+	}
+	if len(policy.ImmutableTags) > 0 {
+		immutableTags = append([]string(nil), policy.ImmutableTags...)
+	}
+	if policy.Retention != nil {
+		if policy.Retention.GCMinAgeSeconds > 0 {
+			gcMinAge = policy.Retention.GCMinAgeSeconds
+		}
+		if policy.Retention.AbandonedUploadMaxAgeSeconds > 0 {
+			abandonedUploadMaxAge = policy.Retention.AbandonedUploadMaxAgeSeconds
+		}
+	}
+	return immutableTags, gcMinAge, abandonedUploadMaxAge
 }
 
 func (l *Local) Namespace() string { return l.namespace }
@@ -126,6 +155,15 @@ func (l *Local) Stats(_ context.Context) (registry.Stats, error) {
 
 // AllowPush reports whether push operations are enabled.
 func (l *Local) AllowPush() bool { return l.allowPush }
+
+// DefaultGCOptions returns the repo policy defaults used by the admin
+// GC estimate/apply endpoints when the request does not override them.
+func (l *Local) DefaultGCOptions() GCOptions {
+	return GCOptions{
+		MinAge:                l.gcMinAgeSeconds,
+		AbandonedUploadMaxAge: l.abandonedUploadMaxAgeSeconds,
+	}
+}
 
 // ServeHTTP is the data-mux entry point for /v2/...
 func (l *Local) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -347,6 +385,17 @@ func (l *Local) putManifest(w http.ResponseWriter, r *http.Request, req parsedRe
 	h, _ := blobstore.NewHasher("sha256")
 	_, _ = h.Write(body)
 	dgst := blobstore.DigestFromHash("sha256", h)
+	if !IsDigestReference(req.Ref) && req.Ref != "" && l.isImmutableTag(req.Ref) {
+		existing, err := l.store.ReadTag(req.Name, req.Ref)
+		if err == nil && existing.String() != dgst.String() {
+			writeError(w, http.StatusConflict, "TAG_IMMUTABLE", "tag matches immutable policy and already points at another digest")
+			return
+		}
+		if err != nil && !errors.Is(err, ErrTagUnknown) {
+			mapError(w, err)
+			return
+		}
+	}
 
 	contentType := r.Header.Get("Content-Type")
 	if contentType == "" {
@@ -418,6 +467,10 @@ func (l *Local) deleteManifest(w http.ResponseWriter, r *http.Request, req parse
 	}
 	dgst := req.Digest
 	if dgst.IsZero() {
+		if l.isImmutableTag(req.Ref) {
+			writeError(w, http.StatusForbidden, "TAG_IMMUTABLE", "tag matches immutable policy and cannot be deleted")
+			return
+		}
 		// Tag delete: drop the pointer, leave the manifest blob.
 		// Per OCI semantics layer/config cleanup waits for a manual
 		// mark-and-sweep (or untagged image becomes reachable only
@@ -442,6 +495,10 @@ func (l *Local) deleteManifest(w http.ResponseWriter, r *http.Request, req parse
 	// repo. Concurrent push traffic is NOT blocked.
 	l.deleteMu.Lock()
 	defer l.deleteMu.Unlock()
+	if tags := l.immutableTagsPointingAt(req.Name, dgst.String()); len(tags) > 0 {
+		writeError(w, http.StatusForbidden, "TAG_IMMUTABLE", "manifest is still referenced by immutable tag(s): "+strings.Join(tags, ", "))
+		return
+	}
 
 	// Cheap cascade prep: read the manifest body so we can recover:
 	//   - subject.digest (so we can deregister from its referrers
@@ -528,6 +585,36 @@ func (l *Local) deleteManifest(w http.ResponseWriter, r *http.Request, req parse
 		Protocol: "registry-docker",
 	})
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (l *Local) isImmutableTag(tag string) bool {
+	for _, pat := range l.immutableTags {
+		if pat == tag {
+			return true
+		}
+		if ok, _ := path.Match(pat, tag); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *Local) immutableTagsPointingAt(name, digest string) []string {
+	tags, err := l.store.ListTags(name)
+	if err != nil {
+		return nil
+	}
+	out := []string(nil)
+	for _, tag := range tags {
+		if !l.isImmutableTag(tag) {
+			continue
+		}
+		dgst, err := l.store.ReadTag(name, tag)
+		if err == nil && dgst.String() == digest {
+			out = append(out, tag)
+		}
+	}
+	return out
 }
 
 // serveReferrers implements the OCI v1.1 referrers API:

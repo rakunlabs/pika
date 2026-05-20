@@ -322,12 +322,12 @@ func TestRegistryUpstreamSecretRoundTrip(t *testing.T) {
 	}
 }
 
-// TestRegistryUpstreamPreservesSecretRefs — values that start with
-// "secret://" must NOT be moved into the sealed payload. They're
-// already references resolved against the secret store at runtime;
+// TestRegistryUpstreamPreservesRuntimeRefs — values that start with
+// "raw://" or "config://" must NOT be moved into the sealed payload. They're
+// already references resolved against their source store at runtime;
 // sealing them would add no security and would force a more complex
 // edit experience.
-func TestRegistryUpstreamPreservesSecretRefs(t *testing.T) {
+func TestRegistryUpstreamPreservesRuntimeRefs(t *testing.T) {
 	s := &service.Settings{
 		Registry: &service.RegistrySettings{
 			Namespaces: []service.RegistryNamespace{
@@ -338,7 +338,7 @@ func TestRegistryUpstreamPreservesSecretRefs(t *testing.T) {
 							Name: "ref-mirror", Type: "docker", Kind: "remote",
 							URL: "https://registry-1.docker.io",
 							Auth: &service.RegistryUpstreamAuth{
-								Type: "bearer", Token: "secret://creds/docker",
+								Type: "bearer", Token: "raw://creds/docker",
 							},
 						},
 					},
@@ -350,21 +350,21 @@ func TestRegistryUpstreamPreservesSecretRefs(t *testing.T) {
 	payload := extractSecrets(s)
 
 	// Reference must stay in place on the public struct.
-	if s.Registry.Namespaces[0].Repositories[0].Auth.Token != "secret://creds/docker" {
-		t.Errorf("secret:// reference was moved into payload, want preserved in-place. Got: %q",
+	if s.Registry.Namespaces[0].Repositories[0].Auth.Token != "raw://creds/docker" {
+		t.Errorf("raw:// reference was moved into payload, want preserved in-place. Got: %q",
 			s.Registry.Namespaces[0].Repositories[0].Auth.Token)
 	}
 	// Nothing should have been added to the sealed payload —
 	// references aren't secrets-to-seal.
 	for _, row := range payload.RegistryUpstream {
 		if row.AuthToken != "" {
-			t.Errorf("sealed payload picked up a secret:// reference: %+v", row)
+			t.Errorf("sealed payload picked up a runtime reference: %+v", row)
 		}
 	}
 }
 
 // TestRegistryUpstreamMixedPlaintextAndRef — a single repo can
-// combine plaintext and secret:// values across the three slots.
+// combine plaintext and runtime reference values across the three slots.
 // The seal layer must split them: plaintext into the payload,
 // references kept in-place.
 func TestRegistryUpstreamMixedPlaintextAndRef(t *testing.T) {
@@ -380,7 +380,7 @@ func TestRegistryUpstreamMixedPlaintextAndRef(t *testing.T) {
 							Auth: &service.RegistryUpstreamAuth{
 								Type:     "header",
 								Username: "ignored", // basic-only field; left alone
-								Token:    "secret://creds/token",
+								Token:    "config://creds/token",
 								Header:   "X-Api-Key",
 								Value:    "plain-value-1234",
 							},
@@ -394,7 +394,7 @@ func TestRegistryUpstreamMixedPlaintextAndRef(t *testing.T) {
 	payload := extractSecrets(s)
 
 	auth := s.Registry.Namespaces[0].Repositories[0].Auth
-	if auth.Token != "secret://creds/token" {
+	if auth.Token != "config://creds/token" {
 		t.Errorf("Token reference moved: %q", auth.Token)
 	}
 	if auth.Value != "" {

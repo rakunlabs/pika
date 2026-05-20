@@ -40,13 +40,16 @@
   import Modal from '@/lib/components/Modal.svelte';
   import PackageDetailPanel from '@/lib/components/registry/PackageDetailPanel.svelte';
   import type {
+    CargoCrateEntry,
     DockerEntry,
     DockerTag,
     HelmChartListEntry,
+    MavenArtifactEntry,
     ModuleEntry,
     Namespace,
     PackageEntry,
     ProbeResult,
+    PyPIPackageEntry,
     RegistryStats,
     RegistryType,
     Repository,
@@ -69,6 +72,9 @@
   let packages = $state<PackageEntry[]>([]);
   let images = $state<DockerEntry[]>([]);
   let charts = $state<HelmChartListEntry[]>([]);
+  let mavenArtifacts = $state<MavenArtifactEntry[]>([]);
+  let pypiPackages = $state<PyPIPackageEntry[]>([]);
+  let cargoCrates = $state<CargoCrateEntry[]>([]);
   let entriesLoading = $state(false);
   // For all three browsers — only one is shown at a time depending
   // on selectedRepo.type, so a single expanded-name key is enough.
@@ -130,6 +136,9 @@
     packages = [];
     images = [];
     charts = [];
+    mavenArtifacts = [];
+    pypiPackages = [];
+    cargoCrates = [];
     entriesLoading = true;
     try {
       // Dispatch on protocol — each API call has a different
@@ -149,6 +158,15 @@
           break;
         case 'helm':
           charts = await registryAPI.listHelmCharts(ns, repo.name);
+          break;
+        case 'maven':
+          mavenArtifacts = await registryAPI.listMavenArtifacts(ns, repo.name);
+          break;
+        case 'pypi':
+          pypiPackages = await registryAPI.listPyPIPackages(ns, repo.name);
+          break;
+        case 'cargo':
+          cargoCrates = await registryAPI.listCargoCrates(ns, repo.name);
           break;
       }
     } catch (err) {
@@ -201,6 +219,21 @@
   // card. Renamed from a local function to the shared formatBytes
   // helper but kept as an alias to avoid a template-wide rename.
   const humanBytes = formatBytes;
+  const defaultGCMinAgeSeconds = 3600;
+  const defaultAbandonedUploadMaxAgeSeconds = 86400;
+  function effectiveGCMinAge(repo: Repository): number {
+    return repo.policy?.retention?.gc_min_age_seconds || defaultGCMinAgeSeconds;
+  }
+  function effectiveAbandonedUploadMaxAge(repo: Repository): number {
+    return repo.policy?.retention?.abandoned_upload_max_age_seconds || defaultAbandonedUploadMaxAgeSeconds;
+  }
+  function formatSeconds(seconds: number): string {
+    if (seconds <= 0) return '0s';
+    if (seconds % 86400 === 0) return `${seconds / 86400}d`;
+    if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+    if (seconds % 60 === 0) return `${seconds / 60}m`;
+    return `${seconds}s`;
+  }
 
   // Cache purge for Remote repos. Mirrors the GC pattern: confirm,
   // POST, toast the stats, then reload the per-repo browser so any
@@ -278,7 +311,10 @@
   }
 
   async function runDockerGC(ns: string, repoName: string) {
-    if (!window.confirm(`Run garbage collection on ${ns}/${repoName}?\n\nThis deletes unreferenced blobs and manifests. Anything pushed in the last hour is protected by the grace window.`)) {
+    const grace = selectedRepo && selectedRepo.name === repoName
+      ? formatSeconds(effectiveGCMinAge(selectedRepo))
+      : 'the policy grace window';
+    if (!window.confirm(`Run garbage collection on ${ns}/${repoName}?\n\nThis deletes unreferenced blobs and manifests. Items newer than ${grace} are protected by the grace window.`)) {
       return;
     }
     gcRunning = true;
@@ -308,6 +344,42 @@
   // endpointURL wraps the shared util so the template keeps its
   // 2-arg shape (basePath is bound here at the page level).
   const endpointURL = (ns: string, repo: string) => endpointURLUtil(basePath, ns, repo);
+
+  function defaultBasePath(type: RegistryType): string {
+    switch (type) {
+      case 'go': return 'go/';
+      case 'npm': return 'npm/';
+      case 'helm': return 'charts/';
+      case 'maven': return 'maven/';
+      case 'pypi': return 'pypi/';
+      case 'cargo': return 'cargo/';
+      default: return 'docker/';
+    }
+  }
+
+  function defaultCachePath(type: RegistryType): string {
+    switch (type) {
+      case 'go': return 'go-cache/';
+      case 'npm': return 'npm-cache/';
+      case 'helm': return 'charts-cache/';
+      case 'maven': return 'maven-cache/';
+      case 'pypi': return 'pypi-cache/';
+      case 'cargo': return 'cargo-cache/';
+      default: return 'docker-cache/';
+    }
+  }
+
+  function defaultUpstreamURL(type: RegistryType): string {
+    switch (type) {
+      case 'go': return 'https://proxy.golang.org';
+      case 'npm': return 'https://registry.npmjs.org';
+      case 'helm': return 'https://charts.bitnami.com/bitnami';
+      case 'maven': return 'https://repo1.maven.org/maven2';
+      case 'pypi': return 'https://pypi.org';
+      case 'cargo': return 'https://index.crates.io';
+      default: return 'https://registry-1.docker.io';
+    }
+  }
 
   // ─── Admin actions: CRUD over namespaces + repositories ───
   //
@@ -387,6 +459,14 @@
   let maxUploadValue = $state(0);
   let maxUploadUnit = $state<'MB' | 'GB'>('MB');
 
+  // Docker Local policy editor. Immutable tags are a comma-separated
+  // glob list; retention numbers are persisted as seconds. Zero means
+  // "server default" so existing repos keep the historical 1h/24h GC
+  // behaviour until an operator opts into different defaults.
+  let immutableTagsText = $state('');
+  let gcMinAgeSeconds = $state(0);
+  let abandonedUploadMaxAgeSeconds = $state(0);
+
   // Reveal toggles for the credential inputs. We render the fields
   // as type="password" by default — the value comes back plaintext
   // from the server (the seal layer transparently injects it) but
@@ -448,6 +528,9 @@
     corsOriginsText = '';
     maxUploadValue = 0;
     maxUploadUnit = 'MB';
+    immutableTagsText = '';
+    gcMinAgeSeconds = 0;
+    abandonedUploadMaxAgeSeconds = 0;
     revealPassword = false;
     revealToken = false;
     revealHeaderValue = false;
@@ -460,6 +543,9 @@
     virtualMembersText = (repo.members ?? []).join(', ');
     floatingTagsText = (repo.floating_tags ?? []).join(', ');
     corsOriginsText = (repo.cors_origins ?? []).join(', ');
+    immutableTagsText = (repo.policy?.immutable_tags ?? []).join(', ');
+    gcMinAgeSeconds = repo.policy?.retention?.gc_min_age_seconds ?? 0;
+    abandonedUploadMaxAgeSeconds = repo.policy?.retention?.abandoned_upload_max_age_seconds ?? 0;
     // Reconstruct the friendly value+unit pair from the stored
     // bytes. Round-trip prefers GB when the value is a clean
     // multiple, else MB. Sub-MB values (operator typed bytes
@@ -587,9 +673,28 @@
         addToast('Local repository requires a base path.', 'alert');
         return;
       }
+      if (repoDraft.type === 'docker') {
+        const immutableTags = immutableTagsText.split(',').map((s) => s.trim()).filter(Boolean);
+        if (immutableTags.some((s) => s.includes('/'))) {
+          addToast('Immutable tag patterns must match tags, not paths.', 'alert');
+          return;
+        }
+        if (Number(gcMinAgeSeconds) < 0 || Number(abandonedUploadMaxAgeSeconds) < 0) {
+          addToast('Retention windows must be zero or positive seconds.', 'alert');
+          return;
+        }
+      }
     } else if (repoDraft.kind === 'remote') {
       if (!repoDraft.url) {
         addToast('Remote repository requires an upstream URL.', 'alert');
+        return;
+      }
+      if (!repoDraft.mount) {
+        addToast('Remote repository requires a cache mount.', 'alert');
+        return;
+      }
+      if (!repoDraft.base_path) {
+        addToast('Remote repository requires a cache base path.', 'alert');
         return;
       }
     } else if (repoDraft.kind === 'virtual') {
@@ -622,8 +727,23 @@
       row.mount = repoDraft.mount;
       row.base_path = repoDraft.base_path;
       row.allow_push = repoDraft.allow_push !== false;
+      if (repoDraft.type === 'docker') {
+        const immutableTags = immutableTagsText.split(',').map((s) => s.trim()).filter(Boolean);
+        const gcMinAge = Math.floor(Number(gcMinAgeSeconds) || 0);
+        const uploadMaxAge = Math.floor(Number(abandonedUploadMaxAgeSeconds) || 0);
+        const retention: { gc_min_age_seconds?: number; abandoned_upload_max_age_seconds?: number } = {};
+        if (gcMinAge > 0) retention.gc_min_age_seconds = gcMinAge;
+        if (uploadMaxAge > 0) retention.abandoned_upload_max_age_seconds = uploadMaxAge;
+        if (immutableTags.length > 0 || Object.keys(retention).length > 0) {
+          row.policy = {};
+          if (immutableTags.length > 0) row.policy.immutable_tags = immutableTags;
+          if (Object.keys(retention).length > 0) row.policy.retention = retention;
+        }
+      }
     } else if (repoDraft.kind === 'remote') {
       row.url = repoDraft.url;
+      row.mount = repoDraft.mount;
+      row.base_path = repoDraft.base_path;
       if (repoDraft.mutable_ttl) row.mutable_ttl = repoDraft.mutable_ttl;
       if (repoDraft.insecure_skip_verify) row.insecure_skip_verify = true;
       // FloatingTags is Docker-only; the server silently ignores it
@@ -635,8 +755,8 @@
         if (ft.length > 0) row.floating_tags = ft;
       }
       // Auth: only include the type-relevant fields. The UI keeps the
-      // editor minimal; "secret://path" refs are the recommended way
-      // to supply secrets.
+      // editor minimal; raw:// and config:// refs are the recommended
+      // way to supply secrets without persisting plaintext here.
       if (repoDraft.auth?.type) {
         row.auth = { type: repoDraft.auth.type };
         if (repoDraft.auth.type === 'basic') {
@@ -747,7 +867,7 @@
     </div>
     <div class="flex items-center gap-3">
       <div class="text-[11px] text-warm-500 dark:text-warm-400">
-        Artifact hub — Go modules · NPM · Docker / OCI
+        Artifact hub — Go · NPM · Docker / OCI · Helm · Maven · PyPI · Cargo
       </div>
       {#if canAdmin}
         <button
@@ -798,7 +918,8 @@
         <Package size={48} class="mx-auto text-warm-400 mb-4" />
         <h2 class="text-lg font-semibold mb-2">No registries configured yet</h2>
         <p class="text-sm text-warm-500 dark:text-warm-400 mb-4">
-          Pika can host Go modules, NPM packages and Docker / OCI images using
+          Pika can host Go modules, NPM packages, Docker / OCI images, Helm charts,
+          Maven artifacts, PyPI packages and Cargo crates using
           your existing raw mounts as storage. Each namespace groups local,
           remote (upstream-proxied) and virtual (aggregated) repositories.
         </p>
@@ -1060,6 +1181,21 @@
                   <span class="font-medium">Client setup:</span>
                   <code class="font-mono">helm repo add {repo.name} {endpoint}</code>
                 </div>
+              {:else if repo.type === 'maven'}
+                <div class="mt-2 text-[11px] text-warm-500">
+                  <span class="font-medium">Client setup:</span>
+                  <code class="font-mono">&lt;url&gt;{endpoint}/&lt;/url&gt;</code>
+                </div>
+              {:else if repo.type === 'pypi'}
+                <div class="mt-2 text-[11px] text-warm-500">
+                  <span class="font-medium">Client setup:</span>
+                  <code class="font-mono">pip install --index-url {endpoint}/simple/ &lt;package&gt;</code>
+                </div>
+              {:else if repo.type === 'cargo'}
+                <div class="mt-2 text-[11px] text-warm-500">
+                  <span class="font-medium">Client setup:</span>
+                  <code class="font-mono">registry = "sparse+{endpoint}/"</code>
+                </div>
               {/if}
             </div>
 
@@ -1082,10 +1218,32 @@
                   <div class="text-[10px] uppercase text-warm-500">Push enabled</div>
                   <div class="font-mono">{repo.allow_push ? 'yes' : 'no'}</div>
                 </div>
+                {#if repo.type === 'docker'}
+                  <div class="border border-warm-200 dark:border-warm-800 rounded p-2 bg-white dark:bg-warm-900">
+                    <div class="text-[10px] uppercase text-warm-500">Immutable tags</div>
+                    <div class="font-mono truncate">{repo.policy?.immutable_tags?.join(', ') || 'none'}</div>
+                  </div>
+                  <div class="border border-warm-200 dark:border-warm-800 rounded p-2 bg-white dark:bg-warm-900">
+                    <div class="text-[10px] uppercase text-warm-500">GC grace</div>
+                    <div class="font-mono">{formatSeconds(effectiveGCMinAge(repo))}</div>
+                  </div>
+                  <div class="border border-warm-200 dark:border-warm-800 rounded p-2 bg-white dark:bg-warm-900">
+                    <div class="text-[10px] uppercase text-warm-500">Stale uploads</div>
+                    <div class="font-mono">{formatSeconds(effectiveAbandonedUploadMaxAge(repo))}</div>
+                  </div>
+                {/if}
               {:else if repo.kind === 'remote'}
                 <div class="border border-warm-200 dark:border-warm-800 rounded p-2 bg-white dark:bg-warm-900 col-span-2">
                   <div class="text-[10px] uppercase text-warm-500">Upstream</div>
                   <div class="font-mono truncate">{repo.url}</div>
+                </div>
+                <div class="border border-warm-200 dark:border-warm-800 rounded p-2 bg-white dark:bg-warm-900">
+                  <div class="text-[10px] uppercase text-warm-500">Cache mount</div>
+                  <div class="font-mono truncate">{repo.mount}</div>
+                </div>
+                <div class="border border-warm-200 dark:border-warm-800 rounded p-2 bg-white dark:bg-warm-900">
+                  <div class="text-[10px] uppercase text-warm-500">Cache path</div>
+                  <div class="font-mono truncate">{repo.base_path || '/'}</div>
                 </div>
               {:else if repo.kind === 'virtual'}
                 <div class="border border-warm-200 dark:border-warm-800 rounded p-2 bg-white dark:bg-warm-900 col-span-2">
@@ -1137,6 +1295,33 @@
                     {:else if repo.type === 'npm'}
                       <div>
                         <div class="text-[10px] uppercase text-warm-500">Packages</div>
+                        <div class="font-mono">{stats.package_count ?? 0}</div>
+                      </div>
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Versions</div>
+                        <div class="font-mono">{stats.version_count ?? 0}</div>
+                      </div>
+                    {:else if repo.type === 'maven'}
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Artifacts</div>
+                        <div class="font-mono">{stats.package_count ?? 0}</div>
+                      </div>
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Versions</div>
+                        <div class="font-mono">{stats.version_count ?? 0}</div>
+                      </div>
+                    {:else if repo.type === 'pypi'}
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Packages</div>
+                        <div class="font-mono">{stats.package_count ?? 0}</div>
+                      </div>
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Versions</div>
+                        <div class="font-mono">{stats.version_count ?? 0}</div>
+                      </div>
+                    {:else if repo.type === 'cargo'}
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Crates</div>
                         <div class="font-mono">{stats.package_count ?? 0}</div>
                       </div>
                       <div>
@@ -1198,7 +1383,7 @@
                     </button>
                     <button
                       class="text-[10px] flex items-center gap-1 px-1.5 py-0.5 rounded border border-warm-300 dark:border-warm-700 hover:bg-warm-100 dark:hover:bg-warm-800 disabled:opacity-50"
-                      title="Run cleanup now: deletes unreferenced blobs, manifests and abandoned upload tmp files. Anything modified in the last hour is protected."
+                      title={`Run cleanup now: deletes unreferenced blobs, manifests and abandoned upload tmp files. Items modified in the last ${formatSeconds(effectiveGCMinAge(repo))} are protected.`}
                       disabled={gcRunning || gcEstimateLoading}
                       onclick={() => runDockerGC(selectedNS ?? '', repo.name)}
                     >
@@ -1210,6 +1395,9 @@
                       clean up
                     </button>
                   </div>
+                </div>
+                <div class="mb-2 text-[10px] text-warm-500">
+                  Policy defaults: GC grace {formatSeconds(effectiveGCMinAge(repo))}, stale uploads {formatSeconds(effectiveAbandonedUploadMaxAge(repo))}.
                 </div>
                 {#if gcEstimateLoading && !gcEstimate}
                   <div class="text-xs text-warm-500">Calculating…</div>
@@ -1247,7 +1435,7 @@
                     </div>
                     {#if gcEstimate.skipped_young > 0}
                       <div class="mt-2 text-[10px] text-warm-500">
-                        {gcEstimate.skipped_young} item{gcEstimate.skipped_young === 1 ? '' : 's'} protected by grace window (modified &lt; 1h ago).
+                        {gcEstimate.skipped_young} item{gcEstimate.skipped_young === 1 ? '' : 's'} protected by grace window (modified &lt; {formatSeconds(effectiveGCMinAge(repo))} ago).
                       </div>
                     {/if}
                   {/if}
@@ -1255,16 +1443,18 @@
               </div>
             {/if}
 
-            <!-- Browser. Go shows modules; NPM shows packages;
-                 Docker shows image repositories. All three share
-                 the same expand-to-see-children interaction model. -->
-            {#if repo.type === 'go' || repo.type === 'npm' || repo.type === 'docker' || repo.type === 'helm'}
+            <!-- Browser. Each protocol renders its cached/local package
+                 index with the same click-through detail interaction. -->
+            {#if repo.type === 'go' || repo.type === 'npm' || repo.type === 'docker' || repo.type === 'helm' || repo.type === 'maven' || repo.type === 'pypi' || repo.type === 'cargo'}
               {@const isGo = repo.type === 'go'}
               {@const isNpm = repo.type === 'npm'}
               {@const isDocker = repo.type === 'docker'}
               {@const isHelm = repo.type === 'helm'}
-              {@const entryLabel = isGo ? 'Modules' : isNpm ? 'Packages' : isDocker ? 'Repositories' : 'Charts'}
-              {@const entryCount = isGo ? modules.length : isNpm ? packages.length : isDocker ? images.length : charts.length}
+              {@const isMaven = repo.type === 'maven'}
+              {@const isPyPI = repo.type === 'pypi'}
+              {@const isCargo = repo.type === 'cargo'}
+              {@const entryLabel = isGo ? 'Modules' : isNpm ? 'Packages' : isDocker ? 'Repositories' : isHelm ? 'Charts' : isMaven ? 'Artifacts' : isPyPI ? 'Packages' : 'Crates'}
+              {@const entryCount = isGo ? modules.length : isNpm ? packages.length : isDocker ? images.length : isHelm ? charts.length : isMaven ? mavenArtifacts.length : isPyPI ? pypiPackages.length : cargoCrates.length}
               <div class="border border-warm-200 dark:border-warm-800 rounded-md bg-white dark:bg-warm-900">
                 <div class="px-3 py-2 border-b border-warm-200 dark:border-warm-800 flex items-center gap-2">
                   <FolderTree size={14} class="text-accent-500" />
@@ -1294,7 +1484,7 @@
                 {:else if entryCount === 0 && !entriesLoading}
                   <div class="px-3 py-4 text-xs text-warm-500 text-center">
                     {#if repo.kind === 'local'}
-                      {isGo ? 'No modules' : isNpm ? 'No packages' : 'No images'} uploaded yet.
+                      {isGo ? 'No modules' : isNpm ? 'No packages' : isDocker ? 'No images' : isHelm ? 'No charts' : isMaven ? 'No artifacts' : isPyPI ? 'No packages' : 'No crates'} uploaded yet.
                       {#if isGo && repo.allow_push}
                         <div class="mt-2 text-[11px] font-mono text-left bg-warm-100 dark:bg-warm-800 p-2 rounded">
                           # upload via curl{'\n'}
@@ -1320,6 +1510,21 @@
                           curl -XPOST -H "Authorization: Bearer $TOKEN" \{'\n'}
                           {'  '}--data-binary @mychart-1.0.0.tgz \{'\n'}
                           {'  '}{endpoint}/api/charts
+                        </div>
+                      {:else if isMaven && repo.allow_push}
+                        <div class="mt-2 text-[11px] font-mono text-left bg-warm-100 dark:bg-warm-800 p-2 rounded">
+                          # deploy via Maven settings.xml / pom.xml repository URL{`\n`}
+                          {endpoint}/com/example/app/1.0.0/app-1.0.0.jar
+                        </div>
+                      {:else if isPyPI && repo.allow_push}
+                        <div class="mt-2 text-[11px] font-mono text-left bg-warm-100 dark:bg-warm-800 p-2 rounded">
+                          # publish via twine{`\n`}
+                          twine upload --repository-url {endpoint}/ dist/*
+                        </div>
+                      {:else if isCargo && repo.allow_push}
+                        <div class="mt-2 text-[11px] font-mono text-left bg-warm-100 dark:bg-warm-800 p-2 rounded">
+                          # seed a crate archive via HTTP PUT{`\n`}
+                          curl -XPUT --data-binary @crate.crate {endpoint}/api/v1/crates/&lt;crate&gt;/&lt;version&gt;/download
                         </div>
                       {/if}
                     {:else}
@@ -1406,6 +1611,63 @@
                           <span class="font-mono text-xs">{ch.name}</span>
                           <span class="ml-auto text-[10px] text-warm-500">
                             {ch.versions.length} version{ch.versions.length === 1 ? '' : 's'}
+                          </span>
+                          <ChevronRight size={12} class="text-warm-400" />
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                {:else if isMaven}
+                  <ul class="text-sm">
+                    {#each mavenArtifacts.filter((a) => matchFilter(`${a.group_id}:${a.artifact_id}`, entryFilter)) as art (`${art.group_id}:${art.artifact_id}`)}
+                      <li class="border-b border-warm-100 dark:border-warm-800/50 last:border-b-0">
+                        <button
+                          class="w-full text-left px-3 py-2 hover:bg-warm-50 dark:hover:bg-warm-800/50 flex items-center gap-2"
+                          onclick={() => openDetail(`${art.group_id}:${art.artifact_id}`, 'maven')}
+                          title="View details"
+                        >
+                          <Package size={14} class="text-warm-500" />
+                          <span class="font-mono text-xs">{art.group_id}:{art.artifact_id}</span>
+                          <span class="ml-auto text-[10px] text-warm-500">
+                            {art.versions.length} version{art.versions.length === 1 ? '' : 's'}
+                          </span>
+                          <ChevronRight size={12} class="text-warm-400" />
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                {:else if isPyPI}
+                  <ul class="text-sm">
+                    {#each pypiPackages.filter((p) => matchFilter(p.name, entryFilter)) as p (p.name)}
+                      <li class="border-b border-warm-100 dark:border-warm-800/50 last:border-b-0">
+                        <button
+                          class="w-full text-left px-3 py-2 hover:bg-warm-50 dark:hover:bg-warm-800/50 flex items-center gap-2"
+                          onclick={() => openDetail(p.name, 'pypi')}
+                          title="View details"
+                        >
+                          <Package size={14} class="text-warm-500" />
+                          <span class="font-mono text-xs">{p.name}</span>
+                          <span class="ml-auto text-[10px] text-warm-500">
+                            {p.versions.length} version{p.versions.length === 1 ? '' : 's'}
+                          </span>
+                          <ChevronRight size={12} class="text-warm-400" />
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                {:else if isCargo}
+                  <ul class="text-sm">
+                    {#each cargoCrates.filter((c) => matchFilter(c.name, entryFilter)) as cr (cr.name)}
+                      <li class="border-b border-warm-100 dark:border-warm-800/50 last:border-b-0">
+                        <button
+                          class="w-full text-left px-3 py-2 hover:bg-warm-50 dark:hover:bg-warm-800/50 flex items-center gap-2"
+                          onclick={() => openDetail(cr.name, 'cargo')}
+                          title="View details"
+                        >
+                          <Package size={14} class="text-warm-500" />
+                          <span class="font-mono text-xs">{cr.name}</span>
+                          <span class="ml-auto text-[10px] text-warm-500">
+                            {cr.versions.length} version{cr.versions.length === 1 ? '' : 's'}
                           </span>
                           <ChevronRight size={12} class="text-warm-400" />
                         </button>
@@ -1510,6 +1772,9 @@
                   <option value="npm">NPM packages</option>
                   <option value="docker">Docker / OCI</option>
                   <option value="helm">Helm charts</option>
+                  <option value="maven">Maven artifacts</option>
+                  <option value="pypi">PyPI packages</option>
+                  <option value="cargo">Cargo crates</option>
                 </select>
               </label>
 
@@ -1560,7 +1825,7 @@
                     type="text"
                     class="w-full px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
                     bind:value={repoDraft.base_path}
-                    placeholder={repoDraft.type === 'go' ? 'go/' : repoDraft.type === 'npm' ? 'npm/' : repoDraft.type === 'helm' ? 'charts/' : 'docker/'}
+                    placeholder={defaultBasePath(repoDraft.type)}
                   />
                   <span class="block mt-1 text-[10px] text-warm-500">
                     Path inside the mount where artifacts will be stored.
@@ -1576,9 +1841,68 @@
                   />
                   <span class="text-xs">Allow publish / push (otherwise read-only)</span>
                 </label>
+
+                {#if repoDraft.type === 'docker'}
+                  <div class="rounded border border-warm-200 dark:border-warm-800 p-3 bg-white dark:bg-warm-900 space-y-3">
+                    <div>
+                      <div class="text-xs font-medium text-warm-700 dark:text-warm-300">Docker policy + retention</div>
+                      <div class="text-[10px] text-warm-500">
+                        Enforced by the local Docker handler. Remote and virtual repos keep policy on their member repos.
+                      </div>
+                    </div>
+
+                    <label class="block">
+                      <span class="block text-xs font-medium text-warm-600 dark:text-warm-400 mb-1">
+                        Immutable tag patterns
+                      </span>
+                      <input
+                        type="text"
+                        class="w-full px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
+                        bind:value={immutableTagsText}
+                        placeholder="prod, release-*, v*"
+                      />
+                      <span class="block mt-1 text-[10px] text-warm-500 leading-relaxed">
+                        Comma-separated shell-style tag patterns. Matching tags can be created once,
+                        then cannot be moved to another digest or deleted. Do not include image paths.
+                      </span>
+                    </label>
+
+                    <div class="grid grid-cols-2 gap-3">
+                      <label class="block">
+                        <span class="block text-xs font-medium text-warm-600 dark:text-warm-400 mb-1">
+                          GC grace seconds
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          class="w-full px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
+                          bind:value={gcMinAgeSeconds}
+                          placeholder="3600"
+                        />
+                        <span class="block mt-1 text-[10px] text-warm-500">0 = default 1h</span>
+                      </label>
+
+                      <label class="block">
+                        <span class="block text-xs font-medium text-warm-600 dark:text-warm-400 mb-1">
+                          Stale upload seconds
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          class="w-full px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
+                          bind:value={abandonedUploadMaxAgeSeconds}
+                          placeholder="86400"
+                        />
+                        <span class="block mt-1 text-[10px] text-warm-500">0 = default 24h</span>
+                      </label>
+                    </div>
+                  </div>
+                {/if}
               </div>
             {:else if repoDraft.kind === 'remote'}
-              <!-- ── Remote: upstream URL + optional auth ── -->
+              <!-- ── Remote: upstream URL + cache storage + optional auth ── -->
               <div class="rounded border border-warm-200 dark:border-warm-800 p-3 bg-warm-50/50 dark:bg-warm-950/30 space-y-3">
                 <label class="block">
                   <span class="block text-xs font-medium text-warm-600 dark:text-warm-400 mb-1">
@@ -1588,9 +1912,49 @@
                     type="url"
                     class="w-full px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
                     bind:value={repoDraft.url}
-                    placeholder={repoDraft.type === 'go' ? 'https://proxy.golang.org' : repoDraft.type === 'npm' ? 'https://registry.npmjs.org' : repoDraft.type === 'helm' ? 'https://charts.bitnami.com/bitnami' : 'https://registry-1.docker.io'}
+                    placeholder={defaultUpstreamURL(repoDraft.type)}
                   />
                 </label>
+
+                <div class="grid grid-cols-2 gap-3">
+                  <label class="block">
+                    <span class="block text-xs font-medium text-warm-600 dark:text-warm-400 mb-1">
+                      Cache mount <span class="text-red-500">*</span>
+                    </span>
+                    {#if rawMounts.length === 0}
+                      <div class="text-[11px] text-amber-700 dark:text-amber-400">
+                        No raw mounts configured. Add one under Settings → Raw mounts first.
+                      </div>
+                    {:else}
+                      <select
+                        class="w-full px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
+                        bind:value={repoDraft.mount}
+                      >
+                        <option value="">— select a mount —</option>
+                        {#each rawMounts as m (m.prefix)}
+                          <option value={m.prefix}>{m.prefix}</option>
+                        {/each}
+                      </select>
+                    {/if}
+                  </label>
+
+                  <label class="block">
+                    <span class="block text-xs font-medium text-warm-600 dark:text-warm-400 mb-1">
+                      Cache base path <span class="text-red-500">*</span>
+                    </span>
+                    <input
+                      type="text"
+                      class="w-full px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
+                      bind:value={repoDraft.base_path}
+                      placeholder={defaultCachePath(repoDraft.type)}
+                    />
+                  </label>
+                </div>
+
+                <span class="block -mt-1 text-[10px] text-warm-500 leading-relaxed">
+                  Pulled artifacts are stored in this raw mount path and served from cache
+                  on later reads. Use a dedicated cache path per remote repository.
+                </span>
 
                 <!-- B8: connectivity probe button. Only enabled
                      when editing an existing repo (the probe uses
@@ -1657,6 +2021,19 @@
                       themselves are content-addressed and cached forever. Default:
                       <code class="font-mono">5m</code>. Set <code class="font-mono">0s</code>
                       to always re-fetch, or a longer duration to reduce upstream load.
+                    {:else if repoDraft.type === 'maven'}
+                      How long to cache <strong>mutable</strong> Maven metadata files
+                      (<code class="font-mono">maven-metadata.xml</code>). Versioned JAR/POM
+                      artifacts are cached forever after first fetch. Default:
+                      <code class="font-mono">5m</code>.
+                    {:else if repoDraft.type === 'pypi'}
+                      How long to cache <strong>mutable</strong> PEP 503 simple index pages.
+                      Distribution files are cached forever after first download. Default:
+                      <code class="font-mono">5m</code>.
+                    {:else if repoDraft.type === 'cargo'}
+                      How long to cache <strong>mutable</strong> sparse-index files. Downloaded
+                      <code class="font-mono">.crate</code> archives are cached forever after
+                      first fetch. Default: <code class="font-mono">5m</code>.
                     {:else}
                       How long to cache <strong>floating</strong> Docker tags (see the field
                       below). Blob layers and manifests-by-digest are immutable and cached
@@ -1748,7 +2125,7 @@
                       <input
                         type={revealPassword ? 'text' : 'password'}
                         class="w-full px-2 py-1 pr-7 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
-                        placeholder="password or secret://path"
+                        placeholder="password, raw://mount/path, or config://key"
                         bind:value={repoDraft.auth.password}
                       />
                       <button
@@ -1766,7 +2143,7 @@
                     <input
                       type={revealToken ? 'text' : 'password'}
                       class="w-full px-2 py-1 pr-7 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
-                      placeholder="token or secret://path"
+                      placeholder="token, raw://mount/path, or config://key"
                       bind:value={repoDraft.auth.token}
                     />
                     <button
@@ -1790,7 +2167,7 @@
                       <input
                         type={revealHeaderValue ? 'text' : 'password'}
                         class="w-full px-2 py-1 pr-7 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
-                        placeholder="value or secret://path"
+                        placeholder="value, raw://mount/path, or config://key"
                         bind:value={repoDraft.auth.value}
                       />
                       <button
@@ -1806,9 +2183,10 @@
                 {/if}
 
                 <p class="text-[10px] text-warm-500 leading-relaxed">
-                  Secret values accept the <code class="font-mono">secret://mount/path</code>
-                  reference scheme. The server resolves the secret at request time so plaintext
-                  credentials never persist in settings.
+                  Secret values can be inline plaintext or direct
+                  <code class="font-mono">raw://mount/path</code> /
+                  <code class="font-mono">config://key</code> references. Plaintext values are
+                  sealed before persistence; references are resolved at request time.
                 </p>
               </div>
             {:else}

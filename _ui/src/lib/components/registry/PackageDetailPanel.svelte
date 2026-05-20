@@ -81,6 +81,12 @@
           focusedVersion = detail.npm.latest_version;
         } else if (detail.docker?.tags?.length) {
           focusedVersion = detail.docker.tags[0].tag;
+        } else if (detail.maven?.latest_version) {
+          focusedVersion = detail.maven.latest_version;
+        } else if (detail.pypi?.latest_version) {
+          focusedVersion = detail.pypi.latest_version;
+        } else if (detail.cargo?.latest_version) {
+          focusedVersion = detail.cargo.latest_version;
         }
       }
     } catch (err) {
@@ -173,6 +179,16 @@
         return ver
           ? `helm install ${detail.name} oci://${endpoint.replace(/^https?:\/\//, '')}/${detail.name} --version ${ver}`
           : `helm install ${detail.name} oci://${endpoint.replace(/^https?:\/\//, '')}/${detail.name}`;
+      case 'maven': {
+        const [groupId, artifactId] = detail.name.split(':');
+        return `<dependency>\n  <groupId>${groupId ?? ''}</groupId>\n  <artifactId>${artifactId ?? detail.name}</artifactId>\n  <version>${ver || 'VERSION'}</version>\n</dependency>`;
+      }
+      case 'pypi':
+        return ver
+          ? `pip install --index-url ${endpoint}/simple/ ${detail.name}==${ver}`
+          : `pip install --index-url ${endpoint}/simple/ ${detail.name}`;
+      case 'cargo':
+        return `# .cargo/config.toml\n[registries.${repoName}]\nindex = "sparse+${endpoint}/"\n\n# Cargo.toml\n${detail.name} = { version = "${ver || 'VERSION'}", registry = "${repoName}" }`;
     }
     return '';
   }
@@ -184,7 +200,6 @@
     if (detail.type === 'npm' && detail.npm?.has_readme) base.push('readme');
     if (detail.type === 'helm' && detail.helm?.has_readme) base.push('readme');
     if (detail.type === 'docker') base.push('layers');
-    if (detail.type === 'go') base.push('install'); // go.mod viewer lives in install tab
     return base;
   })());
 
@@ -395,6 +410,47 @@
                 </div>
               </div>
             {/if}
+          {:else if detail.type === 'maven' && detail.maven}
+            <dl class="grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <dt class="text-warm-500 uppercase text-[10px]">Group</dt>
+                <dd class="font-mono">{detail.maven.group_id}</dd>
+              </div>
+              <div>
+                <dt class="text-warm-500 uppercase text-[10px]">Artifact</dt>
+                <dd class="font-mono">{detail.maven.artifact_id}</dd>
+              </div>
+              <div>
+                <dt class="text-warm-500 uppercase text-[10px]">Latest</dt>
+                <dd class="font-mono">{detail.maven.latest_version}</dd>
+              </div>
+              <div>
+                <dt class="text-warm-500 uppercase text-[10px]">Versions</dt>
+                <dd class="font-mono">{detail.maven.versions?.length ?? 0}</dd>
+              </div>
+            </dl>
+          {:else if detail.type === 'pypi' && detail.pypi}
+            <dl class="grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <dt class="text-warm-500 uppercase text-[10px]">Latest</dt>
+                <dd class="font-mono">{detail.pypi.latest_version}</dd>
+              </div>
+              <div>
+                <dt class="text-warm-500 uppercase text-[10px]">Versions</dt>
+                <dd class="font-mono">{detail.pypi.versions?.length ?? 0}</dd>
+              </div>
+            </dl>
+          {:else if detail.type === 'cargo' && detail.cargo}
+            <dl class="grid grid-cols-2 gap-3 text-xs">
+              <div>
+                <dt class="text-warm-500 uppercase text-[10px]">Latest</dt>
+                <dd class="font-mono">{detail.cargo.latest_version}</dd>
+              </div>
+              <div>
+                <dt class="text-warm-500 uppercase text-[10px]">Versions</dt>
+                <dd class="font-mono">{detail.cargo.versions?.length ?? 0}</dd>
+              </div>
+            </dl>
           {/if}
         </div>
       {:else if activeTab === 'versions'}
@@ -514,6 +570,71 @@
                     <td class="py-1.5 pr-2 text-warm-500">{v.app_version ?? ''}</td>
                     <td class="py-1.5 pr-2 text-warm-500">{formatPublishedAt(v.created)}</td>
                     <td class="py-1.5 text-warm-500">{formatSize(v.size)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          {:else if detail.type === 'maven' && detail.maven?.versions}
+            <table class="w-full text-xs">
+              <thead class="text-left text-[10px] uppercase text-warm-500 border-b border-warm-200 dark:border-warm-800">
+                <tr>
+                  <th class="py-1.5 pr-2">Version</th>
+                  <th class="py-1.5 pr-2">JAR</th>
+                  <th class="py-1.5">POM</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each detail.maven.versions as v}
+                  <tr class="border-b border-warm-100 dark:border-warm-800/50">
+                    <td class="py-1.5 pr-2 font-mono">
+                      <button class="hover:text-accent-500 {focusedVersion === v.version ? 'text-accent-500' : ''}" onclick={() => focusedVersion = v.version}>{v.version}</button>
+                    </td>
+                    <td class="py-1.5 pr-2 text-warm-500">{formatSize(v.jar_size)}</td>
+                    <td class="py-1.5 text-warm-500">{formatSize(v.pom_size)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          {:else if detail.type === 'pypi' && detail.pypi?.versions}
+            <table class="w-full text-xs">
+              <thead class="text-left text-[10px] uppercase text-warm-500 border-b border-warm-200 dark:border-warm-800">
+                <tr>
+                  <th class="py-1.5 pr-2">Version</th>
+                  <th class="py-1.5 pr-2">Files</th>
+                  <th class="py-1.5">Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each detail.pypi.versions as v}
+                  <tr class="border-b border-warm-100 dark:border-warm-800/50">
+                    <td class="py-1.5 pr-2 font-mono">
+                      <button class="hover:text-accent-500 {focusedVersion === v.version ? 'text-accent-500' : ''}" onclick={() => focusedVersion = v.version}>{v.version}</button>
+                    </td>
+                    <td class="py-1.5 pr-2 text-warm-500">{v.files?.length ?? 0}</td>
+                    <td class="py-1.5 text-warm-500">{formatSize(v.file_size)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          {:else if detail.type === 'cargo' && detail.cargo?.versions}
+            <table class="w-full text-xs">
+              <thead class="text-left text-[10px] uppercase text-warm-500 border-b border-warm-200 dark:border-warm-800">
+                <tr>
+                  <th class="py-1.5 pr-2">Version</th>
+                  <th class="py-1.5 pr-2">Size</th>
+                  <th class="py-1.5">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each detail.cargo.versions as v}
+                  <tr class="border-b border-warm-100 dark:border-warm-800/50">
+                    <td class="py-1.5 pr-2 font-mono">
+                      <button class="hover:text-accent-500 {focusedVersion === v.version ? 'text-accent-500' : ''}" onclick={() => focusedVersion = v.version}>{v.version}</button>
+                    </td>
+                    <td class="py-1.5 pr-2 text-warm-500">{formatSize(v.size)}</td>
+                    <td class="py-1.5">
+                      {#if v.yanked}<span class="text-[10px] px-1 py-0.5 rounded bg-red-500/10 text-red-500">yanked</span>{/if}
+                    </td>
                   </tr>
                 {/each}
               </tbody>

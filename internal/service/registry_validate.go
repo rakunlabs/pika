@@ -2,6 +2,8 @@ package service
 
 import (
 	"fmt"
+	"net/url"
+	"path"
 	"strings"
 	"time"
 )
@@ -17,10 +19,14 @@ import (
 //   - Namespace names: non-empty, lowercase [a-z0-9_-], unique.
 //   - Repo names: non-empty, lowercase [a-z0-9_-], unique within a
 //     namespace.
-//   - Repo Type: one of go/npm/docker.
+//   - Repo Type: one of go/npm/docker/helm.
 //   - Repo Kind: one of local/remote/virtual.
+//   - Kind-specific fields must not be mixed across local/remote/virtual.
+//   - MaxUploadSize must be non-negative.
+//   - Policy fields must be well-formed and attached to supported repo shapes.
 //   - Local: Mount + BasePath required.
-//   - Remote: URL required, parses as http(s) URL, Auth shape valid.
+//   - Remote: URL + cache Mount/BasePath required, parses as http(s)
+//     URL, Auth shape valid.
 //   - Virtual: Members non-empty, no self-reference, every referenced
 //     name exists in the same namespace, member.Type matches this
 //     repo's Type.
@@ -65,18 +71,37 @@ func validateNamespaceRepos(ns *RegistryNamespace) error {
 			return fmt.Errorf("repo %q: invalid type %q (want one of %v): %w",
 				r.Name, r.Type, KnownRegistryTypes, ErrBadRequest)
 		}
+		if r.MaxUploadSize < 0 {
+			return fmt.Errorf("repo %q: max_upload_size must be >= 0: %w", r.Name, ErrBadRequest)
+		}
 
 		switch r.Kind {
 		case RegistryKindLocal:
+			if err := validateRegistryKindFields(r); err != nil {
+				return err
+			}
 			if r.Mount == "" {
 				return fmt.Errorf("repo %q: local kind requires mount: %w", r.Name, ErrBadRequest)
 			}
+			if r.BasePath == "" {
+				return fmt.Errorf("repo %q: local kind requires base_path: %w", r.Name, ErrBadRequest)
+			}
 		case RegistryKindRemote:
+			if err := validateRegistryKindFields(r); err != nil {
+				return err
+			}
 			if r.URL == "" {
 				return fmt.Errorf("repo %q: remote kind requires url: %w", r.Name, ErrBadRequest)
 			}
-			if !strings.HasPrefix(r.URL, "http://") && !strings.HasPrefix(r.URL, "https://") {
+			u, err := url.Parse(r.URL)
+			if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 				return fmt.Errorf("repo %q: url must be http(s): %w", r.Name, ErrBadRequest)
+			}
+			if r.Mount == "" {
+				return fmt.Errorf("repo %q: remote kind requires cache mount: %w", r.Name, ErrBadRequest)
+			}
+			if r.BasePath == "" {
+				return fmt.Errorf("repo %q: remote kind requires cache base_path: %w", r.Name, ErrBadRequest)
 			}
 			if r.Auth != nil {
 				if err := validateRegistryAuth(r.Auth); err != nil {
@@ -89,11 +114,17 @@ func validateNamespaceRepos(ns *RegistryNamespace) error {
 				}
 			}
 		case RegistryKindVirtual:
+			if err := validateRegistryKindFields(r); err != nil {
+				return err
+			}
 			if len(r.Members) == 0 {
 				return fmt.Errorf("repo %q: virtual kind requires members: %w", r.Name, ErrBadRequest)
 			}
 		default:
 			return fmt.Errorf("repo %q: invalid kind %q (want local|remote|virtual): %w", r.Name, r.Kind, ErrBadRequest)
+		}
+		if err := validateRegistryPolicy(r); err != nil {
+			return err
 		}
 	}
 
@@ -145,22 +176,159 @@ func validateNamespaceRepos(ns *RegistryNamespace) error {
 	return nil
 }
 
+func validateRegistryKindFields(r *RegistryRepository) error {
+	switch r.Kind {
+	case RegistryKindLocal:
+		if r.URL != "" {
+			return registryKindFieldError(r, "url")
+		}
+		if r.Auth != nil {
+			return registryKindFieldError(r, "auth")
+		}
+		if r.MutableTTL != "" {
+			return registryKindFieldError(r, "mutable_ttl")
+		}
+		if len(r.FloatingTags) > 0 {
+			return registryKindFieldError(r, "floating_tags")
+		}
+		if r.InsecureSkipVerify {
+			return registryKindFieldError(r, "insecure_skip_verify")
+		}
+		if len(r.Members) > 0 {
+			return registryKindFieldError(r, "members")
+		}
+		if r.DefaultLocal != "" {
+			return registryKindFieldError(r, "default_local")
+		}
+	case RegistryKindRemote:
+		if r.AllowPush {
+			return registryKindFieldError(r, "allow_push")
+		}
+		if len(r.Members) > 0 {
+			return registryKindFieldError(r, "members")
+		}
+		if r.DefaultLocal != "" {
+			return registryKindFieldError(r, "default_local")
+		}
+	case RegistryKindVirtual:
+		if r.Mount != "" {
+			return registryKindFieldError(r, "mount")
+		}
+		if r.BasePath != "" {
+			return registryKindFieldError(r, "base_path")
+		}
+		if r.AllowPush {
+			return registryKindFieldError(r, "allow_push")
+		}
+		if r.URL != "" {
+			return registryKindFieldError(r, "url")
+		}
+		if r.Auth != nil {
+			return registryKindFieldError(r, "auth")
+		}
+		if r.MutableTTL != "" {
+			return registryKindFieldError(r, "mutable_ttl")
+		}
+		if len(r.FloatingTags) > 0 {
+			return registryKindFieldError(r, "floating_tags")
+		}
+		if r.InsecureSkipVerify {
+			return registryKindFieldError(r, "insecure_skip_verify")
+		}
+	}
+	return nil
+}
+
+func registryKindFieldError(r *RegistryRepository, field string) error {
+	return fmt.Errorf("repo %q: %s kind does not support %s: %w", r.Name, r.Kind, field, ErrBadRequest)
+}
+
+func validateRegistryPolicy(r *RegistryRepository) error {
+	if r.Policy == nil {
+		return nil
+	}
+	if len(r.Policy.ImmutableTags) > 0 {
+		if r.Type != RegistryTypeDocker || r.Kind != RegistryKindLocal {
+			return fmt.Errorf("repo %q: immutable_tags policy is supported only for docker local repositories: %w", r.Name, ErrBadRequest)
+		}
+		for _, pat := range r.Policy.ImmutableTags {
+			trimmed := strings.TrimSpace(pat)
+			if trimmed == "" {
+				return fmt.Errorf("repo %q: immutable_tags contains an empty pattern: %w", r.Name, ErrBadRequest)
+			}
+			if pat != trimmed {
+				return fmt.Errorf("repo %q: immutable_tags pattern %q must not contain leading or trailing spaces: %w", r.Name, pat, ErrBadRequest)
+			}
+			if strings.Contains(pat, "/") {
+				return fmt.Errorf("repo %q: immutable_tags pattern %q must match a tag, not a path: %w", r.Name, pat, ErrBadRequest)
+			}
+			if _, err := path.Match(pat, "candidate"); err != nil {
+				return fmt.Errorf("repo %q: immutable_tags pattern %q is invalid: %w: %w", r.Name, pat, err, ErrBadRequest)
+			}
+		}
+	}
+	if r.Policy.Retention != nil {
+		if r.Type != RegistryTypeDocker || r.Kind != RegistryKindLocal {
+			return fmt.Errorf("repo %q: retention policy is supported only for docker local repositories: %w", r.Name, ErrBadRequest)
+		}
+		if r.Policy.Retention.GCMinAgeSeconds < 0 {
+			return fmt.Errorf("repo %q: retention.gc_min_age_seconds must be >= 0: %w", r.Name, ErrBadRequest)
+		}
+		if r.Policy.Retention.AbandonedUploadMaxAgeSeconds < 0 {
+			return fmt.Errorf("repo %q: retention.abandoned_upload_max_age_seconds must be >= 0: %w", r.Name, ErrBadRequest)
+		}
+	}
+	return nil
+}
+
 func validateRegistryAuth(a *RegistryUpstreamAuth) error {
 	switch a.Type {
 	case RegistryAuthBasic:
 		if a.Username == "" {
 			return fmt.Errorf("basic auth requires username: %w", ErrBadRequest)
 		}
+		if err := validateRegistryAuthSecretValue("basic password", a.Password); err != nil {
+			return err
+		}
 	case RegistryAuthBearer:
 		if a.Token == "" {
 			return fmt.Errorf("bearer auth requires token: %w", ErrBadRequest)
+		}
+		if err := validateRegistryAuthSecretValue("bearer token", a.Token); err != nil {
+			return err
 		}
 	case RegistryAuthHeader:
 		if a.Header == "" {
 			return fmt.Errorf("header auth requires header name: %w", ErrBadRequest)
 		}
+		if a.Value == "" {
+			return fmt.Errorf("header auth requires value: %w", ErrBadRequest)
+		}
+		if err := validateRegistryAuthSecretValue("header value", a.Value); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("invalid auth type %q (want basic|bearer|header): %w", a.Type, ErrBadRequest)
+	}
+	return nil
+}
+
+func validateRegistryAuthSecretValue(field, value string) error {
+	if value == "" {
+		return nil
+	}
+	if strings.HasPrefix(value, "secret://") {
+		return fmt.Errorf("%s uses unsupported secret:// reference (use raw://mount/path or config://key): %w", field, ErrBadRequest)
+	}
+	if strings.HasPrefix(value, "raw://") {
+		ref := strings.TrimPrefix(value, "raw://")
+		parts := strings.SplitN(ref, "/", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return fmt.Errorf("%s raw:// reference must be raw://mount/path: %w", field, ErrBadRequest)
+		}
+	}
+	if strings.HasPrefix(value, "config://") && strings.TrimPrefix(value, "config://") == "" {
+		return fmt.Errorf("%s config:// reference requires a key: %w", field, ErrBadRequest)
 	}
 	return nil
 }

@@ -5,7 +5,8 @@ package service
 // Pika's artifact registry feature is multi-tenant by design: a single
 // deployment carries N "namespaces" (logical tenants / teams), and each
 // namespace holds M "repositories". A repository has a type
-// (go|npm|docker) and a kind (local|remote|virtual). The triple
+// (go|npm|docker|helm|maven|pypi|cargo) and a kind
+// (local|remote|virtual). The triple
 // {namespace, repo-name, type} uniquely identifies a serving surface:
 //
 //   /registries/{namespace}/{repo}/{type-specific-path}
@@ -70,8 +71,8 @@ type RegistrySettings struct {
 // we support (NPM scope-less names, Docker repo names, Go module
 // path segments).
 type RegistryNamespace struct {
-	Name        string               `json:"name"`
-	Description string               `json:"description,omitempty"`
+	Name         string               `json:"name"`
+	Description  string               `json:"description,omitempty"`
 	Repositories []RegistryRepository `json:"repositories,omitempty"`
 }
 
@@ -83,16 +84,16 @@ type RegistryNamespace struct {
 // Field validity by Kind:
 //
 //	local   -> Mount + BasePath required, AllowPush honored
-//	remote  -> URL required, Auth optional (with secret:// refs)
+//	remote  -> URL + cache Mount/BasePath required, Auth optional (raw:// / config:// refs)
 //	virtual -> Members required, ordered list of sibling repo names
 //
 // The validator (Validate, below) rejects rows that mix fields across
 // kinds so the runtime can trust the shape without re-checking.
 type RegistryRepository struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Type        string   `json:"type"` // "go" | "npm" | "docker"
-	Kind        string   `json:"kind"` // "local" | "remote" | "virtual"
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Type        string `json:"type"` // "go" | "npm" | "docker" | "helm" | "maven" | "pypi" | "cargo"
+	Kind        string `json:"kind"` // "local" | "remote" | "virtual"
 
 	// Local fields
 	Mount     string `json:"mount,omitempty"`      // raw mount prefix
@@ -100,8 +101,8 @@ type RegistryRepository struct {
 	AllowPush bool   `json:"allow_push,omitempty"` // publish/push enabled
 
 	// Remote fields
-	URL  string                  `json:"url,omitempty"`  // upstream base URL
-	Auth *RegistryUpstreamAuth   `json:"auth,omitempty"` // optional
+	URL  string                `json:"url,omitempty"`  // upstream base URL
+	Auth *RegistryUpstreamAuth `json:"auth,omitempty"` // optional
 	// MutableTTL controls how long mutable upstream responses
 	// (latest tag, version list) are cached before being refetched.
 	// Empty -> default per registry type (e.g. 5m for Go @latest).
@@ -145,17 +146,42 @@ type RegistryRepository struct {
 	DefaultLocal string `json:"default_local,omitempty"`
 
 	// Common per-repo overrides
-	CORSOrigins   []string `json:"cors_origins,omitempty"`
-	MaxUploadSize int64    `json:"max_upload_size,omitempty"` // bytes; 0 = type default
+	CORSOrigins   []string        `json:"cors_origins,omitempty"`
+	MaxUploadSize int64           `json:"max_upload_size,omitempty"` // bytes; 0 = type default
+	Policy        *RegistryPolicy `json:"policy,omitempty"`
+}
+
+// RegistryPolicy carries optional per-repository operational policy.
+// The first enforced fields target Docker Local repositories because
+// they already have mutable tags and an explicit GC flow. The struct
+// is intentionally protocol-neutral so later phases can extend it to
+// Go/NPM/Helm retention without changing the settings shape.
+type RegistryPolicy struct {
+	// ImmutableTags is a list of Docker tag patterns that may be created
+	// once but cannot be moved to another digest or deleted. Patterns use
+	// shell-style matching (`v*`, `prod`, `release-*`) against one tag.
+	ImmutableTags []string                 `json:"immutable_tags,omitempty"`
+	Retention     *RegistryRetentionPolicy `json:"retention,omitempty"`
+}
+
+// RegistryRetentionPolicy stores default cleanup windows for the
+// manual Docker GC estimate/apply buttons. Operators can still override
+// these per request; the policy controls the repo's normal defaults.
+type RegistryRetentionPolicy struct {
+	// GCMinAgeSeconds protects recently-written unreferenced blobs and
+	// manifests from GC. Zero means use the server default.
+	GCMinAgeSeconds int64 `json:"gc_min_age_seconds,omitempty"`
+	// AbandonedUploadMaxAgeSeconds controls stale upload tmp pruning.
+	// Zero means use the server default.
+	AbandonedUploadMaxAgeSeconds int64 `json:"abandoned_upload_max_age_seconds,omitempty"`
 }
 
 // RegistryUpstreamAuth describes how to authenticate to an upstream
 // registry when proxying remote repositories. The Password / Token /
-// Value fields support pika's "secret://" reference scheme: a value of
-// "secret://path/to/key" is resolved at runtime via the secret store
-// instead of being persisted as plaintext in Settings. The wrapper
-// layer (internal/secret/settings_seal.go) extracts and seals any
-// remaining plaintext values automatically.
+// Value fields support direct "raw://mount/path" and "config://key"
+// references, resolved at runtime instead of persisted as plaintext in
+// Settings. The wrapper layer (internal/secret/settings_seal.go)
+// extracts and seals any remaining plaintext values automatically.
 type RegistryUpstreamAuth struct {
 	Type     string `json:"type"` // "basic" | "bearer" | "header"
 	Username string `json:"username,omitempty"`
@@ -179,7 +205,10 @@ const (
 	// `helm repo add` against pika just works. The data plane
 	// optionally accepts ChartMuseum-style writes (POST /api/charts)
 	// for ergonomic publishing.
-	RegistryTypeHelm = "helm"
+	RegistryTypeHelm  = "helm"
+	RegistryTypeMaven = "maven"
+	RegistryTypePyPI  = "pypi"
+	RegistryTypeCargo = "cargo"
 
 	RegistryKindLocal   = "local"
 	RegistryKindRemote  = "remote"
@@ -199,6 +228,9 @@ var KnownRegistryTypes = []string{
 	RegistryTypeNPM,
 	RegistryTypeDocker,
 	RegistryTypeHelm,
+	RegistryTypeMaven,
+	RegistryTypePyPI,
+	RegistryTypeCargo,
 }
 
 // IsKnownRegistryType reports whether t is one of the registered

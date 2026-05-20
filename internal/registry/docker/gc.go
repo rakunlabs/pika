@@ -140,8 +140,8 @@ type GCOptions struct {
 	// abandoned uploads are interrupted client state rather than
 	// referenced data and benefit from a tighter default).
 	//
-	// Zero disables the upload prune entirely. The admin handler
-	// applies a 24h default when the operator doesn't override.
+	// Zero disables the upload prune entirely. The Docker local factory
+	// applies the repo policy default when the operator doesn't override.
 	AbandonedUploadMaxAge int64
 
 	// DryRun reports estimated reclaimable garbage without
@@ -261,8 +261,8 @@ func newLiveSet() *liveSet {
 	}
 }
 
-func (ls *liveSet) addBlob(digest string)             { ls.blobs[digest] = struct{}{} }
-func (ls *liveSet) hasBlob(digest string) bool        { _, ok := ls.blobs[digest]; return ok }
+func (ls *liveSet) addBlob(digest string)      { ls.blobs[digest] = struct{}{} }
+func (ls *liveSet) hasBlob(digest string) bool { _, ok := ls.blobs[digest]; return ok }
 func (ls *liveSet) addManifest(name, digest string) {
 	if ls.manifests[name] == nil {
 		ls.manifests[name] = make(map[string]struct{})

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -16,12 +17,15 @@ import (
 	"github.com/rakunlabs/pika/internal/rawfs"
 	"github.com/rakunlabs/pika/internal/registry"
 	"github.com/rakunlabs/pika/internal/registry/blobstore"
+	"github.com/rakunlabs/pika/internal/registry/cargo"
 	"github.com/rakunlabs/pika/internal/registry/common"
 	"github.com/rakunlabs/pika/internal/registry/docker"
 	"github.com/rakunlabs/pika/internal/registry/events"
 	"github.com/rakunlabs/pika/internal/registry/goproxy"
 	"github.com/rakunlabs/pika/internal/registry/helm"
+	"github.com/rakunlabs/pika/internal/registry/maven"
 	"github.com/rakunlabs/pika/internal/registry/npm"
+	"github.com/rakunlabs/pika/internal/registry/pypi"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -107,72 +111,69 @@ func (a *api) resolveRegistry(c *ada.Context, requiredType string) (registry.Reg
 //     and inspecting cached blobs. These reuse the standard
 //     withPerm(CapRegistryAdmin / Read) plumbing.
 
-// registrySecretResolver adapts the hook resolver (already wired in
-// the api struct) to the registry.SecretResolver interface so the
-// upstream client can expand "secret://" auth values. We piggyback on
-// the hook package's resolver because it already knows how to read
-// from raw mounts and the config store — registry uses the same
-// reference vocabulary.
+// registrySecretResolver adapts pika's raw/config stores to the
+// registry.SecretResolver interface so upstream clients can expand
+// direct "raw://..." and "config://..." auth references.
 type registrySecretResolver struct {
 	svc *service.Service
 	rh  *RawHandler
 }
 
-// ResolveSecret expands "secret://..." references. For MVP the only
-// supported scheme is "raw://<mount>/<path>" carried inside a value
-// that begins with "secret://". The wrapping is intentionally double:
-//
-//   "secret://" tells the upstream client "this is a reference, please
-//    resolve before sending on the wire"; the underlying form
-//    ("raw://...", "config://...", or a plain inline value) tells the
-//    resolver which store to read from.
-//
-// This matches the hook resolver's contract so the same secret values
-// can be used in both hook targets and registry upstream credentials.
+// ResolveSecret expands direct references. Values without a supported
+// reference scheme are returned unchanged and treated as inline
+// credentials by the upstream client.
 func (r *registrySecretResolver) ResolveSecret(ctx context.Context, value string) (string, error) {
-	if !strings.HasPrefix(value, "secret://") {
+	switch {
+	case strings.HasPrefix(value, "raw://"):
+		return r.resolveRaw(value[len("raw://"):])
+	case strings.HasPrefix(value, "config://"):
+		return r.resolveConfig(ctx, value[len("config://"):])
+	case strings.HasPrefix(value, "secret://"):
+		return "", fmt.Errorf("secret:// references are no longer supported; use raw://mount/path or config://key")
+	default:
 		return value, nil
 	}
-	inner := strings.TrimPrefix(value, "secret://")
-	switch {
-	case strings.HasPrefix(inner, "raw://"):
-		// raw://mount/path — read via the rawfs mount table.
-		path := strings.TrimPrefix(inner, "raw://")
-		parts := strings.SplitN(path, "/", 2)
-		if len(parts) != 2 {
-			return "", fmt.Errorf("secret raw ref %q: expected mount/path", inner)
-		}
-		fs, ok := r.rh.MountFS(parts[0])
-		if !ok {
-			return "", fmt.Errorf("secret raw ref %q: mount %q not found", inner, parts[0])
-		}
-		rc, _, err := fs.Open(parts[1])
-		if err != nil {
-			return "", fmt.Errorf("secret raw ref %q: open: %w", inner, err)
-		}
-		defer rc.Close()
-		buf := make([]byte, 0, 256)
-		chunk := make([]byte, 256)
-		for {
-			n, err := rc.Read(chunk)
-			if n > 0 {
-				buf = append(buf, chunk[:n]...)
-			}
-			if err != nil {
-				break
-			}
-			if len(buf) > 64*1024 {
-				return "", fmt.Errorf("secret raw ref %q: value too large", inner)
-			}
-		}
-		return strings.TrimSpace(string(buf)), nil
-	default:
-		// Future: config://, vault://. For MVP, treat unknown inner
-		// scheme as plain literal so operators can paste a token
-		// after "secret://" if they really want to (cheap fallback,
-		// not recommended).
-		return inner, nil
+}
+
+func (r *registrySecretResolver) resolveRaw(path string) (string, error) {
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("raw ref %q: expected mount/path", path)
 	}
+	if r == nil || r.rh == nil {
+		return "", fmt.Errorf("raw ref %q: raw mount resolver not available", path)
+	}
+	fs, ok := r.rh.MountFS(parts[0])
+	if !ok {
+		return "", fmt.Errorf("raw ref %q: mount %q not found", path, parts[0])
+	}
+	rc, _, err := fs.Open(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("raw ref %q: open: %w", path, err)
+	}
+	defer rc.Close()
+	buf, err := io.ReadAll(io.LimitReader(rc, 64*1024+1))
+	if err != nil {
+		return "", fmt.Errorf("raw ref %q: read: %w", path, err)
+	}
+	if len(buf) > 64*1024 {
+		return "", fmt.Errorf("raw ref %q: value too large", path)
+	}
+	return strings.TrimSpace(string(buf)), nil
+}
+
+func (r *registrySecretResolver) resolveConfig(ctx context.Context, key string) (string, error) {
+	if key == "" {
+		return "", fmt.Errorf("config ref: key is empty")
+	}
+	if r == nil || r.svc == nil {
+		return "", fmt.Errorf("config ref %q: config resolver not available", key)
+	}
+	file, err := r.svc.File(ctx, key, 0)
+	if err != nil {
+		return "", fmt.Errorf("config ref %q: read: %w", key, err)
+	}
+	return strings.TrimSpace(string(file.Data)), nil
 }
 
 // Ensure registrySecretResolver implements the registry interface.
@@ -242,7 +243,9 @@ func (a *api) reloadRegistry(ctx context.Context) {
 // (GET, HEAD, OPTIONS) check CapRegistryRead; write methods (POST,
 // PUT, PATCH, DELETE) check CapRegistryWrite. Per-path scope
 // patterns from the token determine whether the operation is
-// permitted on that specific path.
+// permitted on that specific path. CORS preflights with an allowed
+// repo origin short-circuit before auth so browsers can discover the
+// allowed methods/headers.
 //
 // Public/anonymous registries are intentionally not supported in
 // this MVP — per the user's decision.
@@ -271,6 +274,9 @@ func (a *api) serveRegistry(c *ada.Context) error {
 	reg, found := a.registryMgr.Lookup(ns, repo)
 	if !found {
 		return fmt.Errorf("registry %s/%s not found: %w", ns, repo, service.ErrNotFound)
+	}
+	if common.ApplyCORS(c.Response, c.Request, a.registryCORSOrigins(c.Request.Context(), ns, repo)) {
+		return nil
 	}
 
 	// Build the scope string for token validation. Mirrors the
@@ -317,6 +323,16 @@ func (a *api) serveRegistry(c *ada.Context) error {
 
 	reg.ServeHTTP(c.Response, r)
 	return nil
+}
+
+func (a *api) registryCORSOrigins(ctx context.Context, namespace, repo string) []string {
+	rs := a.svc.GetRegistrySettings(ctx)
+	ns := rs.FindNamespace(namespace)
+	r := ns.FindRepository(repo)
+	if r == nil {
+		return nil
+	}
+	return r.CORSOrigins
 }
 
 // operationFor returns the ValidateToken operation matching an HTTP
@@ -389,7 +405,86 @@ func (a *api) listRegistryNamespaces(c *ada.Context) error {
 	if rs == nil {
 		rs = &service.RegistrySettings{}
 	}
-	return c.SetStatus(http.StatusOK).SendJSON(rs)
+	includeSecrets := service.CapabilitiesFromContext(c.Request.Context()).Has(service.CapRegistryAdmin)
+	return c.SetStatus(http.StatusOK).SendJSON(registrySettingsForResponse(rs, includeSecrets))
+}
+
+const redactedRegistrySecret = "[redacted]"
+
+func registrySettingsForResponse(rs *service.RegistrySettings, includeSecrets bool) *service.RegistrySettings {
+	if rs == nil {
+		return &service.RegistrySettings{}
+	}
+	out := &service.RegistrySettings{Disabled: rs.Disabled}
+	if len(rs.Namespaces) == 0 {
+		return out
+	}
+	out.Namespaces = make([]service.RegistryNamespace, len(rs.Namespaces))
+	for i, ns := range rs.Namespaces {
+		out.Namespaces[i] = service.RegistryNamespace{
+			Name:        ns.Name,
+			Description: ns.Description,
+		}
+		if len(ns.Repositories) == 0 {
+			continue
+		}
+		out.Namespaces[i].Repositories = make([]service.RegistryRepository, len(ns.Repositories))
+		for j, repo := range ns.Repositories {
+			out.Namespaces[i].Repositories[j] = registryRepositoryForResponse(repo, includeSecrets)
+		}
+	}
+	return out
+}
+
+func registryRepositoryForResponse(repo service.RegistryRepository, includeSecrets bool) service.RegistryRepository {
+	out := repo
+	out.Members = cloneStrings(repo.Members)
+	out.FloatingTags = cloneStrings(repo.FloatingTags)
+	out.CORSOrigins = cloneStrings(repo.CORSOrigins)
+	out.Policy = cloneRegistryPolicy(repo.Policy)
+	if repo.Auth != nil {
+		auth := *repo.Auth
+		if !includeSecrets {
+			redactRegistryAuth(&auth)
+		}
+		out.Auth = &auth
+	}
+	return out
+}
+
+func cloneRegistryPolicy(in *service.RegistryPolicy) *service.RegistryPolicy {
+	if in == nil {
+		return nil
+	}
+	out := &service.RegistryPolicy{
+		ImmutableTags: cloneStrings(in.ImmutableTags),
+	}
+	if in.Retention != nil {
+		ret := *in.Retention
+		out.Retention = &ret
+	}
+	return out
+}
+
+func cloneStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
+}
+
+func redactRegistryAuth(auth *service.RegistryUpstreamAuth) {
+	if auth.Password != "" {
+		auth.Password = redactedRegistrySecret
+	}
+	if auth.Token != "" {
+		auth.Token = redactedRegistrySecret
+	}
+	if auth.Value != "" {
+		auth.Value = redactedRegistrySecret
+	}
 }
 
 // putRegistrySettings replaces the entire registry tree. The whole-
@@ -551,10 +646,32 @@ func repoChanged(a, b service.RegistryRepository) bool {
 			return true
 		}
 	}
+	if !registryPolicyEqual(a.Policy, b.Policy) {
+		return true
+	}
 	// Skip Auth — secret payload is sealed downstream and we don't
 	// want to log "updated" every time the seal layer rewrites the
 	// sensitive-payload blob with a fresh IV.
 	return false
+}
+
+func registryPolicyEqual(a, b *service.RegistryPolicy) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if len(a.ImmutableTags) != len(b.ImmutableTags) {
+		return false
+	}
+	for i := range a.ImmutableTags {
+		if a.ImmutableTags[i] != b.ImmutableTags[i] {
+			return false
+		}
+	}
+	if a.Retention == nil || b.Retention == nil {
+		return a.Retention == nil && b.Retention == nil
+	}
+	return a.Retention.GCMinAgeSeconds == b.Retention.GCMinAgeSeconds &&
+		a.Retention.AbandonedUploadMaxAgeSeconds == b.Retention.AbandonedUploadMaxAgeSeconds
 }
 
 // listRegistryRepos returns a flat list of every registry the
@@ -615,7 +732,7 @@ type npmPackageEntry struct {
 //
 //   - manifest_size: bytes of the manifest JSON itself
 //   - image_size:    sum of layer sizes (zero for OCI artifacts
-//                    whose layers are not classic image layers)
+//     whose layers are not classic image layers)
 //
 // Old clients that read the `size` field will see it absent —
 // they need to choose explicitly which value they want. This was
@@ -676,13 +793,13 @@ func (a *api) runRegistryUpstreamProbe(c *ada.Context) error {
 //
 //	{"min_age_seconds": 3600, "abandoned_upload_max_age_seconds": 86400}
 //
-// MinAge of 3600 (1h) is recommended in production; tests use 0.
-// AbandonedUploadMaxAge defaults to 24h when omitted; pass 0 to
-// disable the upload-tmp prune entirely. The estimate endpoint
-// (GET .../gc/estimate) accepts the same fields as query params.
+// Omitted fields use the repository policy defaults. Pass 0 to
+// disable the corresponding grace/prune window for one request. The
+// estimate endpoint (GET .../gc/estimate) accepts the same fields as
+// query params.
 type gcRunRequest struct {
-	MinAgeSeconds               int64 `json:"min_age_seconds"`
-	AbandonedUploadMaxAgeSeconds int64 `json:"abandoned_upload_max_age_seconds"`
+	MinAgeSeconds                *int64 `json:"min_age_seconds"`
+	AbandonedUploadMaxAgeSeconds *int64 `json:"abandoned_upload_max_age_seconds"`
 }
 
 // getRegistryStats returns a snapshot of on-disk counts for one
@@ -767,16 +884,20 @@ func (a *api) runDockerGC(c *ada.Context) error {
 		return fmt.Errorf("GC requires a local Docker registry (got %s): %w", reg.Kind(), service.ErrBadRequest)
 	}
 
-	// Body is optional; defaults are MinAge=3600, AbandonedUploadMaxAge=86400.
-	req := gcRunRequest{MinAgeSeconds: 3600, AbandonedUploadMaxAgeSeconds: 86400}
+	// Body is optional; omitted fields use repo policy defaults.
+	opt := local.DefaultGCOptions()
+	req := gcRunRequest{}
 	if c.Request.ContentLength > 0 {
 		_ = json.NewDecoder(c.Request.Body).Decode(&req)
 	}
+	if req.MinAgeSeconds != nil {
+		opt.MinAge = *req.MinAgeSeconds
+	}
+	if req.AbandonedUploadMaxAgeSeconds != nil {
+		opt.AbandonedUploadMaxAge = *req.AbandonedUploadMaxAgeSeconds
+	}
 
-	stats, err := local.GarbageCollect(c.Request.Context(), docker.GCOptions{
-		MinAge:                req.MinAgeSeconds,
-		AbandonedUploadMaxAge: req.AbandonedUploadMaxAgeSeconds,
-	})
+	stats, err := local.GarbageCollect(c.Request.Context(), opt)
 	if err != nil {
 		return fmt.Errorf("gc: %w", err)
 	}
@@ -804,11 +925,8 @@ func (a *api) estimateDockerGC(c *ada.Context) error {
 		return fmt.Errorf("GC estimate requires a local Docker registry (got %s): %w", reg.Kind(), service.ErrBadRequest)
 	}
 
-	opt := docker.GCOptions{
-		MinAge:                3600,
-		AbandonedUploadMaxAge: 86400,
-		DryRun:                true,
-	}
+	opt := local.DefaultGCOptions()
+	opt.DryRun = true
 	q := c.Request.URL.Query()
 	if v := q.Get("min_age_seconds"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
@@ -884,6 +1002,22 @@ type helmChartEntry struct {
 	Versions []string `json:"versions"`
 }
 
+type mavenArtifactEntry struct {
+	GroupID    string   `json:"group_id"`
+	ArtifactID string   `json:"artifact_id"`
+	Versions   []string `json:"versions"`
+}
+
+type pypiPackageEntry struct {
+	Name     string   `json:"name"`
+	Versions []string `json:"versions"`
+}
+
+type cargoCrateEntry struct {
+	Name     string   `json:"name"`
+	Versions []string `json:"versions"`
+}
+
 // listRegistryHelmCharts returns the chart/version tree for a
 // Helm registry repo. URL: GET /api/v1/registries/helm/{ns}/{repo}/charts.
 func (a *api) listRegistryHelmCharts(c *ada.Context) error {
@@ -903,6 +1037,68 @@ func (a *api) listRegistryHelmCharts(c *ada.Context) error {
 	for _, name := range charts {
 		versions, _ := store.ListVersions(name)
 		out = append(out, helmChartEntry{Name: name, Versions: versions})
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(out)
+}
+
+func (a *api) listRegistryMavenArtifacts(c *ada.Context) error {
+	reg, _, _, err := a.resolveRegistry(c, service.RegistryTypeMaven)
+	if err != nil {
+		return err
+	}
+	store, ok := storeFromRegistry[maven.Store](reg)
+	if !ok {
+		return c.SetStatus(http.StatusOK).SendJSON([]mavenArtifactEntry{})
+	}
+	artifacts, err := store.ListArtifacts()
+	if err != nil {
+		return fmt.Errorf("list maven artifacts: %w", err)
+	}
+	out := make([]mavenArtifactEntry, 0, len(artifacts))
+	for _, a := range artifacts {
+		out = append(out, mavenArtifactEntry{GroupID: a.GroupID, ArtifactID: a.ArtifactID, Versions: a.Versions})
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(out)
+}
+
+func (a *api) listRegistryPyPIPackages(c *ada.Context) error {
+	reg, _, _, err := a.resolveRegistry(c, service.RegistryTypePyPI)
+	if err != nil {
+		return err
+	}
+	store, ok := storeFromRegistry[pypi.Store](reg)
+	if !ok {
+		return c.SetStatus(http.StatusOK).SendJSON([]pypiPackageEntry{})
+	}
+	packages, err := store.ListPackages()
+	if err != nil {
+		return fmt.Errorf("list pypi packages: %w", err)
+	}
+	out := make([]pypiPackageEntry, 0, len(packages))
+	for _, name := range packages {
+		versions, _ := store.ListVersions(name)
+		out = append(out, pypiPackageEntry{Name: name, Versions: versions})
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(out)
+}
+
+func (a *api) listRegistryCargoCrates(c *ada.Context) error {
+	reg, _, _, err := a.resolveRegistry(c, service.RegistryTypeCargo)
+	if err != nil {
+		return err
+	}
+	store, ok := storeFromRegistry[cargo.Store](reg)
+	if !ok {
+		return c.SetStatus(http.StatusOK).SendJSON([]cargoCrateEntry{})
+	}
+	crates, err := store.ListCrates()
+	if err != nil {
+		return fmt.Errorf("list cargo crates: %w", err)
+	}
+	out := make([]cargoCrateEntry, 0, len(crates))
+	for _, name := range crates {
+		versions, _ := store.ListVersions(name)
+		out = append(out, cargoCrateEntry{Name: name, Versions: versions})
 	}
 	return c.SetStatus(http.StatusOK).SendJSON(out)
 }
@@ -1197,5 +1393,3 @@ func BootRegistryManager(ctx context.Context, svc *service.Service, rh *RawHandl
 	}
 	return registry.NewManager(deps)
 }
-
-

@@ -575,9 +575,10 @@ export interface RegistryNamespace {
 export interface RegistryRepository {
   name: string;
   description?: string;
-  type: 'go' | 'npm' | 'docker' | 'helm';
+  type: 'go' | 'npm' | 'docker' | 'helm' | 'maven' | 'pypi' | 'cargo';
   kind: 'local' | 'remote' | 'virtual';
-  // Local fields
+  // Local fields; remote repositories also use mount/base_path for
+  // pull-through cache storage.
   mount?: string;
   base_path?: string;
   allow_push?: boolean;
@@ -596,13 +597,24 @@ export interface RegistryRepository {
   // Common overrides
   cors_origins?: string[];
   max_upload_size?: number;
+  policy?: RegistryPolicy;
+}
+
+export interface RegistryPolicy {
+  immutable_tags?: string[];
+  retention?: RegistryRetentionPolicy;
+}
+
+export interface RegistryRetentionPolicy {
+  gc_min_age_seconds?: number;
+  abandoned_upload_max_age_seconds?: number;
 }
 
 // RegistryUpstreamAuth — credentials for a Remote repository's
 // upstream. Username/Password supports HTTP basic; Token supports
 // bearer auth (npm "_authToken", Docker registry token).
-// All secret-valued fields accept "secret://path" references that
-// the server resolves at runtime.
+// Secret-valued fields accept direct "raw://mount/path" and
+// "config://key" references that the server resolves at runtime.
 export interface RegistryUpstreamAuth {
   type?: 'basic' | 'bearer' | 'header';
   username?: string;

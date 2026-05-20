@@ -3,7 +3,7 @@
 // registry sharing the same storage backbone, auth model, and admin
 // UI.
 //
-// Architecture
+// # Architecture
 //
 // A pika installation carries N "namespaces" (logical tenants). Each
 // namespace owns M "repositories"; a repository has a Type (go|npm|
@@ -27,7 +27,7 @@
 //     repos are rejected — clients must address a concrete local
 //     repo to publish.
 //
-// Routing
+// # Routing
 //
 // All registry traffic lives under /registries/{namespace}/{repo}.
 // The path past that prefix is type-specific (Go: @v/list, NPM:
@@ -35,7 +35,7 @@
 // and hot-reloads the routing table whenever Settings.Registry
 // changes (see internal/server/api postSettings reload path).
 //
-// Auth
+// # Auth
 //
 // Every protected route gates on a registry capability (read/write/
 // delete/admin). Token authentication is handled per-protocol by the
@@ -71,7 +71,7 @@ type Registry interface {
 	// RegistryRepository row that produced this Registry.
 	Namespace() string
 	Name() string
-	// Type is "go" | "npm" | "docker".
+	// Type is "go" | "npm" | "docker" | "helm".
 	Type() string
 	// Kind is "local" | "remote" | "virtual".
 	Kind() string
@@ -130,9 +130,10 @@ type Deps struct {
 	// own narrow accessor below.
 	Svc *service.Service
 
-	// Resolver resolves a "secret://..." reference to its plaintext
-	// value. Used by remote repository auth (Password/Token fields)
-	// so upstream credentials never live in plaintext in Settings.
+	// Resolver resolves raw:// and config:// references to plaintext
+	// values. Used by remote repository auth (Password/Token fields)
+	// so upstream credentials can live outside the registry settings
+	// tree.
 	// Implementations should treat a nil Resolver as "no references
 	// supported"; values without a scheme prefix are returned as-is.
 	Resolver SecretResolver
@@ -163,10 +164,10 @@ type Deps struct {
 	Emitter events.Emitter
 }
 
-// SecretResolver resolves a value that may carry a "secret://" prefix
-// to its underlying plaintext. Defined as an interface (rather than a
-// concrete pointer) so the secret package can supply the
-// implementation without registry having to import it.
+// SecretResolver resolves raw:// and config:// references to their
+// underlying plaintext. Defined as an interface (rather than a
+// concrete pointer) so the server package can supply the implementation
+// without registry having to import server internals.
 type SecretResolver interface {
 	ResolveSecret(ctx context.Context, value string) (string, error)
 }
@@ -220,8 +221,8 @@ type CachePurger interface {
 // trade-off is comfortable; large operators can layer their own
 // Prometheus collector on top later.
 type Stats struct {
-	BlobCount   int   `json:"blob_count,omitempty"`
-	TotalBytes  int64 `json:"total_bytes,omitempty"`
+	BlobCount  int   `json:"blob_count,omitempty"`
+	TotalBytes int64 `json:"total_bytes,omitempty"`
 	// Type-specific counters. The handler unpacks them by
 	// inspecting the Registry's Type() / Kind() so the UI sees a
 	// single shape per protocol.
@@ -244,7 +245,7 @@ type StatsProvider interface {
 // PackageDetail is the response shape for per-package detail
 // queries (GET /api/v1/registries/{type}/{ns}/{repo}/packages/{name}).
 // The polymorphic payload mirrors the registry types pika supports:
-// exactly one of NPM / Go / Docker / Helm is populated per response
+// exactly one protocol-specific field is populated per response
 // based on Type. This keeps a single endpoint while preserving the
 // distinct metadata vocabulary each protocol uses.
 //
@@ -254,12 +255,15 @@ type StatsProvider interface {
 // UI doesn't need to fan out into multiple secondary requests for
 // a single package's overview screen.
 type PackageDetail struct {
-	Type   string             `json:"type"`             // "npm" | "go" | "docker" | "helm"
-	Name   string             `json:"name"`             // canonical package / module / image / chart name
-	NPM    *NPMPackageDetail  `json:"npm,omitempty"`    // populated when Type == "npm"
-	Go     *GoModuleDetail    `json:"go,omitempty"`     // populated when Type == "go"
-	Docker *DockerRepoDetail  `json:"docker,omitempty"` // populated when Type == "docker"
-	Helm   *HelmChartDetail   `json:"helm,omitempty"`   // populated when Type == "helm"
+	Type   string               `json:"type"`             // "npm" | "go" | "docker" | "helm" | "maven" | "pypi" | "cargo"
+	Name   string               `json:"name"`             // canonical package / module / image / chart name
+	NPM    *NPMPackageDetail    `json:"npm,omitempty"`    // populated when Type == "npm"
+	Go     *GoModuleDetail      `json:"go,omitempty"`     // populated when Type == "go"
+	Docker *DockerRepoDetail    `json:"docker,omitempty"` // populated when Type == "docker"
+	Helm   *HelmChartDetail     `json:"helm,omitempty"`   // populated when Type == "helm"
+	Maven  *MavenArtifactDetail `json:"maven,omitempty"`
+	PyPI   *PyPIPackageDetail   `json:"pypi,omitempty"`
+	Cargo  *CargoCrateDetail    `json:"cargo,omitempty"`
 }
 
 // NPMPackageDetail carries the rich metadata surfaced for one NPM
@@ -321,8 +325,8 @@ type GoModuleDetail struct {
 // GoVersionDetail is one row in GoModuleDetail.Versions.
 type GoVersionDetail struct {
 	Version             string `json:"version"`
-	PublishedAt         string `json:"published_at,omitempty"`  // RFC3339 from .info Time
-	Retracted           bool   `json:"retracted,omitempty"`     // parsed from go.mod retract directive
+	PublishedAt         string `json:"published_at,omitempty"` // RFC3339 from .info Time
+	Retracted           bool   `json:"retracted,omitempty"`    // parsed from go.mod retract directive
 	RetractionRationale string `json:"retraction_rationale,omitempty"`
 	GoModSize           int64  `json:"gomod_size,omitempty"` // bytes of .mod file
 	ZipSize             int64  `json:"zip_size,omitempty"`   // bytes of .zip file
@@ -340,19 +344,19 @@ type DockerRepoDetail struct {
 // detail (config digest, layer list, platform array for multi-arch
 // manifest lists).
 type DockerTagDetail struct {
-	Tag          string           `json:"tag"`
-	Digest       string           `json:"digest,omitempty"`
-	MediaType    string           `json:"media_type,omitempty"`
-	ArtifactType string           `json:"artifact_type,omitempty"`
+	Tag          string `json:"tag"`
+	Digest       string `json:"digest,omitempty"`
+	MediaType    string `json:"media_type,omitempty"`
+	ArtifactType string `json:"artifact_type,omitempty"`
 	// ManifestSize is the size of the manifest JSON document.
 	ManifestSize int64 `json:"manifest_size,omitempty"`
 	// ImageSize is the sum of layer sizes (image-on-disk size).
 	// Zero when the manifest could not be parsed (e.g. unknown
 	// artifact format) or when this entry describes a manifest
 	// list (use the per-platform entries instead).
-	ImageSize    int64           `json:"image_size,omitempty"`
-	ConfigDigest string          `json:"config_digest,omitempty"`
-	Layers       []DockerLayer   `json:"layers,omitempty"`
+	ImageSize    int64            `json:"image_size,omitempty"`
+	ConfigDigest string           `json:"config_digest,omitempty"`
+	Layers       []DockerLayer    `json:"layers,omitempty"`
 	Platforms    []DockerPlatform `json:"platforms,omitempty"` // populated for manifest lists
 }
 
@@ -377,13 +381,13 @@ type DockerPlatform struct {
 // chart. Used by the helm registry type (B3); included in the
 // shared shape so the UI can dispatch on Type uniformly.
 type HelmChartDetail struct {
-	LatestVersion string             `json:"latest_version,omitempty"`
-	Description   string             `json:"description,omitempty"`
-	Icon          string             `json:"icon,omitempty"`
-	AppVersion    string             `json:"app_version,omitempty"`
-	Keywords      []string           `json:"keywords,omitempty"`
-	Maintainers   []any              `json:"maintainers,omitempty"`
-	HasReadme     bool               `json:"has_readme,omitempty"`
+	LatestVersion string              `json:"latest_version,omitempty"`
+	Description   string              `json:"description,omitempty"`
+	Icon          string              `json:"icon,omitempty"`
+	AppVersion    string              `json:"app_version,omitempty"`
+	Keywords      []string            `json:"keywords,omitempty"`
+	Maintainers   []any               `json:"maintainers,omitempty"`
+	HasReadme     bool                `json:"has_readme,omitempty"`
 	Versions      []HelmVersionDetail `json:"versions,omitempty"`
 }
 
@@ -396,6 +400,47 @@ type HelmVersionDetail struct {
 	Digest      string   `json:"digest,omitempty"`
 	Size        int64    `json:"size,omitempty"`
 	URLs        []string `json:"urls,omitempty"`
+}
+
+// MavenArtifactDetail surfaces Maven GAV metadata derived from the
+// repository layout and cached maven-metadata.xml files.
+type MavenArtifactDetail struct {
+	GroupID       string               `json:"group_id,omitempty"`
+	ArtifactID    string               `json:"artifact_id,omitempty"`
+	LatestVersion string               `json:"latest_version,omitempty"`
+	Versions      []MavenVersionDetail `json:"versions,omitempty"`
+}
+
+type MavenVersionDetail struct {
+	Version string `json:"version"`
+	JarSize int64  `json:"jar_size,omitempty"`
+	PomSize int64  `json:"pom_size,omitempty"`
+}
+
+// PyPIPackageDetail carries package/version rows for a PEP 503
+// Simple API repository.
+type PyPIPackageDetail struct {
+	LatestVersion string              `json:"latest_version,omitempty"`
+	Versions      []PyPIVersionDetail `json:"versions,omitempty"`
+}
+
+type PyPIVersionDetail struct {
+	Version  string   `json:"version"`
+	Files    []string `json:"files,omitempty"`
+	FileSize int64    `json:"file_size,omitempty"`
+}
+
+// CargoCrateDetail carries sparse-index crate versions.
+type CargoCrateDetail struct {
+	LatestVersion string               `json:"latest_version,omitempty"`
+	Versions      []CargoVersionDetail `json:"versions,omitempty"`
+}
+
+type CargoVersionDetail struct {
+	Version string `json:"version"`
+	Yanked  bool   `json:"yanked,omitempty"`
+	CKSum   string `json:"cksum,omitempty"`
+	Size    int64  `json:"size,omitempty"`
 }
 
 // UpstreamHealth is the response shape for the operator-triggered

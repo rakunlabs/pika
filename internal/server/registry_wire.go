@@ -4,10 +4,13 @@ import (
 	"fmt"
 
 	"github.com/rakunlabs/pika/internal/registry"
+	"github.com/rakunlabs/pika/internal/registry/cargo"
 	"github.com/rakunlabs/pika/internal/registry/docker"
 	"github.com/rakunlabs/pika/internal/registry/goproxy"
 	"github.com/rakunlabs/pika/internal/registry/helm"
+	"github.com/rakunlabs/pika/internal/registry/maven"
 	"github.com/rakunlabs/pika/internal/registry/npm"
+	"github.com/rakunlabs/pika/internal/registry/pypi"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -57,6 +60,24 @@ var protocolFactories = []protocolFactory{
 		Local:   helm.NewLocalFactory(),
 		Remote:  helm.NewRemoteFactory(),
 		Virtual: func(m *registry.Manager) registry.Factory { return helm.NewVirtualFactory(m) },
+	},
+	{
+		Type:    service.RegistryTypeMaven,
+		Local:   maven.NewLocalFactory(),
+		Remote:  maven.NewRemoteFactory(),
+		Virtual: func(m *registry.Manager) registry.Factory { return maven.NewVirtualFactory(m) },
+	},
+	{
+		Type:    service.RegistryTypePyPI,
+		Local:   pypi.NewLocalFactory(),
+		Remote:  pypi.NewRemoteFactory(),
+		Virtual: func(m *registry.Manager) registry.Factory { return pypi.NewVirtualFactory(m) },
+	},
+	{
+		Type:    service.RegistryTypeCargo,
+		Local:   cargo.NewLocalFactory(),
+		Remote:  cargo.NewRemoteFactory(),
+		Virtual: func(m *registry.Manager) registry.Factory { return cargo.NewVirtualFactory(m) },
 	},
 }
 

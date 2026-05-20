@@ -101,7 +101,7 @@ type sensitivePayload struct {
 	// the secret along — index-position parallelism wouldn't
 	// survive an operator reordering the namespace list.
 	//
-	// Values that started life as "secret://path" references are
+	// Values that started life as "raw://..." or "config://..." references are
 	// left in place on the public side (extract skips them); only
 	// raw plaintext passwords / tokens / header values cross over
 	// here.
@@ -307,9 +307,9 @@ func extractSecrets(s *service.Settings) *sensitivePayload {
 
 	// Registry upstream creds. We walk every repository and pull
 	// each Auth.Password / .Token / .HeaderValue that is NOT a
-	// "secret://" reference into the sealed payload. References
-	// stay in place — they're resolved at runtime against the
-	// secret store and don't need a second layer of envelope
+	// raw:// or config:// reference into the sealed payload.
+	// References stay in place — they're resolved at runtime against
+	// their source store and don't need a second layer of envelope
 	// encryption around them.
 	extractRegistryUpstream(s, p)
 
@@ -356,15 +356,19 @@ func extractRegistryUpstream(s *service.Settings, p *sensitivePayload) {
 }
 
 // isPlaintextSecret reports whether a value is worth sealing: a
-// non-empty string that does NOT start with the "secret://" prefix.
-// The reference scheme is resolved at runtime and would survive
-// a clear-text serialisation just fine; sealing it would just
-// reduce readability without adding security.
+// non-empty string that is not a direct raw:// or config:// reference.
+// References are resolved at runtime and would survive a clear-text
+// serialisation just fine; sealing them would just reduce readability
+// without adding security.
 func isPlaintextSecret(v string) bool {
 	if v == "" {
 		return false
 	}
-	return !strings.HasPrefix(v, "secret://")
+	return !isRuntimeRef(v)
+}
+
+func isRuntimeRef(v string) bool {
+	return strings.HasPrefix(v, "raw://") || strings.HasPrefix(v, "config://")
 }
 
 // extractHookSecrets factors out the hook-type dispatch so the

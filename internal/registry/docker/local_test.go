@@ -23,6 +23,10 @@ import (
 // newDockerLocal returns a Local Registry rooted at a fresh temp
 // directory with push enabled.
 func newDockerLocal(t *testing.T, allowPush bool) *Local {
+	return newDockerLocalWithPolicy(t, allowPush, nil)
+}
+
+func newDockerLocalWithPolicy(t *testing.T, allowPush bool, policy *service.RegistryPolicy) *Local {
 	t.Helper()
 	dir := t.TempDir()
 	fs, err := localfs.New(dir)
@@ -37,7 +41,7 @@ func newDockerLocal(t *testing.T, allowPush bool) *Local {
 	}
 	repo := &service.RegistryRepository{
 		Name: "docker-local", Type: service.RegistryTypeDocker, Kind: service.RegistryKindLocal,
-		Mount: "m", BasePath: "docker", AllowPush: allowPush,
+		Mount: "m", BasePath: "docker", AllowPush: allowPush, Policy: policy,
 	}
 	r, err := NewLocalFactory()(context.Background(), deps, "default", repo)
 	if err != nil {
@@ -71,6 +75,25 @@ func TestDockerLocal_Metadata(t *testing.T) {
 	}
 	if !l.AllowPush() {
 		t.Errorf("push should be enabled")
+	}
+}
+
+func TestDockerLocal_DefaultGCOptionsFromPolicy(t *testing.T) {
+	l := newDockerLocal(t, true)
+	opt := l.DefaultGCOptions()
+	if opt.MinAge != 3600 || opt.AbandonedUploadMaxAge != 86400 {
+		t.Fatalf("defaults = %+v, want 1h/24h", opt)
+	}
+
+	l = newDockerLocalWithPolicy(t, true, &service.RegistryPolicy{
+		Retention: &service.RegistryRetentionPolicy{
+			GCMinAgeSeconds:              7200,
+			AbandonedUploadMaxAgeSeconds: 300,
+		},
+	})
+	opt = l.DefaultGCOptions()
+	if opt.MinAge != 7200 || opt.AbandonedUploadMaxAge != 300 {
+		t.Fatalf("policy defaults = %+v, want 7200/300", opt)
 	}
 }
 
@@ -290,6 +313,46 @@ func TestDockerLocal_DeleteManifest(t *testing.T) {
 		map[string]string{"Authorization": "Bearer pika_test"})
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("post-delete get: status %d", w.Code)
+	}
+}
+
+func TestDockerLocal_ImmutableTagPolicy(t *testing.T) {
+	l := newDockerLocalWithPolicy(t, true, &service.RegistryPolicy{
+		ImmutableTags: []string{"prod", "v*"},
+	})
+	name := "lib/foo"
+	manifestA := []byte(`{"schemaVersion":2,"layers":[],"config":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`)
+	manifestB := []byte(`{"schemaVersion":2,"layers":[],"config":{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}`)
+
+	w := do(l, http.MethodPut, "/v2/"+name+"/manifests/prod", bytes.NewReader(manifestA),
+		map[string]string{"Authorization": "Bearer pika_test", "Content-Type": "application/vnd.docker.distribution.manifest.v2+json"})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("initial immutable put status %d body %s", w.Code, w.Body.String())
+	}
+	digestA := w.Header().Get("Docker-Content-Digest")
+
+	w = do(l, http.MethodPut, "/v2/"+name+"/manifests/prod", bytes.NewReader(manifestB),
+		map[string]string{"Authorization": "Bearer pika_test", "Content-Type": "application/vnd.docker.distribution.manifest.v2+json"})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("immutable overwrite status %d body %s", w.Code, w.Body.String())
+	}
+
+	w = do(l, http.MethodDelete, "/v2/"+name+"/manifests/prod", nil,
+		map[string]string{"Authorization": "Bearer pika_test"})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("immutable tag delete status %d body %s", w.Code, w.Body.String())
+	}
+
+	w = do(l, http.MethodDelete, "/v2/"+name+"/manifests/"+digestA, nil,
+		map[string]string{"Authorization": "Bearer pika_test"})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("immutable digest delete status %d body %s", w.Code, w.Body.String())
+	}
+
+	w = do(l, http.MethodPut, "/v2/"+name+"/manifests/v1.0.0", bytes.NewReader(manifestB),
+		map[string]string{"Authorization": "Bearer pika_test", "Content-Type": "application/vnd.docker.distribution.manifest.v2+json"})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("wildcard immutable initial put status %d body %s", w.Code, w.Body.String())
 	}
 }
 

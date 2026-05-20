@@ -63,8 +63,6 @@ type api struct {
 	registryMgr *registry.Manager
 }
 
-
-
 type response struct {
 	Message string `json:"message,omitempty"`
 }
@@ -107,6 +105,7 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// to the per-repo Registry.
 	mData.GET("/registries/*", mData.Wrap(api.serveRegistry))
 	mData.HEAD("/registries/*", mData.Wrap(api.serveRegistry))
+	mData.OPTIONS("/registries/*", mData.Wrap(api.serveRegistry))
 	mData.POST("/registries/*", mData.Wrap(api.serveRegistry))
 	mData.PUT("/registries/*", mData.Wrap(api.serveRegistry))
 	mData.PATCH("/registries/*", mData.Wrap(api.serveRegistry))
@@ -289,6 +288,12 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.GET("/api/v1/registries/docker/{ns}/{repo}/repos", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryDockerRepos)))
 	// Per-repo chart browser for Helm registries.
 	m.GET("/api/v1/registries/helm/{ns}/{repo}/charts", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryHelmCharts)))
+	// Per-repo artifact browser for Maven registries.
+	m.GET("/api/v1/registries/maven/{ns}/{repo}/artifacts", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryMavenArtifacts)))
+	// Per-repo package browser for PyPI registries.
+	m.GET("/api/v1/registries/pypi/{ns}/{repo}/packages", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryPyPIPackages)))
+	// Per-repo crate browser for Cargo registries.
+	m.GET("/api/v1/registries/cargo/{ns}/{repo}/crates", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryCargoCrates)))
 	// Docker GC trigger (mark-and-sweep). Admin only because it
 	// deletes content from the underlying blob store.
 	m.POST("/api/v1/registries/docker/{ns}/{repo}/gc", m.Wrap(api.withPerm(service.CapRegistryAdmin, api.runDockerGC)))
@@ -556,6 +561,10 @@ func (a *api) postSettings(c *ada.Context) error {
 	if err := c.Bind(&patchSettings); err != nil {
 		return errors.Join(err, service.ErrBadRequest)
 	}
+	var prevRegistry *service.RegistrySettings
+	if patchSettings.Registry != nil {
+		prevRegistry = a.svc.GetRegistrySettings(c.Request.Context())
+	}
 
 	if err := a.svc.PatchSettings(c.Request.Context(), &patchSettings); err != nil {
 		return err
@@ -587,6 +596,7 @@ func (a *api) postSettings(c *ada.Context) error {
 	// handles drain naturally.
 	if patchSettings.Registry != nil {
 		a.reloadRegistry(c.Request.Context())
+		a.emitRegistryDiff(prevRegistry, a.svc.GetRegistrySettings(c.Request.Context()))
 	}
 
 	// If serve settings were updated, reload the corresponding servers

@@ -17,7 +17,7 @@
 
 // ─── Registry type / kind discriminators ───
 
-export type RegistryType = 'go' | 'npm' | 'docker' | 'helm';
+export type RegistryType = 'go' | 'npm' | 'docker' | 'helm' | 'maven' | 'pypi' | 'cargo';
 export type RegistryKind = 'local' | 'remote' | 'virtual';
 
 // ─── List shapes: settings tree ───
@@ -33,13 +33,23 @@ export type UpstreamAuth = {
   value?: string;
 };
 
+export type RegistryRetentionPolicy = {
+  gc_min_age_seconds?: number;
+  abandoned_upload_max_age_seconds?: number;
+};
+
+export type RegistryPolicy = {
+  immutable_tags?: string[];
+  retention?: RegistryRetentionPolicy;
+};
+
 /** Repository mirrors service.RegistryRepository on the wire. */
 export type Repository = {
   name: string;
   description?: string;
   type: RegistryType;
   kind: RegistryKind;
-  // Local
+  // Local; remote repositories also use mount/base_path for cache storage.
   mount?: string;
   base_path?: string;
   allow_push?: boolean;
@@ -55,6 +65,7 @@ export type Repository = {
   // Common per-repo overrides — exposed in UI from B6 onwards.
   cors_origins?: string[];
   max_upload_size?: number; // bytes (0 = type default)
+  policy?: RegistryPolicy;
 };
 
 /** Namespace mirrors service.RegistryNamespace on the wire. */
@@ -81,6 +92,22 @@ export type PackageEntry = {
 
 /** HelmChartListEntry mirrors api.helmChartEntry. */
 export type HelmChartListEntry = {
+  name: string;
+  versions: string[];
+};
+
+export type MavenArtifactEntry = {
+  group_id: string;
+  artifact_id: string;
+  versions: string[];
+};
+
+export type PyPIPackageEntry = {
+  name: string;
+  versions: string[];
+};
+
+export type CargoCrateEntry = {
   name: string;
   versions: string[];
 };
@@ -223,6 +250,42 @@ export type HelmChartDetail = {
   versions?: HelmVersionDetail[];
 };
 
+export type MavenVersionDetail = {
+  version: string;
+  jar_size?: number;
+  pom_size?: number;
+};
+
+export type MavenArtifactDetail = {
+  group_id?: string;
+  artifact_id?: string;
+  latest_version?: string;
+  versions?: MavenVersionDetail[];
+};
+
+export type PyPIVersionDetail = {
+  version: string;
+  files?: string[];
+  file_size?: number;
+};
+
+export type PyPIPackageDetail = {
+  latest_version?: string;
+  versions?: PyPIVersionDetail[];
+};
+
+export type CargoVersionDetail = {
+  version: string;
+  yanked?: boolean;
+  cksum?: string;
+  size?: number;
+};
+
+export type CargoCrateDetail = {
+  latest_version?: string;
+  versions?: CargoVersionDetail[];
+};
+
 export type PackageDetail = {
   type: RegistryType;
   name: string;
@@ -230,6 +293,9 @@ export type PackageDetail = {
   go?: GoModuleDetail;
   docker?: DockerRepoDetail;
   helm?: HelmChartDetail;
+  maven?: MavenArtifactDetail;
+  pypi?: PyPIPackageDetail;
+  cargo?: CargoCrateDetail;
 };
 
 // Runtime helpers used to live here; they moved to lib/format.ts

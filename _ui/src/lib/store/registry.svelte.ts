@@ -17,11 +17,14 @@
 import { basePath } from '@/lib/basepath';
 import type {
   DockerEntry,
+  CargoCrateEntry,
   HelmChartListEntry,
+  MavenArtifactEntry,
   ModuleEntry,
   Namespace,
   PackageDetail,
   PackageEntry,
+  PyPIPackageEntry,
   ProbeResult,
   RegistryStats,
   RegistryType,
@@ -105,6 +108,15 @@ export async function listDockerRepos(ns: string, repo: string): Promise<DockerE
 export async function listHelmCharts(ns: string, repo: string): Promise<HelmChartListEntry[]> {
   return getJSON(`${basePath}/api/v1/registries/helm/${enc(ns)}/${enc(repo)}/charts`);
 }
+export async function listMavenArtifacts(ns: string, repo: string): Promise<MavenArtifactEntry[]> {
+  return getJSON(`${basePath}/api/v1/registries/maven/${enc(ns)}/${enc(repo)}/artifacts`);
+}
+export async function listPyPIPackages(ns: string, repo: string): Promise<PyPIPackageEntry[]> {
+  return getJSON(`${basePath}/api/v1/registries/pypi/${enc(ns)}/${enc(repo)}/packages`);
+}
+export async function listCargoCrates(ns: string, repo: string): Promise<CargoCrateEntry[]> {
+  return getJSON(`${basePath}/api/v1/registries/cargo/${enc(ns)}/${enc(repo)}/crates`);
+}
 
 /** GET /api/v1/registries/{type}/{ns}/{repo}/stats. */
 export async function getStats(type: RegistryType, ns: string, repo: string): Promise<RegistryStats> {
@@ -187,15 +199,19 @@ export interface GCStats {
 export async function dockerGC(
   ns: string,
   repo: string,
-  minAgeSeconds = 3600,
-  abandonedUploadMaxAgeSeconds = 86400,
+  minAgeSeconds?: number,
+  abandonedUploadMaxAgeSeconds?: number,
 ): Promise<GCStats> {
+  const body: Record<string, number> = {};
+  if (minAgeSeconds !== undefined) {
+    body.min_age_seconds = minAgeSeconds;
+  }
+  if (abandonedUploadMaxAgeSeconds !== undefined) {
+    body.abandoned_upload_max_age_seconds = abandonedUploadMaxAgeSeconds;
+  }
   return postJSON(
     `${basePath}/api/v1/registries/docker/${enc(ns)}/${enc(repo)}/gc`,
-    {
-      min_age_seconds: minAgeSeconds,
-      abandoned_upload_max_age_seconds: abandonedUploadMaxAgeSeconds,
-    },
+    Object.keys(body).length > 0 ? body : undefined,
   );
 }
 
