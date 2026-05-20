@@ -1,10 +1,62 @@
 package api
 
 import (
+	"context"
 	"testing"
 
+	"github.com/rakunlabs/ada"
 	"github.com/rakunlabs/pika/internal/service"
+	bwstore "github.com/rakunlabs/pika/internal/storage/bw"
 )
+
+func TestHandleRegistersRoutesWithoutGreedyPanic(t *testing.T) {
+	store, err := bwstore.New(t.Context(), &bwstore.Config{InMemory: true})
+	if err != nil {
+		t.Fatalf("bw.New: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	rh := NewRawHandler(nil, ctx, nil)
+
+	if err := Handle(ada.NewMux(), ada.NewMux(), ada.NewMux(), service.New(store), Info{}, nil, nil, rh, nil, nil); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+}
+
+func TestParseGoModuleGoModPath(t *testing.T) {
+	tests := []struct {
+		path        string
+		wantName    string
+		wantVersion string
+		wantOK      bool
+	}{
+		{
+			path:        "example.com/acme/foo/versions/v1.2.3/gomod",
+			wantName:    "example.com/acme/foo",
+			wantVersion: "v1.2.3",
+			wantOK:      true,
+		},
+		{
+			path:        "/example.com/acme/versions/lib/versions/v0.1.0/gomod",
+			wantName:    "example.com/acme/versions/lib",
+			wantVersion: "v0.1.0",
+			wantOK:      true,
+		},
+		{path: "example.com/mod/versions/v1.0.0/gomod/extra"},
+		{path: "example.com/mod/versions//gomod"},
+		{path: "example.com/mod/gomod"},
+	}
+
+	for _, tt := range tests {
+		gotName, gotVersion, gotOK := parseGoModuleGoModPath(tt.path)
+		if gotName != tt.wantName || gotVersion != tt.wantVersion || gotOK != tt.wantOK {
+			t.Fatalf("parseGoModuleGoModPath(%q) = (%q, %q, %v), want (%q, %q, %v)",
+				tt.path, gotName, gotVersion, gotOK, tt.wantName, tt.wantVersion, tt.wantOK)
+		}
+	}
+}
 
 func TestRegistrySettingsForResponseRedactsSecretsForReadOnly(t *testing.T) {
 	rs := &service.RegistrySettings{Namespaces: []service.RegistryNamespace{{

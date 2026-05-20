@@ -1265,7 +1265,11 @@ func latestTarballFilename(store *npm.Store, name string) string {
 }
 
 // getGoModuleGoMod returns the raw go.mod bytes for a single Go
-// module version. URL: GET /api/v1/registries/go/{ns}/{repo}/modules/{name...}/versions/{version}/gomod.
+// module version. Public URL shape:
+// GET /api/v1/registries/go/{ns}/{repo}/modules/{name...}/versions/{version}/gomod.
+//
+// Ada only allows greedy parameters as the trailing segment, so the
+// route captures the tail after /modules/ and this handler splits it.
 //
 // Gated on CapRegistryRead.
 func (a *api) getGoModuleGoMod(c *ada.Context) error {
@@ -1273,9 +1277,8 @@ func (a *api) getGoModuleGoMod(c *ada.Context) error {
 	if err != nil {
 		return err
 	}
-	name := strings.TrimPrefix(c.Request.PathValue("name"), "/")
-	version := c.Request.PathValue("version")
-	if name == "" || version == "" {
+	name, version, ok := parseGoModuleGoModPath(c.Request.PathValue("path"))
+	if !ok {
 		return fmt.Errorf("name and version are required: %w", service.ErrBadRequest)
 	}
 	store, ok := storeFromRegistry[goproxy.Store](reg)
@@ -1290,6 +1293,24 @@ func (a *api) getGoModuleGoMod(c *ada.Context) error {
 	c.Response.WriteHeader(http.StatusOK)
 	_, _ = c.Response.Write(body)
 	return nil
+}
+
+func parseGoModuleGoModPath(path string) (name string, version string, ok bool) {
+	path = strings.TrimPrefix(path, "/")
+	path, ok = strings.CutSuffix(path, "/gomod")
+	if !ok {
+		return "", "", false
+	}
+	i := strings.LastIndex(path, "/versions/")
+	if i < 0 {
+		return "", "", false
+	}
+	name = path[:i]
+	version = path[i+len("/versions/"):]
+	if name == "" || version == "" || strings.Contains(version, "/") {
+		return "", "", false
+	}
+	return name, version, true
 }
 
 // listRegistryGoModules returns the module/version tree for a Go

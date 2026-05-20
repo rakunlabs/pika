@@ -321,7 +321,7 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.GET("/api/v1/registries/npm/{ns}/{repo}/packages/{name}/readme", m.Wrap(api.withPerm(service.CapRegistryRead, api.getNPMPackageReadme)))
 	// Go-only: raw go.mod bytes for one module version. Used by
 	// the detail UI's go.mod viewer.
-	m.GET("/api/v1/registries/go/{ns}/{repo}/modules/{name...}/versions/{version}/gomod", m.Wrap(api.withPerm(service.CapRegistryRead, api.getGoModuleGoMod)))
+	m.GET("/api/v1/registries/go/{ns}/{repo}/modules/{path...}", m.Wrap(api.withPerm(service.CapRegistryRead, api.getGoModuleGoMod)))
 	// Remote-only: connectivity probe against the configured
 	// upstream. Admin-gated because the probe uses the registry's
 	// real auth credentials.
