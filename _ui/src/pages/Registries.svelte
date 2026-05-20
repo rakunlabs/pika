@@ -250,22 +250,51 @@
   // GC for Docker Local repos. Confirms with the user, runs the
   // server-side sweep, surfaces the resulting stats via toast,
   // then reloads the image list so freed-up entries disappear.
+  //
+  // Pika never runs GC on a schedule: cleanup is operator-driven
+  // here, with a side channel of cheap delete-time cascading in
+  // the registry head. The estimate panel below this function
+  // surfaces the reclaimable size BEFORE committing to a run.
   let gcRunning = $state(false);
+  let gcEstimate = $state<registryAPI.GCStats | null>(null);
+  let gcEstimateLoading = $state(false);
+  let gcEstimateRepoKey = $state<string | null>(null); // "ns/repo" the estimate belongs to
+
+  // refreshGCEstimate runs a dry-run mark-and-sweep and caches the
+  // result for the currently-viewed Docker Local repo. Cheap to
+  // re-trigger; we DO NOT auto-refresh on every selection because
+  // the dry-run walk is still O(blob count).
+  async function refreshGCEstimate(ns: string, repoName: string) {
+    gcEstimate = null;
+    gcEstimateLoading = true;
+    gcEstimateRepoKey = `${ns}/${repoName}`;
+    try {
+      gcEstimate = await registryAPI.dockerGCEstimate(ns, repoName);
+    } catch (err) {
+      addToast(`Garbage estimate failed: ${err}`, 'alert');
+    } finally {
+      gcEstimateLoading = false;
+    }
+  }
+
   async function runDockerGC(ns: string, repoName: string) {
     if (!window.confirm(`Run garbage collection on ${ns}/${repoName}?\n\nThis deletes unreferenced blobs and manifests. Anything pushed in the last hour is protected by the grace window.`)) {
       return;
     }
     gcRunning = true;
     try {
-      const stats = await registryAPI.dockerGC(ns, repoName) as {
-        SweptBlobs?: number;
-        SweptManifests?: number;
-        MarkedBlobs?: number;
-      };
-      const msg = `Swept ${stats.SweptBlobs} blob${stats.SweptBlobs === 1 ? '' : 's'}, ` +
-                  `${stats.SweptManifests} manifest${stats.SweptManifests === 1 ? '' : 's'}. ` +
-                  `Kept ${stats.MarkedBlobs} marked.`;
+      const stats = await registryAPI.dockerGC(ns, repoName);
+      const totalBytes = stats.swept_bytes + stats.abandoned_uploads_bytes;
+      const msg = `Swept ${stats.swept_blobs} blob${stats.swept_blobs === 1 ? '' : 's'}, ` +
+                  `${stats.swept_manifests} manifest${stats.swept_manifests === 1 ? '' : 's'}, ` +
+                  `${stats.abandoned_uploads_removed} stale upload${stats.abandoned_uploads_removed === 1 ? '' : 's'} ` +
+                  `(${formatBytes(totalBytes)} reclaimed).`;
       addToast(msg, 'success');
+      // The estimate is now stale — refresh in the background so
+      // the panel doesn't keep displaying yesterday's numbers.
+      if (gcEstimateRepoKey === `${ns}/${repoName}`) {
+        await refreshGCEstimate(ns, repoName);
+      }
       if (selectedRepo && selectedNS) {
         await loadEntries(selectedNS, selectedRepo);
       }
@@ -972,20 +1001,17 @@
                   Refresh cache
                 </button>
               {/if}
+              <!--
+                Docker Local cleanup moved out of the top-bar action
+                row and into the dedicated "Garbage" card below the
+                Statistics panel. The card surfaces an estimate
+                first so the operator sees what they're about to
+                delete; this avoids a click that does nothing on a
+                clean registry.
+              -->
               {#if repo.type === 'docker' && repo.kind === 'local' && canAdmin}
-                <button
-                  class="ml-auto flex items-center gap-1 text-xs px-2 py-1 rounded border border-warm-300 dark:border-warm-700 hover:bg-warm-100 dark:hover:bg-warm-800 disabled:opacity-50"
-                  disabled={gcRunning}
-                  onclick={() => runDockerGC(selectedNS ?? '', repo.name)}
-                  title="Mark-and-sweep garbage collect — deletes unreferenced blobs and manifests"
-                >
-                  {#if gcRunning}
-                    <Loader2 size={12} class="animate-spin" />
-                  {:else}
-                    <Trash2 size={12} />
-                  {/if}
-                  Garbage collect
-                </button>
+                <!-- intentional spacer: ml-auto on the next sibling needs the row -->
+                <span class="ml-auto"></span>
               {/if}
             </div>
 
@@ -1140,6 +1166,91 @@
                       <div class="font-mono">{humanBytes(stats.total_bytes ?? 0)}</div>
                     </div>
                   </div>
+                {/if}
+              </div>
+            {/if}
+
+            <!-- Garbage card. Docker Local only — the cheap
+                 delete-time cascade in the registry handler
+                 already drops manifests + sidecars + orphan
+                 referrer indexes anytime an image is deleted by
+                 digest. Layer / config blobs are shareable, so
+                 those wait for an explicit cleanup pass.
+                 Operators trigger that pass here; the estimate
+                 row tells them whether it's worth the click. -->
+            {#if repo.type === 'docker' && repo.kind === 'local' && canAdmin}
+              <div class="mb-4 border border-warm-200 dark:border-warm-800 rounded-md bg-white dark:bg-warm-900 p-3">
+                <div class="flex items-center justify-between mb-2">
+                  <div class="text-[10px] uppercase tracking-wide text-warm-500">Garbage</div>
+                  <div class="flex items-center gap-2">
+                    <button
+                      class="text-[10px] flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-warm-100 dark:hover:bg-warm-800 disabled:opacity-50"
+                      title="Dry-run mark-and-sweep: estimate reclaimable garbage without deleting anything"
+                      disabled={gcEstimateLoading || gcRunning}
+                      onclick={() => selectedNS && refreshGCEstimate(selectedNS, repo.name)}
+                    >
+                      {#if gcEstimateLoading}
+                        <Loader2 size={10} class="animate-spin" />
+                      {:else}
+                        <RotateCw size={10} />
+                      {/if}
+                      estimate
+                    </button>
+                    <button
+                      class="text-[10px] flex items-center gap-1 px-1.5 py-0.5 rounded border border-warm-300 dark:border-warm-700 hover:bg-warm-100 dark:hover:bg-warm-800 disabled:opacity-50"
+                      title="Run cleanup now: deletes unreferenced blobs, manifests and abandoned upload tmp files. Anything modified in the last hour is protected."
+                      disabled={gcRunning || gcEstimateLoading}
+                      onclick={() => runDockerGC(selectedNS ?? '', repo.name)}
+                    >
+                      {#if gcRunning}
+                        <Loader2 size={10} class="animate-spin" />
+                      {:else}
+                        <Trash2 size={10} />
+                      {/if}
+                      clean up
+                    </button>
+                  </div>
+                </div>
+                {#if gcEstimateLoading && !gcEstimate}
+                  <div class="text-xs text-warm-500">Calculating…</div>
+                {:else if !gcEstimate || gcEstimateRepoKey !== `${selectedNS}/${repo.name}`}
+                  <div class="text-xs text-warm-500">
+                    Click <span class="font-medium">estimate</span> to see how much storage can be reclaimed.
+                  </div>
+                {:else}
+                  {@const totalReclaimable = gcEstimate.swept_bytes + gcEstimate.abandoned_uploads_bytes}
+                  {@const nothingToDo = gcEstimate.swept_blobs === 0
+                    && gcEstimate.swept_manifests === 0
+                    && gcEstimate.abandoned_uploads_removed === 0}
+                  {#if nothingToDo}
+                    <div class="text-xs text-warm-500">
+                      Nothing reclaimable — registry is clean.
+                    </div>
+                  {:else}
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Reclaimable</div>
+                        <div class="font-mono">{humanBytes(totalReclaimable)}</div>
+                      </div>
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Blobs</div>
+                        <div class="font-mono">{gcEstimate.swept_blobs}</div>
+                      </div>
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Manifests</div>
+                        <div class="font-mono">{gcEstimate.swept_manifests}</div>
+                      </div>
+                      <div>
+                        <div class="text-[10px] uppercase text-warm-500">Stale uploads</div>
+                        <div class="font-mono">{gcEstimate.abandoned_uploads_removed}</div>
+                      </div>
+                    </div>
+                    {#if gcEstimate.skipped_young > 0}
+                      <div class="mt-2 text-[10px] text-warm-500">
+                        {gcEstimate.skipped_young} item{gcEstimate.skipped_young === 1 ? '' : 's'} protected by grace window (modified &lt; 1h ago).
+                      </div>
+                    {/if}
+                  {/if}
                 {/if}
               </div>
             {/if}

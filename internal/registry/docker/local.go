@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rakunlabs/pika/internal/hook"
@@ -38,6 +39,21 @@ type Local struct {
 
 	uploads *uploadSessions
 	emitter events.Emitter
+
+	// deleteMu serialises delete-triggered cleanup so the cheap
+	// cascade in deleteManifest sees a consistent view of the
+	// repo while it decides which sub-manifests are still
+	// reachable. Push traffic is not blocked — only concurrent
+	// deletes against the same Local.
+	deleteMu sync.Mutex
+
+	// cascadeMinAge is the grace window applied during the
+	// delete-triggered cascade. Mirrors the manual-GC default so
+	// a recently-pushed sub-manifest can't be reaped by a
+	// concurrent delete of its parent image index. Configurable
+	// via Repository settings in a future iteration; today this
+	// is a constant derived from the factory.
+	cascadeMinAge int64
 }
 
 // NewLocalFactory returns the Factory for ("docker", "local").
@@ -59,14 +75,15 @@ func NewLocalFactory() registry.Factory {
 		signer := NewStaticSigner(randomKey())
 
 		return &Local{
-			namespace: ns,
-			name:      r.Name,
-			store:     NewStore(fs, blobs, r.BasePath),
-			signer:    signer,
-			allowPush: r.AllowPush,
-			maxUpload: r.MaxUploadSize,
-			uploads:   newUploadSessions(),
-			emitter:   deps.Emitter,
+			namespace:     ns,
+			name:          r.Name,
+			store:         NewStore(fs, blobs, r.BasePath),
+			signer:        signer,
+			allowPush:     r.AllowPush,
+			maxUpload:     r.MaxUploadSize,
+			uploads:       newUploadSessions(),
+			emitter:       deps.Emitter,
+			cascadeMinAge: 3600, // 1h default — matches admin GC default
 		}, nil
 	}
 }
@@ -402,6 +419,10 @@ func (l *Local) deleteManifest(w http.ResponseWriter, r *http.Request, req parse
 	dgst := req.Digest
 	if dgst.IsZero() {
 		// Tag delete: drop the pointer, leave the manifest blob.
+		// Per OCI semantics layer/config cleanup waits for a manual
+		// mark-and-sweep (or untagged image becomes reachable only
+		// by digest, which is still valid). We don't cascade here:
+		// the manifest may still be pulled by digest.
 		if err := l.store.DeleteTag(req.Name, req.Ref); err != nil {
 			mapError(w, err)
 			return
@@ -416,14 +437,39 @@ func (l *Local) deleteManifest(w http.ResponseWriter, r *http.Request, req parse
 		return
 	}
 
-	// Manifest delete by digest: also drop ourselves from the
-	// referrers index of our subject (if we had one). Read the
-	// manifest body first to recover the subject.digest — silent
-	// when the manifest is already missing or unparseable, because
+	// Manifest delete by digest. Serialised across deletes against
+	// the same Local so the cascade sees a consistent view of the
+	// repo. Concurrent push traffic is NOT blocked.
+	l.deleteMu.Lock()
+	defer l.deleteMu.Unlock()
+
+	// Cheap cascade prep: read the manifest body so we can recover:
+	//   - subject.digest (so we can deregister from its referrers
+	//     index)
+	//   - manifests[] (if this is an image index, we may cascade
+	//     into sub-manifests that no other tag points at)
+	//
+	// Silent when the manifest is already missing or unparseable:
 	// the post-conditions don't depend on the cleanup succeeding.
+	var subManifests []string
 	if rec, err := l.store.ReadManifest(req.Name, dgst); err == nil {
 		if insp := inspectManifest(rec.Body); insp != nil && insp.Subject != nil && insp.Subject.Digest != "" {
 			_ = l.store.RemoveReferrer(req.Name, insp.Subject.Digest, dgst.String())
+		}
+		// Best-effort parse for image index sub-manifest digests.
+		// We re-parse with a permissive map shape because the
+		// inspectedManifest struct doesn't include manifests[].
+		var parsed map[string]any
+		if json.Unmarshal(rec.Body, &parsed) == nil {
+			if entries, ok := parsed["manifests"].([]any); ok {
+				for _, m := range entries {
+					if mm, ok := m.(map[string]any); ok {
+						if d, ok := mm["digest"].(string); ok && d != "" {
+							subManifests = append(subManifests, d)
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -431,6 +477,50 @@ func (l *Local) deleteManifest(w http.ResponseWriter, r *http.Request, req parse
 		mapError(w, err)
 		return
 	}
+	// Drop the deleted manifest's own referrers index file if it
+	// exists. With the subject gone, the referrers it indexed are
+	// dangling pointers; the index file itself is meaningless.
+	// Idempotent: missing-is-not-an-error.
+	_ = l.store.DeleteReferrersIndex(req.Name, dgst.String())
+
+	// Image-index cascade: for each sub-manifest, ask "is anything
+	// else in this repo still reaching it?" by re-walking the repo
+	// with the just-deleted manifest excluded. Sub-manifests that
+	// fail the reachability check AND are past the grace window get
+	// cleaned up too. We never recurse beyond one level — nested
+	// image indexes (manifest list of manifest lists) are
+	// extremely rare and handled by a subsequent delete or by the
+	// manual mark-sweep.
+	if len(subManifests) > 0 {
+		live := markRepoScoped(l.store, req.Name, dgst.String())
+		now := nowSeconds()
+		for _, sub := range subManifests {
+			if live.hasManifest(req.Name, sub) {
+				continue // still referenced by another tag
+			}
+			subDgst, err := blobstore.ParseDigest(sub)
+			if err != nil {
+				continue
+			}
+			// Grace window: don't reap a manifest that was pushed
+			// moments ago, in case another image index referencing
+			// it is mid-push.
+			if l.cascadeMinAge > 0 {
+				if t := l.store.ManifestModTime(req.Name, subDgst); t > 0 {
+					if now-t < l.cascadeMinAge {
+						continue
+					}
+				}
+			}
+			if err := l.store.DeleteManifest(req.Name, subDgst); err != nil {
+				// Non-fatal: log path is omitted because this is a
+				// best-effort cleanup behind a successful delete.
+				continue
+			}
+			_ = l.store.DeleteReferrersIndex(req.Name, sub)
+		}
+	}
+
 	events.EmitSafe(l.emitter, hook.Event{
 		Type:     hook.EventRegistryDeleted,
 		Mount:    l.namespace,

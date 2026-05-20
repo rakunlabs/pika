@@ -162,16 +162,67 @@ export async function purgeCache(
   );
 }
 
+/**
+ * GCStats mirrors docker.GCStats on the server. Snake-case wire
+ * shape; the UI is free to alias these locally for display.
+ *
+ * dry_run is true on responses from the estimate endpoint and on
+ * any future runs that pass DryRun=true. The UI distinguishes
+ * "estimated" from "reclaimed" by reading this flag rather than
+ * by the endpoint URL.
+ */
+export interface GCStats {
+  marked_blobs: number;
+  swept_blobs: number;
+  swept_bytes: number;
+  swept_manifests: number;
+  skipped_young: number;
+  abandoned_uploads_removed: number;
+  abandoned_uploads_bytes: number;
+  dry_run: boolean;
+  errors?: string[];
+}
+
 /** POST /api/v1/registries/docker/{ns}/{repo}/gc. */
 export async function dockerGC(
   ns: string,
   repo: string,
   minAgeSeconds = 3600,
-): Promise<Record<string, unknown>> {
+  abandonedUploadMaxAgeSeconds = 86400,
+): Promise<GCStats> {
   return postJSON(
     `${basePath}/api/v1/registries/docker/${enc(ns)}/${enc(repo)}/gc`,
-    { min_age_seconds: minAgeSeconds },
+    {
+      min_age_seconds: minAgeSeconds,
+      abandoned_upload_max_age_seconds: abandonedUploadMaxAgeSeconds,
+    },
   );
+}
+
+/**
+ * GET /api/v1/registries/docker/{ns}/{repo}/gc/estimate.
+ *
+ * Dry-run pass returning the same shape as dockerGC but with
+ * dry_run=true. Used by the UI's "estimated garbage" panel so
+ * operators can see reclaimable space before committing to the
+ * cleanup.
+ */
+export async function dockerGCEstimate(
+  ns: string,
+  repo: string,
+  minAgeSeconds?: number,
+  abandonedUploadMaxAgeSeconds?: number,
+): Promise<GCStats> {
+  const params = new URLSearchParams();
+  if (minAgeSeconds !== undefined) {
+    params.set('min_age_seconds', String(minAgeSeconds));
+  }
+  if (abandonedUploadMaxAgeSeconds !== undefined) {
+    params.set('abandoned_upload_max_age_seconds', String(abandonedUploadMaxAgeSeconds));
+  }
+  const qs = params.toString();
+  const url = `${basePath}/api/v1/registries/docker/${enc(ns)}/${enc(repo)}/gc/estimate${qs ? '?' + qs : ''}`;
+  return getJSON<GCStats>(url);
 }
 
 // ─── Helpers re-exported for legacy callers ───

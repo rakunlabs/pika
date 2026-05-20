@@ -182,3 +182,29 @@ type ReadOnlyBlobStore interface {
 	BlobStore
 	ReadOnly() bool
 }
+
+// AbandonedUploadPruner is the optional interface a BlobStore
+// implements when it can clean up upload sessions whose tmp files
+// were left behind by interrupted clients (network drop, container
+// kill mid-PATCH, process restart). Garbage collection type-asserts
+// to this interface and folds the prune into the same admin pass so
+// operators have one button to reclaim everything reclaimable.
+//
+// Only LocalBlobStore implements this today: MemBlobStore has no
+// persistent tmp area to prune, and RawFSBlobStore keeps sessions
+// purely in memory (sessions die with the process; restart leaves
+// no tmp residue to clean). Future S3-multipart backends would
+// implement this to abort orphaned multipart uploads.
+type AbandonedUploadPruner interface {
+	// PruneAbandonedUploads removes tmp files older than maxAge
+	// that are not associated with a live in-process session.
+	// When dryRun is true the method returns the count and bytes
+	// it would have removed without touching the filesystem.
+	//
+	// Returns (count, bytes, error) where count is the number of
+	// abandoned upload tmp files matched and bytes is the total
+	// reclaimable size. A non-nil error reports the first failure
+	// encountered while removing files; partial progress is still
+	// reflected in count/bytes.
+	PruneAbandonedUploads(maxAge time.Duration, dryRun bool) (int, int64, error)
+}

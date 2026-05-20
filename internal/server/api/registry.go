@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -673,11 +674,15 @@ func (a *api) runRegistryUpstreamProbe(c *ada.Context) error {
 //
 // Body (optional):
 //
-//	{"min_age_seconds": 3600}
+//	{"min_age_seconds": 3600, "abandoned_upload_max_age_seconds": 86400}
 //
 // MinAge of 3600 (1h) is recommended in production; tests use 0.
+// AbandonedUploadMaxAge defaults to 24h when omitted; pass 0 to
+// disable the upload-tmp prune entirely. The estimate endpoint
+// (GET .../gc/estimate) accepts the same fields as query params.
 type gcRunRequest struct {
-	MinAgeSeconds int64 `json:"min_age_seconds"`
+	MinAgeSeconds               int64 `json:"min_age_seconds"`
+	AbandonedUploadMaxAgeSeconds int64 `json:"abandoned_upload_max_age_seconds"`
 }
 
 // getRegistryStats returns a snapshot of on-disk counts for one
@@ -762,17 +767,63 @@ func (a *api) runDockerGC(c *ada.Context) error {
 		return fmt.Errorf("GC requires a local Docker registry (got %s): %w", reg.Kind(), service.ErrBadRequest)
 	}
 
-	// Body is optional; default MinAge=3600.
-	req := gcRunRequest{MinAgeSeconds: 3600}
+	// Body is optional; defaults are MinAge=3600, AbandonedUploadMaxAge=86400.
+	req := gcRunRequest{MinAgeSeconds: 3600, AbandonedUploadMaxAgeSeconds: 86400}
 	if c.Request.ContentLength > 0 {
 		_ = json.NewDecoder(c.Request.Body).Decode(&req)
 	}
 
 	stats, err := local.GarbageCollect(c.Request.Context(), docker.GCOptions{
-		MinAge: req.MinAgeSeconds,
+		MinAge:                req.MinAgeSeconds,
+		AbandonedUploadMaxAge: req.AbandonedUploadMaxAgeSeconds,
 	})
 	if err != nil {
 		return fmt.Errorf("gc: %w", err)
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(stats)
+}
+
+// estimateDockerGC runs a dry-run mark-and-sweep pass and returns
+// the GCStats that WOULD have resulted from a real run. URL:
+// GET /api/v1/registries/docker/{ns}/{repo}/gc/estimate. Gated on
+// CapRegistryRead — pure read pass.
+//
+// Defaults mirror runDockerGC so the estimate reflects the same
+// reclaim window the cleanup button will use. The endpoint accepts
+// the same parameters as query string overrides when the operator
+// wants to preview a tighter / looser sweep:
+//
+//	?min_age_seconds=0&abandoned_upload_max_age_seconds=3600
+func (a *api) estimateDockerGC(c *ada.Context) error {
+	reg, _, _, err := a.resolveRegistry(c, service.RegistryTypeDocker)
+	if err != nil {
+		return err
+	}
+	local, ok := reg.(*docker.Local)
+	if !ok {
+		return fmt.Errorf("GC estimate requires a local Docker registry (got %s): %w", reg.Kind(), service.ErrBadRequest)
+	}
+
+	opt := docker.GCOptions{
+		MinAge:                3600,
+		AbandonedUploadMaxAge: 86400,
+		DryRun:                true,
+	}
+	q := c.Request.URL.Query()
+	if v := q.Get("min_age_seconds"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			opt.MinAge = n
+		}
+	}
+	if v := q.Get("abandoned_upload_max_age_seconds"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			opt.AbandonedUploadMaxAge = n
+		}
+	}
+
+	stats, err := local.GarbageCollect(c.Request.Context(), opt)
+	if err != nil {
+		return fmt.Errorf("gc estimate: %w", err)
 	}
 	return c.SetStatus(http.StatusOK).SendJSON(stats)
 }

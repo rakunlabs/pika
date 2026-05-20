@@ -292,6 +292,9 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// Docker GC trigger (mark-and-sweep). Admin only because it
 	// deletes content from the underlying blob store.
 	m.POST("/api/v1/registries/docker/{ns}/{repo}/gc", m.Wrap(api.withPerm(service.CapRegistryAdmin, api.runDockerGC)))
+	// Docker GC estimate (dry-run). Read-gated because it doesn't
+	// delete anything — just reports how much would be reclaimed.
+	m.GET("/api/v1/registries/docker/{ns}/{repo}/gc/estimate", m.Wrap(api.withPerm(service.CapRegistryRead, api.estimateDockerGC)))
 	// Cache purge for Remote registries (Go / NPM / Docker share
 	// one handler — the {type} segment lets the UI hit a clean URL
 	// per protocol and lets the handler reject Local registries

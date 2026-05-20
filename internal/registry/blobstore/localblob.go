@@ -343,12 +343,22 @@ func (s *localSession) forceCloseLocked() {
 // modification time is older than maxAge AND is not tied to a live
 // session. Called by garbage collection on demand; not on a timer.
 //
-// Returns the count of files removed and the first error
-// encountered (if any) while removing files.
-func (l *LocalBlobStore) PruneAbandonedUploads(maxAge time.Duration) (int, error) {
+// When dryRun is true the method matches files exactly as the
+// destructive pass would but skips the os.Remove call, so callers
+// can surface "estimated garbage" without committing to a sweep.
+//
+// Returns the count of files matched, their total size in bytes,
+// and the first error (if any) encountered while listing or
+// removing files. Partial progress is reflected in count/bytes on
+// non-fatal errors.
+func (l *LocalBlobStore) PruneAbandonedUploads(maxAge time.Duration, dryRun bool) (int, int64, error) {
 	entries, err := os.ReadDir(filepath.Join(l.root, "_uploads"))
 	if err != nil {
-		return 0, fmt.Errorf("localblob: read uploads dir: %w", err)
+		if errors.Is(err, os.ErrNotExist) {
+			// Fresh store with no _uploads yet; nothing to prune.
+			return 0, 0, nil
+		}
+		return 0, 0, fmt.Errorf("localblob: read uploads dir: %w", err)
 	}
 	threshold := time.Now().Add(-maxAge)
 
@@ -360,6 +370,7 @@ func (l *LocalBlobStore) PruneAbandonedUploads(maxAge time.Duration) (int, error
 	l.smu.Unlock()
 
 	removed := 0
+	var bytes int64
 	var firstErr error
 	for _, e := range entries {
 		if e.IsDir() {
@@ -378,6 +389,11 @@ func (l *LocalBlobStore) PruneAbandonedUploads(maxAge time.Duration) (int, error
 		if info.ModTime().After(threshold) {
 			continue
 		}
+		if dryRun {
+			removed++
+			bytes += info.Size()
+			continue
+		}
 		if err := os.Remove(filepath.Join(l.root, "_uploads", e.Name())); err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -385,6 +401,12 @@ func (l *LocalBlobStore) PruneAbandonedUploads(maxAge time.Duration) (int, error
 			continue
 		}
 		removed++
+		bytes += info.Size()
 	}
-	return removed, firstErr
+	return removed, bytes, firstErr
 }
+
+// Compile-time assertion that LocalBlobStore satisfies
+// AbandonedUploadPruner. Catches signature drift at build time
+// rather than during a runtime type-assertion in the GC pass.
+var _ AbandonedUploadPruner = (*LocalBlobStore)(nil)

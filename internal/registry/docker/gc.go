@@ -28,7 +28,33 @@ import (
 // active registry accumulates unreferenced blobs and manifests
 // ("garbage") that consume storage without serving any pull.
 //
-// The GC pass uses the classic mark-and-sweep:
+// Two-tier cleanup model
+//
+// Pika does NOT run a background scheduler. Cleanup happens in two
+// places:
+//
+//   1. DELETE-TRIGGERED CHEAP CASCADE (docker/local.go deleteManifest):
+//      When a manifest is deleted by digest we immediately drop
+//      the manifest file + its .media sidecar (these are never
+//      shared with other manifests) and remove the manifest's own
+//      orphan referrers index file. If the deleted manifest was an
+//      image index (multi-arch), we also cascade-delete each
+//      sub-manifest IF no other tag in the same repo points at it
+//      AND the sub-manifest is past the grace window. We never
+//      touch layer / config blobs during cascade — those are
+//      genuinely shareable and require the full mark walk to
+//      reclaim safely. The cascade is therefore O(tags in this
+//      repo), not O(global storage).
+//
+//   2. MANUAL MARK-AND-SWEEP (this file, runGC):
+//      Operator-triggered full pass. Builds the live set across
+//      every repo, sweeps unreferenced blobs + manifests, and
+//      prunes abandoned upload tmp files (BlobStore that
+//      implements AbandonedUploadPruner). Supports DryRun=true
+//      for the "estimated garbage" UI surface — same code path,
+//      just skips the os.Remove calls.
+//
+// The classic mark-and-sweep:
 //
 //   1. MARK phase: walk every repository, every tag → manifest, and
 //      every manifest → blob references. Build the live set of
@@ -45,7 +71,8 @@ import (
 // time-based grace period: blobs younger than (typically) 1 hour
 // are never deleted, on the assumption that any in-flight push
 // completes within that window. Pika's GC accepts a MinAge
-// parameter for the same reason.
+// parameter for the same reason. The same grace window is honoured
+// by the delete-triggered cascade.
 //
 // What we don't do (yet)
 //
@@ -57,38 +84,80 @@ import (
 //     period covers the race window in practice.
 
 // GCStats summarises the result of one GC pass for the UI / logs.
+//
+// DryRun is faithfully reflected so the response shape is
+// unambiguous: when true, the counters describe what WOULD have
+// been reclaimed; when false, what was actually deleted.
 type GCStats struct {
 	// MarkedBlobs is the number of blobs reachable from at least
 	// one manifest in the registry. Useful as a sanity check
 	// alongside SweptBlobs.
-	MarkedBlobs int
-	// SweptBlobs counts blob deletions performed by this pass.
-	SweptBlobs int
+	MarkedBlobs int `json:"marked_blobs"`
+	// SweptBlobs counts blob deletions performed by this pass
+	// (or would-be deletions when DryRun is set).
+	SweptBlobs int `json:"swept_blobs"`
+	// SweptBytes is the total size of swept blobs in bytes.
+	// Counted from BlobInfo.Size at mark time; backends that don't
+	// surface size leave this at 0.
+	SweptBytes int64 `json:"swept_bytes"`
 	// SweptManifests counts manifest deletions (unreferenced
-	// manifests that no tag and no referrer pointed at).
-	SweptManifests int
+	// manifests that no tag and no referrer pointed at). Manifest
+	// file sizes are not counted into SweptBytes — they're small
+	// JSON documents next to multi-MB layer blobs.
+	SweptManifests int `json:"swept_manifests"`
 	// SkippedYoung counts blobs / manifests skipped because they
 	// were within the MinAge grace window.
-	SkippedYoung int
+	SkippedYoung int `json:"skipped_young"`
+	// AbandonedUploadsRemoved is the count of upload tmp files
+	// pruned in the same pass when the underlying BlobStore
+	// implements AbandonedUploadPruner. Zero when the backend
+	// doesn't expose the interface.
+	AbandonedUploadsRemoved int `json:"abandoned_uploads_removed"`
+	// AbandonedUploadsBytes is the total reclaimable size from
+	// pruned upload tmp files in bytes.
+	AbandonedUploadsBytes int64 `json:"abandoned_uploads_bytes"`
+	// DryRun mirrors the option that produced these stats so the
+	// caller can distinguish "estimate" from "did it".
+	DryRun bool `json:"dry_run"`
 	// Errors records any per-item failures the pass encountered.
 	// A failure here is non-fatal — the pass keeps going so a
 	// single broken file doesn't stop the rest.
-	Errors []string
+	Errors []string `json:"errors,omitempty"`
 }
 
 // GCOptions tunes the pass.
 type GCOptions struct {
-	// MinAge is the grace window. Blobs / manifests younger than
-	// time.Now() - MinAge are never deleted, protecting in-flight
-	// pushes from sweeping their own dependencies.
+	// MinAge is the grace window in seconds. Blobs / manifests
+	// younger than time.Now() - MinAge are never deleted,
+	// protecting in-flight pushes from sweeping their own
+	// dependencies.
 	//
 	// Zero disables the grace check (use only for tests).
 	MinAge int64
+
+	// AbandonedUploadMaxAge is the grace window in seconds for
+	// the upload tmp prune (separate from MinAge because
+	// abandoned uploads are interrupted client state rather than
+	// referenced data and benefit from a tighter default).
+	//
+	// Zero disables the upload prune entirely. The admin handler
+	// applies a 24h default when the operator doesn't override.
+	AbandonedUploadMaxAge int64
+
+	// DryRun reports estimated reclaimable garbage without
+	// touching the filesystem. Stats fields are populated as if
+	// the destructive pass ran, but no Delete / Remove calls are
+	// issued. Used by the GET .../gc/estimate endpoint.
+	DryRun bool
 }
 
 // runGC executes one mark-and-sweep pass against a Docker Store.
 // Returns stats on success; errors only when the pass can't run
 // (e.g. backend read-only).
+//
+// When opt.DryRun is true, the pass produces accurate counters
+// without invoking any destructive backend call — used by the
+// "estimated garbage" UI surface.
 func runGC(ctx context.Context, s *Store, opt GCOptions) (*GCStats, error) {
 	wfs, ok := s.fs.(rawfs.WritableRawFS)
 	if !ok {
@@ -96,7 +165,7 @@ func runGC(ctx context.Context, s *Store, opt GCOptions) (*GCStats, error) {
 	}
 
 	live := newLiveSet()
-	stats := &GCStats{}
+	stats := &GCStats{DryRun: opt.DryRun}
 
 	// ── MARK PHASE ─────────────────────────────────────────────────
 	repos, err := s.ListRepositories()
@@ -130,11 +199,18 @@ func runGC(ctx context.Context, s *Store, opt GCOptions) (*GCStats, error) {
 				return nil
 			}
 		}
-		if err := s.Blobs().Delete(d); err != nil {
-			stats.Errors = append(stats.Errors, fmt.Sprintf("sweep blob %s: %v", d, err))
-			return nil
+		size := int64(0)
+		if info != nil {
+			size = info.Size
+		}
+		if !opt.DryRun {
+			if err := s.Blobs().Delete(d); err != nil {
+				stats.Errors = append(stats.Errors, fmt.Sprintf("sweep blob %s: %v", d, err))
+				return nil
+			}
 		}
 		stats.SweptBlobs++
+		stats.SweptBytes += size
 		return nil
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -146,6 +222,23 @@ func runGC(ctx context.Context, s *Store, opt GCOptions) (*GCStats, error) {
 		swept, errs := sweepUnreferencedManifests(s, wfs, name, live, opt, now)
 		stats.SweptManifests += swept
 		stats.Errors = append(stats.Errors, errs...)
+	}
+
+	// ── ABANDONED UPLOAD PRUNE ─────────────────────────────────────
+	// Folded into the same admin pass so one button reclaims
+	// everything reclaimable. Only runs when the BlobStore supports
+	// it and the operator didn't disable the prune by zeroing the
+	// max-age.
+	if opt.AbandonedUploadMaxAge > 0 {
+		if pruner, ok := s.Blobs().(blobstore.AbandonedUploadPruner); ok {
+			maxAge := time.Duration(opt.AbandonedUploadMaxAge) * time.Second
+			n, bytes, err := pruner.PruneAbandonedUploads(maxAge, opt.DryRun)
+			if err != nil {
+				stats.Errors = append(stats.Errors, fmt.Sprintf("abandoned uploads: %v", err))
+			}
+			stats.AbandonedUploadsRemoved = n
+			stats.AbandonedUploadsBytes = bytes
+		}
 	}
 
 	return stats, nil
@@ -322,6 +415,9 @@ func markManifestRecursive(s *Store, name, manifestDigest string, live *liveSet)
 // sweepUnreferencedManifests walks repositories/{name}/manifests/
 // and deletes manifest files whose digest is not in the live set.
 // The accompanying .media sidecar is also removed.
+//
+// Honours opt.DryRun: when set, the manifest count is updated but
+// no Delete is issued.
 func sweepUnreferencedManifests(s *Store, wfs rawfs.WritableRawFS, name string, live *liveSet, opt GCOptions, now int64) (int, []string) {
 	dir := path.Join(s.repoDir(name), "manifests")
 	entries, err := s.fs.ReadDir(dir)
@@ -351,6 +447,10 @@ func sweepUnreferencedManifests(s *Store, wfs rawfs.WritableRawFS, name string, 
 				}
 			}
 		}
+		if opt.DryRun {
+			count++
+			continue
+		}
 		if err := wfs.Delete(path.Join(dir, e.Name)); err != nil {
 			errs = append(errs, fmt.Sprintf("delete manifest %s/%s: %v", name, digestStr, err))
 			continue
@@ -365,18 +465,100 @@ func sweepUnreferencedManifests(s *Store, wfs rawfs.WritableRawFS, name string, 
 // Exported so the admin API can trigger a sweep on demand. Emits
 // a registry.gc_completed event on success so operators can wire a
 // notification webhook to the cleanup run.
+//
+// Dry-run passes do NOT emit the event — they're estimation
+// queries, not destructive actions.
 func (l *Local) GarbageCollect(ctx context.Context, opt GCOptions) (*GCStats, error) {
 	stats, err := runGC(ctx, l.store, opt)
-	if err == nil && stats != nil {
+	if err == nil && stats != nil && !opt.DryRun {
 		events.EmitSafe(l.emitter, hook.Event{
 			Type:     hook.EventRegistryGCCompleted,
 			Mount:    l.namespace,
 			Path:     l.name,
 			Protocol: "registry-docker",
-			Size:     int64(stats.SweptBlobs + stats.SweptManifests),
+			Size:     stats.SweptBytes + stats.AbandonedUploadsBytes,
 		})
 	}
 	return stats, err
+}
+
+// markRepoScoped builds a single-repo live set for the
+// delete-triggered cheap cascade in docker/local.go. It walks every
+// tag in `name`, follows each manifest's references (config, layers,
+// sub-manifests for multi-arch, subject for OCI v1.1), and returns
+// the resulting set of manifest+blob digests considered live within
+// the scope of `name` only.
+//
+// The excludeManifest digest is treated as "about to be deleted":
+// the walker skips it entirely (does not mark it nor any of its
+// transitive references). This is what makes the cascade safe — we
+// can ask "is sub-manifest X still reachable from any OTHER tag in
+// this repo?" by walking with X's parent excluded.
+//
+// We also include manifests referenced from referrers indexes
+// (cosign signatures, SBOMs) so attestations keep their subject
+// alive across cascade. The excludeManifest entry is removed from
+// any referrer index walk as well.
+//
+// Errors are silently absorbed: a manifest that fails to parse just
+// doesn't contribute references to the live set. This matches
+// markRepo's tolerant behaviour and avoids blocking a delete on
+// transient read errors.
+func markRepoScoped(s *Store, name, excludeManifest string) *liveSet {
+	live := newLiveSet()
+	// Walk tags.
+	tags, err := s.ListTags(name)
+	if err == nil {
+		for _, tag := range tags {
+			dgst, err := s.ReadTag(name, tag)
+			if err != nil {
+				continue
+			}
+			if dgst.String() == excludeManifest {
+				// This tag points at the manifest being deleted;
+				// don't follow it. (The tag pointer itself will
+				// be invalidated by the surrounding delete or by
+				// the tag-vs-digest semantics of the request.)
+				continue
+			}
+			_ = markManifestRecursive(s, name, dgst.String(), live)
+		}
+	}
+	// Walk referrers indexes too, mirroring markRepo's logic but
+	// skipping the excluded subject. Referrers keep otherwise
+	// orphan manifests alive (cosign-only state).
+	refDir := path.Join(s.repoDir(name), "_referrers")
+	if entries, err := s.fs.ReadDir(refDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir || !strings.HasSuffix(e.Name, ".json") {
+				continue
+			}
+			subjectDigest := strings.TrimSuffix(e.Name, ".json")
+			if subjectDigest == excludeManifest {
+				continue
+			}
+			live.addManifest(name, subjectDigest)
+			live.addBlob(subjectDigest)
+			rc, _, err := s.fs.Open(path.Join(refDir, e.Name))
+			if err != nil {
+				continue
+			}
+			var idx ociImageIndex
+			body, _ := readAll(rc)
+			rc.Close()
+			if err := json.Unmarshal(body, &idx); err != nil {
+				continue
+			}
+			for _, m := range idx.Manifests {
+				if m.Digest == excludeManifest {
+					continue
+				}
+				live.addManifest(name, m.Digest)
+				_ = markManifestRecursive(s, name, m.Digest, live)
+			}
+		}
+	}
+	return live
 }
 
 // nowSeconds returns the current Unix time. Wrapped so tests can

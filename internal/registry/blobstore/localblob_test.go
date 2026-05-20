@@ -82,12 +82,31 @@ func TestLocalBlobStore_PruneAbandonedUploads(t *testing.T) {
 		t.Fatalf("chtimes: %v", err)
 	}
 
-	removed, err := bs.PruneAbandonedUploads(24 * time.Hour)
+	// Dry-run first: must match exactly what the destructive pass
+	// would and leave the file in place.
+	dryCount, dryBytes, err := bs.PruneAbandonedUploads(24*time.Hour, true)
+	if err != nil {
+		t.Fatalf("PruneAbandonedUploads dry: %v", err)
+	}
+	if dryCount != 1 {
+		t.Fatalf("dry count = %d, want 1", dryCount)
+	}
+	if dryBytes != int64(len("abandoned")) {
+		t.Fatalf("dry bytes = %d, want %d", dryBytes, len("abandoned"))
+	}
+	if _, err := os.Stat(abandonedPath); err != nil {
+		t.Fatalf("dry-run removed file (it shouldn't): %v", err)
+	}
+
+	removed, bytes, err := bs.PruneAbandonedUploads(24*time.Hour, false)
 	if err != nil {
 		t.Fatalf("PruneAbandonedUploads: %v", err)
 	}
 	if removed != 1 {
 		t.Fatalf("removed = %d, want 1", removed)
+	}
+	if bytes != int64(len("abandoned")) {
+		t.Fatalf("bytes = %d, want %d", bytes, len("abandoned"))
 	}
 	if _, err := os.Stat(abandonedPath); !os.IsNotExist(err) {
 		t.Fatalf("abandoned file should be gone, got %v", err)

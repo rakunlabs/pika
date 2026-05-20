@@ -477,6 +477,26 @@ func (s *Store) RemoveReferrer(name, subjectDigest, referrerDigest string) error
 	return s.writeReferrers(wfs, name, subjectDigest, idx)
 }
 
+// DeleteReferrersIndex removes the referrers index file for a
+// subject digest. Used by the delete-triggered cheap cascade when
+// the subject manifest itself is being deleted: with the subject
+// gone, every referrer descriptor in the index is dangling, and
+// the index file is meaningless on its own. Idempotent — missing
+// is not an error.
+func (s *Store) DeleteReferrersIndex(name, subjectDigest string) error {
+	wfs, ok := s.fs.(rawfs.WritableRawFS)
+	if !ok {
+		return fmt.Errorf("docker: backend read-only")
+	}
+	if err := wfs.Delete(s.referrersIndexPath(name, subjectDigest)); err != nil {
+		if isNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 // writeReferrers persists the index document.
 func (s *Store) writeReferrers(wfs rawfs.WritableRawFS, name, subjectDigest string, idx ociImageIndex) error {
 	body, err := json.Marshal(idx)
