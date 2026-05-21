@@ -596,6 +596,9 @@ func (a *api) postSettings(c *ada.Context) error {
 	if patchSettings.Hooks != nil {
 		a.reloadHooks(c.Request.Context())
 	}
+	if patchSettings.EventLog != nil {
+		a.reloadEventLog(c.Request.Context())
+	}
 
 	// If the registry tree was updated, rebuild the routing table.
 	// Hot reload semantics match raw mounts: the new tree replaces
@@ -665,6 +668,22 @@ func (a *api) postSettings(c *ada.Context) error {
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(patchSettings)
+}
+
+// reloadEventLog applies the built-in event logging toggle without touching
+// hook delivery targets.
+func (a *api) reloadEventLog(ctx context.Context) {
+	settings, err := a.svc.Settings(ctx)
+	if err != nil {
+		slog.Error("failed to read settings for event log reload", "error", err)
+		return
+	}
+
+	if a.rawHandler != nil && a.rawHandler.dispatcher != nil {
+		enabled := settings.EventLogEnabled()
+		a.rawHandler.dispatcher.SetEventLogEnabled(enabled)
+		slog.Info("event log setting reloaded", "enabled", enabled)
+	}
 }
 
 // reloadHooks reads hooks from settings and updates the dispatcher.
@@ -1027,6 +1046,9 @@ func BuildInitialRawHandler(ctx context.Context, svc *service.Service) *RawHandl
 
 	// Create and start the hook dispatcher
 	dispatcher := hook.NewDispatcher(256)
+	if settings != nil {
+		dispatcher.SetEventLogEnabled(settings.EventLogEnabled())
+	}
 	dispatcher.Start(ctx)
 
 	rh := NewRawHandler(entries, ctx, dispatcher)

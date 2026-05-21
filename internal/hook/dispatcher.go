@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"text/template"
 	"time"
 )
@@ -20,6 +21,7 @@ type Dispatcher struct {
 	pool      *kafkaClientPool
 	resolver  *Resolver
 	parentCtx context.Context
+	logEvents atomic.Bool
 }
 
 // hookInstance pairs a hook definition with compiled templates and live sinks.
@@ -41,11 +43,24 @@ func NewDispatcher(bufferSize int) *Dispatcher {
 	if bufferSize <= 0 {
 		bufferSize = 256
 	}
-	return &Dispatcher{
+	d := &Dispatcher{
 		ch:   make(chan Event, bufferSize),
 		done: make(chan struct{}),
 		pool: newKafkaClientPool(),
 	}
+	d.logEvents.Store(true)
+	return d
+}
+
+// SetEventLogEnabled controls the built-in structured log line emitted for
+// every event. Hook sinks still receive events regardless of this setting.
+func (d *Dispatcher) SetEventLogEnabled(enabled bool) {
+	d.logEvents.Store(enabled)
+}
+
+// EventLogEnabled reports whether built-in event logging is enabled.
+func (d *Dispatcher) EventLogEnabled() bool {
+	return d.logEvents.Load()
 }
 
 // SetResolver sets the reference resolver for raw:// and config:// PEM references.
@@ -74,6 +89,10 @@ func (d *Dispatcher) Emit(event Event) {
 		event.Timestamp = time.Now().UTC()
 	}
 
+	if d.logEvents.Load() {
+		logEvent(event)
+	}
+
 	select {
 	case d.ch <- event:
 	default:
@@ -83,6 +102,51 @@ func (d *Dispatcher) Emit(event Event) {
 			"path", event.Path,
 		)
 	}
+}
+
+func logEvent(event Event) {
+	attrs := []slog.Attr{
+		slog.String("event_type", string(event.Type)),
+		slog.Time("event_timestamp", event.Timestamp),
+	}
+	if event.Hook != "" {
+		attrs = append(attrs, slog.String("hook", event.Hook))
+	}
+	if event.Mount != "" {
+		attrs = append(attrs, slog.String("mount", event.Mount))
+	}
+	if event.Path != "" {
+		attrs = append(attrs, slog.String("path", event.Path))
+	}
+	if event.Size != 0 {
+		attrs = append(attrs, slog.Int64("size", event.Size))
+	}
+	if event.Protocol != "" {
+		attrs = append(attrs, slog.String("protocol", event.Protocol))
+	}
+	if event.User != "" {
+		attrs = append(attrs, slog.String("user", event.User))
+	}
+	if event.OldPath != "" {
+		attrs = append(attrs, slog.String("old_path", event.OldPath))
+	}
+	if event.DstMount != "" {
+		attrs = append(attrs, slog.String("dst_mount", event.DstMount))
+	}
+	if event.DstPath != "" {
+		attrs = append(attrs, slog.String("dst_path", event.DstPath))
+	}
+	if event.ConfigKey != "" {
+		attrs = append(attrs, slog.String("config_key", event.ConfigKey))
+	}
+	if event.ConfigVersion != 0 {
+		attrs = append(attrs, slog.Int64("config_version", event.ConfigVersion))
+	}
+	if event.Variant != "" {
+		attrs = append(attrs, slog.String("variant", event.Variant))
+	}
+
+	slog.LogAttrs(context.Background(), slog.LevelInfo, "pika event emitted", attrs...)
 }
 
 // UpdateHooks replaces all hooks. It closes old sinks and builds new ones.

@@ -1,6 +1,6 @@
 # Hooks
 
-Hooks fire when files or configs change. Pika ships with four delivery sinks — HTTP webhook, Kafka, Redis Pub/Sub, and NATS — plus a `log` sink for debugging. Hooks are managed under **Settings → Hooks**.
+Hooks fire when files or configs change. Pika logs every emitted event as one structured server log line by default; this can be disabled under **Settings → Hooks**. Hook delivery rules are not required for basic event observability. Pika also ships with four delivery sinks — HTTP webhook, Kafka, Redis Pub/Sub, and NATS — plus a configurable `log` sink for custom log messages. Hooks are managed under **Settings → Hooks**.
 
 ## Event types
 

@@ -10,6 +10,8 @@
  let showAddHook = $state(false);
  let editingHookIndex = $state<number | null>(null);
  let isSavingHooks = $state(false);
+ let eventLogEnabled = $state(true);
+ let isSavingEventLog = $state(false);
  // Hook form fields
  let hookName = $state('');
  let hookEnabled = $state(true);
@@ -81,8 +83,27 @@
 
  // Initialize hooks from configStore on mount
  onMount(() => {
+ void (async () => {
+ if (!configStore.settings) {
+ await configStore.loadSettings();
+ }
  hooks = [...(configStore.settings?.hooks || [])];
+ eventLogEnabled = configStore.settings?.event_log?.disabled !== true;
+ })();
  });
+
+ async function saveEventLogToggle(enabled: boolean) {
+ const previous = eventLogEnabled;
+ eventLogEnabled = enabled;
+ isSavingEventLog = true;
+ try {
+ await configStore.saveEventLogSettings({ disabled: !enabled });
+ } catch {
+ eventLogEnabled = previous;
+ } finally {
+ isSavingEventLog = false;
+ }
+ }
 
  // ── Hook handlers ──
  function resetHookForm() {
@@ -510,6 +531,29 @@
  <Plus size={14} />
  Add Hook
  </button>
+ </div>
+
+ <div class="mb-4 p-4 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm">
+ <label class="flex items-start gap-3 cursor-pointer">
+ <input
+ type="checkbox"
+ class="mt-0.5 h-4 w-4 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+ checked={eventLogEnabled}
+ disabled={isSavingEventLog}
+ onchange={(e) => saveEventLogToggle((e.currentTarget as HTMLInputElement).checked)}
+ />
+ <span class="flex-1">
+ <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">
+ Write emitted events to server logs
+ </span>
+ <span class="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+ Enabled by default. Pika writes one structured <code class="font-mono text-[11px]">pika event emitted</code> log line per event so operators can use their own log tooling instead of storing events in the database.
+ </span>
+ </span>
+ </label>
+ <p class="mt-3 text-[11px] text-slate-400 dark:text-slate-500">
+ This only controls the built-in event log line. Configured hook targets, including custom <code class="font-mono">log</code> targets, continue to receive matching events.
+ </p>
  </div>
 
  <!-- Add/Edit Hook Form -->

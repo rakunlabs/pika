@@ -285,6 +285,59 @@ func TestContextWithEventRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDispatcherEmitLogsStructuredEvent(t *testing.T) {
+	var buf bytes.Buffer
+	defer captureLogger(t, &buf, slog.LevelDebug)()
+
+	d := NewDispatcher(1)
+	if !d.EventLogEnabled() {
+		t.Fatal("event logging should be enabled by default")
+	}
+	d.Emit(Event{
+		Type:          EventConfigCreated,
+		ConfigKey:     "app.yaml",
+		ConfigVersion: 2,
+		User:          "alice",
+	})
+
+	lines := decodeLogLines(t, &buf)
+	if len(lines) != 1 {
+		t.Fatalf("want 1 log line, got %d", len(lines))
+	}
+	line := lines[0]
+	if line["msg"] != "pika event emitted" {
+		t.Errorf("msg = %v", line["msg"])
+	}
+	if line["event_type"] != string(EventConfigCreated) {
+		t.Errorf("event_type = %v", line["event_type"])
+	}
+	if line["config_key"] != "app.yaml" {
+		t.Errorf("config_key = %v", line["config_key"])
+	}
+	if line["config_version"] != float64(2) {
+		t.Errorf("config_version = %v", line["config_version"])
+	}
+	if line["user"] != "alice" {
+		t.Errorf("user = %v", line["user"])
+	}
+	if line["event_timestamp"] == nil {
+		t.Error("event_timestamp missing")
+	}
+}
+
+func TestDispatcherEmitRespectsEventLogToggle(t *testing.T) {
+	var buf bytes.Buffer
+	defer captureLogger(t, &buf, slog.LevelDebug)()
+
+	d := NewDispatcher(1)
+	d.SetEventLogEnabled(false)
+	d.Emit(Event{Type: EventFileDeleted, Mount: "uploads", Path: "old.txt"})
+
+	if got := decodeLogLines(t, &buf); len(got) != 0 {
+		t.Fatalf("want no log lines when event logging is disabled, got %d", len(got))
+	}
+}
+
 // TestDispatcherLogTargetIgnoresBodyTemplate verifies that a log target
 // configured with a body_template is accepted (so stale UI input cannot
 // break the hook) but the template is never compiled — the log sink

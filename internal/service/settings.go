@@ -132,15 +132,16 @@ type Settings struct {
 	// own table so the bootstrap path doesn't grow another schema
 	// dependency. The plaintext format is documented in
 	// service/keyops.go (verifierPlaintext()).
-	EncryptionVerifier  []byte                       `json:"encryption_verifier,omitempty"`
-	RawMounts           []RawMountEntry              `json:"raw_mounts,omitempty"`
-	FTPShares           []FTPShareEntry              `json:"ftp_shares,omitempty"`
-	FTPUsers            []FTPUserEntry               `json:"ftp_users,omitempty"`
-	FTPServe            *FTPServeSettings            `json:"ftp_serve,omitempty"`
-	SFTPServe           *SFTPServeSettings           `json:"sftp_serve,omitempty"`
-	TFTPServe           *TFTPServeSettings           `json:"tftp_serve,omitempty"`
-	WebDAVServe         *WebDAVServeSettings         `json:"webdav_serve,omitempty"`
-	Hooks               []hook.Hook                  `json:"hooks,omitempty"`
+	EncryptionVerifier []byte               `json:"encryption_verifier,omitempty"`
+	RawMounts          []RawMountEntry      `json:"raw_mounts,omitempty"`
+	FTPShares          []FTPShareEntry      `json:"ftp_shares,omitempty"`
+	FTPUsers           []FTPUserEntry       `json:"ftp_users,omitempty"`
+	FTPServe           *FTPServeSettings    `json:"ftp_serve,omitempty"`
+	SFTPServe          *SFTPServeSettings   `json:"sftp_serve,omitempty"`
+	TFTPServe          *TFTPServeSettings   `json:"tftp_serve,omitempty"`
+	WebDAVServe        *WebDAVServeSettings `json:"webdav_serve,omitempty"`
+	EventLog           *EventLogSettings    `json:"event_log,omitempty"`
+	Hooks              []hook.Hook          `json:"hooks,omitempty"`
 	// ProxyServers is the operator-built set of public listeners.
 	// Replaces the previous PublicPort + Compat fields. Each entry
 	// is a full kaykay graph plus a denormalized pipeline meta blob
@@ -256,6 +257,16 @@ type WebDAVServeSettings struct {
 	Prefix  string `json:"prefix,omitempty"` // URL path prefix, default "/"
 }
 
+// EventLogSettings controls Pika's built-in event log line. Nil settings mean
+// enabled so existing deployments get observability without a migration.
+type EventLogSettings struct {
+	Disabled bool `json:"disabled"`
+}
+
+func (s *Settings) EventLogEnabled() bool {
+	return s == nil || s.EventLog == nil || !s.EventLog.Disabled
+}
+
 // FTPUserEntry defines an FTP user account stored in settings.
 type FTPUserEntry struct {
 	Username string `json:"username"`
@@ -285,16 +296,17 @@ type FTPShareEntry struct {
 }
 
 type PatchSettings struct {
-	Action              ActionKey                    `json:"action"`
-	External            map[string]external.External `json:"external,omitempty"`
-	RawMounts           *[]RawMountEntry             `json:"raw_mounts,omitempty"` // pointer to distinguish nil (not provided) from empty
-	FTPShares           *[]FTPShareEntry             `json:"ftp_shares,omitempty"` // pointer to distinguish nil from empty
-	FTPUsers            *[]FTPUserEntry              `json:"ftp_users,omitempty"`
-	FTPServe            *FTPServeSettings            `json:"ftp_serve,omitempty"`
-	SFTPServe           *SFTPServeSettings           `json:"sftp_serve,omitempty"`
-	TFTPServe           *TFTPServeSettings           `json:"tftp_serve,omitempty"`
-	WebDAVServe         *WebDAVServeSettings         `json:"webdav_serve,omitempty"`
-	Hooks               *[]hook.Hook                 `json:"hooks,omitempty"` // pointer to distinguish nil from empty
+	Action      ActionKey                    `json:"action"`
+	External    map[string]external.External `json:"external,omitempty"`
+	RawMounts   *[]RawMountEntry             `json:"raw_mounts,omitempty"` // pointer to distinguish nil (not provided) from empty
+	FTPShares   *[]FTPShareEntry             `json:"ftp_shares,omitempty"` // pointer to distinguish nil from empty
+	FTPUsers    *[]FTPUserEntry              `json:"ftp_users,omitempty"`
+	FTPServe    *FTPServeSettings            `json:"ftp_serve,omitempty"`
+	SFTPServe   *SFTPServeSettings           `json:"sftp_serve,omitempty"`
+	TFTPServe   *TFTPServeSettings           `json:"tftp_serve,omitempty"`
+	WebDAVServe *WebDAVServeSettings         `json:"webdav_serve,omitempty"`
+	EventLog    *EventLogSettings            `json:"event_log,omitempty"`
+	Hooks       *[]hook.Hook                 `json:"hooks,omitempty"` // pointer to distinguish nil from empty
 	// ProxyServers is patched as a whole list (nil = no change, empty
 	// slice = clear all). Pointer-to-slice mirrors how Hooks / RawMounts
 	// distinguish "not provided" from "deliberately empty".
@@ -408,6 +420,9 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 	}
 	if patch.WebDAVServe != nil {
 		settings.WebDAVServe = patch.WebDAVServe
+	}
+	if patch.EventLog != nil {
+		settings.EventLog = patch.EventLog
 	}
 
 	// Handle hooks update (if provided)

@@ -1,6 +1,7 @@
 // Package hook provides an event system for file and config operations.
-// It dispatches events to configurable sinks (HTTP webhooks, Kafka, etc.)
-// when files are created, updated, deleted, or otherwise modified.
+// It logs emitted events and dispatches them to configurable sinks
+// (HTTP webhooks, Kafka, etc.) when files are created, updated, deleted,
+// or otherwise modified.
 package hook
 
 import "time"

@@ -456,6 +456,11 @@ export interface Hook {
   targets: HookTarget[];
 }
 
+// Built-in server-side structured event logging. Missing settings mean enabled.
+export interface EventLogSettings {
+  disabled?: boolean;
+}
+
 // Proxy server graph entry — one user-built listener with its
 // kaykay node/edge graph and a denormalized pipeline summary.
 export interface ProxyServer {
@@ -537,6 +542,7 @@ export interface Settings {
   sftp_serve?: SFTPServeSettings;
   tftp_serve?: TFTPServeSettings;
   webdav_serve?: WebDAVServeSettings;
+  event_log?: EventLogSettings;
   hooks?: Hook[];
   proxy_servers?: ProxyServer[];
   external_permissions?: ExternalPermissionsSettings;

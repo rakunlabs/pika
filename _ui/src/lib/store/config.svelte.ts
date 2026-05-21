@@ -930,6 +930,30 @@ function createConfigStore() {
     }
   }
 
+  async function saveEventLogSettings(patch: import('@/lib/types/config').EventLogSettings): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', {
+        action: 'set',
+        event_log: patch,
+      });
+      if (settings) {
+        settings = { ...settings, event_log: patch };
+      } else {
+        settings = { event_log: patch };
+      }
+      addToast(
+        patch.disabled
+          ? 'Event logging disabled.'
+          : 'Event logging enabled.',
+        'success',
+      );
+    } catch (error: any) {
+      const msg = error.response?.data?.message || 'Failed to save event logging setting';
+      addToast(msg, 'alert');
+      throw error;
+    }
+  }
+
   async function saveUserSync(userSync: import('@/lib/types/config').UserSyncSettings): Promise<void> {
     try {
       await axios.post('/api/v1/settings', { action: 'set', user_sync: userSync });
@@ -1473,6 +1497,7 @@ function createConfigStore() {
     saveProxySettings,
     saveRegistrySettings,
     saveHooks,
+    saveEventLogSettings,
     saveUserSync,
     listUserSyncStatus,
     runUserSync,
