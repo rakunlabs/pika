@@ -156,6 +156,29 @@ func (l *Local) Stats(_ context.Context) (registry.Stats, error) {
 // AllowPush reports whether push operations are enabled.
 func (l *Local) AllowPush() bool { return l.allowPush }
 
+// DeleteReference removes a tag pointer or manifest digest using the
+// Docker registry's policy-aware semantics. Admin surfaces call this
+// directly so they do not need to know the raw storage layout.
+func (l *Local) DeleteReference(name, ref string) error {
+	if err := ValidateRepoName(name); err != nil {
+		return err
+	}
+	if ref == "" {
+		return fmt.Errorf("empty reference: %w", ErrNameInvalid)
+	}
+	if IsDigestReference(ref) {
+		dgst, err := blobstore.ParseDigest(ref)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrDigestInvalid, err)
+		}
+		return l.deleteManifestDigest(name, dgst)
+	}
+	if err := ValidateTag(ref); err != nil {
+		return err
+	}
+	return l.deleteTagReference(name, ref)
+}
+
 // DefaultGCOptions returns the repo policy defaults used by the admin
 // GC estimate/apply endpoints when the request does not override them.
 func (l *Local) DefaultGCOptions() GCOptions {
@@ -465,39 +488,47 @@ func (l *Local) deleteManifest(w http.ResponseWriter, r *http.Request, req parse
 		writeError(w, http.StatusMethodNotAllowed, "DENIED", "delete disabled")
 		return
 	}
-	dgst := req.Digest
-	if dgst.IsZero() {
-		if l.isImmutableTag(req.Ref) {
-			writeError(w, http.StatusForbidden, "TAG_IMMUTABLE", "tag matches immutable policy and cannot be deleted")
-			return
-		}
-		// Tag delete: drop the pointer, leave the manifest blob.
-		// Per OCI semantics layer/config cleanup waits for a manual
-		// mark-and-sweep (or untagged image becomes reachable only
-		// by digest, which is still valid). We don't cascade here:
-		// the manifest may still be pulled by digest.
-		if err := l.store.DeleteTag(req.Name, req.Ref); err != nil {
+	if req.Digest.IsZero() {
+		if err := l.deleteTagReference(req.Name, req.Ref); err != nil {
 			mapError(w, err)
 			return
 		}
-		events.EmitSafe(l.emitter, hook.Event{
-			Type:     hook.EventRegistryDeleted,
-			Mount:    l.namespace,
-			Path:     l.name + "/" + req.Name + ":" + req.Ref,
-			Protocol: "registry-docker",
-		})
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
+	if err := l.deleteManifestDigest(req.Name, req.Digest); err != nil {
+		mapError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
 
+func (l *Local) deleteTagReference(name, tag string) error {
+	if l.isImmutableTag(tag) {
+		return fmt.Errorf("tag %q matches immutable policy and cannot be deleted: %w", tag, ErrTagImmutable)
+	}
+	// Tag delete: drop the pointer, leave the manifest blob. Per OCI
+	// semantics layer/config cleanup waits for a manual mark-and-sweep.
+	if err := l.store.DeleteTag(name, tag); err != nil {
+		return err
+	}
+	events.EmitSafe(l.emitter, hook.Event{
+		Type:     hook.EventRegistryDeleted,
+		Mount:    l.namespace,
+		Path:     l.name + "/" + name + ":" + tag,
+		Protocol: "registry-docker",
+	})
+	return nil
+}
+
+func (l *Local) deleteManifestDigest(name string, dgst blobstore.Digest) error {
 	// Manifest delete by digest. Serialised across deletes against
 	// the same Local so the cascade sees a consistent view of the
 	// repo. Concurrent push traffic is NOT blocked.
 	l.deleteMu.Lock()
 	defer l.deleteMu.Unlock()
-	if tags := l.immutableTagsPointingAt(req.Name, dgst.String()); len(tags) > 0 {
-		writeError(w, http.StatusForbidden, "TAG_IMMUTABLE", "manifest is still referenced by immutable tag(s): "+strings.Join(tags, ", "))
-		return
+	if tags := l.immutableTagsPointingAt(name, dgst.String()); len(tags) > 0 {
+		return fmt.Errorf("manifest is still referenced by immutable tag(s): %s: %w", strings.Join(tags, ", "), ErrTagImmutable)
 	}
 
 	// Cheap cascade prep: read the manifest body so we can recover:
@@ -509,9 +540,9 @@ func (l *Local) deleteManifest(w http.ResponseWriter, r *http.Request, req parse
 	// Silent when the manifest is already missing or unparseable:
 	// the post-conditions don't depend on the cleanup succeeding.
 	var subManifests []string
-	if rec, err := l.store.ReadManifest(req.Name, dgst); err == nil {
+	if rec, err := l.store.ReadManifest(name, dgst); err == nil {
 		if insp := inspectManifest(rec.Body); insp != nil && insp.Subject != nil && insp.Subject.Digest != "" {
-			_ = l.store.RemoveReferrer(req.Name, insp.Subject.Digest, dgst.String())
+			_ = l.store.RemoveReferrer(name, insp.Subject.Digest, dgst.String())
 		}
 		// Best-effort parse for image index sub-manifest digests.
 		// We re-parse with a permissive map shape because the
@@ -530,15 +561,14 @@ func (l *Local) deleteManifest(w http.ResponseWriter, r *http.Request, req parse
 		}
 	}
 
-	if err := l.store.DeleteManifest(req.Name, dgst); err != nil {
-		mapError(w, err)
-		return
+	if err := l.store.DeleteManifest(name, dgst); err != nil {
+		return err
 	}
 	// Drop the deleted manifest's own referrers index file if it
 	// exists. With the subject gone, the referrers it indexed are
 	// dangling pointers; the index file itself is meaningless.
 	// Idempotent: missing-is-not-an-error.
-	_ = l.store.DeleteReferrersIndex(req.Name, dgst.String())
+	_ = l.store.DeleteReferrersIndex(name, dgst.String())
 
 	// Image-index cascade: for each sub-manifest, ask "is anything
 	// else in this repo still reaching it?" by re-walking the repo
@@ -549,10 +579,10 @@ func (l *Local) deleteManifest(w http.ResponseWriter, r *http.Request, req parse
 	// extremely rare and handled by a subsequent delete or by the
 	// manual mark-sweep.
 	if len(subManifests) > 0 {
-		live := markRepoScoped(l.store, req.Name, dgst.String())
+		live := markRepoScoped(l.store, name, dgst.String())
 		now := nowSeconds()
 		for _, sub := range subManifests {
-			if live.hasManifest(req.Name, sub) {
+			if live.hasManifest(name, sub) {
 				continue // still referenced by another tag
 			}
 			subDgst, err := blobstore.ParseDigest(sub)
@@ -563,28 +593,28 @@ func (l *Local) deleteManifest(w http.ResponseWriter, r *http.Request, req parse
 			// moments ago, in case another image index referencing
 			// it is mid-push.
 			if l.cascadeMinAge > 0 {
-				if t := l.store.ManifestModTime(req.Name, subDgst); t > 0 {
+				if t := l.store.ManifestModTime(name, subDgst); t > 0 {
 					if now-t < l.cascadeMinAge {
 						continue
 					}
 				}
 			}
-			if err := l.store.DeleteManifest(req.Name, subDgst); err != nil {
+			if err := l.store.DeleteManifest(name, subDgst); err != nil {
 				// Non-fatal: log path is omitted because this is a
 				// best-effort cleanup behind a successful delete.
 				continue
 			}
-			_ = l.store.DeleteReferrersIndex(req.Name, sub)
+			_ = l.store.DeleteReferrersIndex(name, sub)
 		}
 	}
 
 	events.EmitSafe(l.emitter, hook.Event{
 		Type:     hook.EventRegistryDeleted,
 		Mount:    l.namespace,
-		Path:     l.name + "/" + req.Name + "@" + dgst.String(),
+		Path:     l.name + "/" + name + "@" + dgst.String(),
 		Protocol: "registry-docker",
 	})
-	w.WriteHeader(http.StatusAccepted)
+	return nil
 }
 
 func (l *Local) isImmutableTag(tag string) bool {

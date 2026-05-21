@@ -15,68 +15,113 @@
  // Click-to-add stays available as a keyboard / accessibility
  // fallback (drag is not reachable by screen readers).
  import type { CatalogSpec } from '@/lib/store/proxy.svelte';
- import { Layers, Boxes, Split, ChevronRight } from 'lucide-svelte';
+ import { Layers, Boxes, Split, ChevronRight, Cable, Route, Database } from 'lucide-svelte';
  import { stripeClassFor } from './palette-categories';
 
  type NodeKind = 'middleware' | 'switch' | 'handler';
+ type NodeProtocol = 'http' | 'tcp';
 
  interface PaletteRow {
   kind: NodeKind;
+  protocol: NodeProtocol;
   subtype?: string;
   label: string;
   description?: string;
  }
 
  interface PaletteGroup {
-  key: NodeKind;          // also doubles as the localStorage key suffix
+   key: string;            // also doubles as the localStorage key suffix
   title: string;          // section header text
   icon: typeof Layers;    // icon used in the header AND per row
   iconClass: string;      // colour token applied to every row icon
   rows: PaletteRow[];
  }
 
- let {
-  catalog,
-  canManage,
-  onAddNode,
- }: {
-  catalog: { middlewares: CatalogSpec[]; handlers: CatalogSpec[]; switches?: CatalogSpec[] } | null;
-  canManage: boolean;
-  onAddNode: (kind: NodeKind, subtype?: string) => void;
- } = $props();
+  let {
+   catalog,
+   protocol = 'http',
+   canManage,
+   onAddNode,
+  }: {
+   catalog: {
+    middlewares: CatalogSpec[];
+    handlers: CatalogSpec[];
+    switches?: CatalogSpec[];
+    tcp_middlewares?: CatalogSpec[];
+    tcp_handlers?: CatalogSpec[];
+   } | null;
+   protocol?: NodeProtocol;
+   canManage: boolean;
+   onAddNode: (kind: NodeKind, subtype: string | undefined, protocol: NodeProtocol) => void;
+  } = $props();
 
  // Group catalogue entries by kind. Switches first because they're
  // the routing primitive, then handlers, then middlewares. Empty
  // categories are filtered out so we never render a section header
  // with nothing under it.
- const groups = $derived.by<PaletteGroup[]>(() => {
-  const out: PaletteGroup[] = [];
-  const switchRows = (catalog?.switches ?? []).map<PaletteRow>((s) => ({
-   kind: 'switch', subtype: s.subtype, label: s.label, description: s.description,
-  }));
+  const groups = $derived.by<PaletteGroup[]>(() => {
+   const out: PaletteGroup[] = [];
+
+   const resourceSubtypes = new Set(['data', 'raw', 'registry']);
+
+   if (protocol === 'tcp') {
+    const tcpHandlerRows = (catalog?.tcp_handlers ?? []).map<PaletteRow>((h) => ({
+     kind: 'handler', protocol: 'tcp', subtype: h.subtype, label: h.label, description: h.description,
+    }));
+    if (tcpHandlerRows.length) out.push({
+     key: 'tcp-handler', title: 'TCP Handlers', icon: Route,
+     iconClass: 'text-emerald-600 dark:text-emerald-400', rows: tcpHandlerRows,
+    });
+
+    const tcpMWRows = (catalog?.tcp_middlewares ?? []).map<PaletteRow>((m) => ({
+     kind: 'middleware', protocol: 'tcp', subtype: m.subtype, label: m.label, description: m.description,
+    }));
+    if (tcpMWRows.length) out.push({
+     key: 'tcp-middleware', title: 'TCP Middlewares', icon: Cable,
+     iconClass: 'text-violet-600 dark:text-violet-400', rows: tcpMWRows,
+    });
+
+    return out;
+   }
+
+   const switchRows = (catalog?.switches ?? []).map<PaletteRow>((s) => ({
+    kind: 'switch', protocol: 'http', subtype: s.subtype, label: s.label, description: s.description,
+   }));
   if (switchRows.length) out.push({
    key: 'switch', title: 'Switches', icon: Split,
    iconClass: 'text-indigo-600 dark:text-indigo-400', rows: switchRows,
   });
 
-  const handlerRows = (catalog?.handlers ?? []).map<PaletteRow>((h) => ({
-   kind: 'handler', subtype: h.subtype, label: h.label, description: h.description,
+  const resourceRows = (catalog?.handlers ?? [])
+   .filter((h) => resourceSubtypes.has(h.subtype))
+   .map<PaletteRow>((h) => ({
+    kind: 'handler', protocol: 'http', subtype: h.subtype, label: h.label, description: h.description,
+   }));
+  if (resourceRows.length) out.push({
+   key: 'http-resource', title: 'Resources', icon: Database,
+   iconClass: 'text-amber-600 dark:text-amber-400', rows: resourceRows,
+  });
+
+  const handlerRows = (catalog?.handlers ?? [])
+   .filter((h) => !resourceSubtypes.has(h.subtype))
+   .map<PaletteRow>((h) => ({
+   kind: 'handler', protocol: 'http', subtype: h.subtype, label: h.label, description: h.description,
   }));
   if (handlerRows.length) out.push({
-   key: 'handler', title: 'Handlers', icon: Boxes,
+   key: 'http-handler', title: 'HTTP Handlers', icon: Boxes,
    iconClass: 'text-emerald-600 dark:text-emerald-400', rows: handlerRows,
   });
 
   const mwRows = (catalog?.middlewares ?? []).map<PaletteRow>((m) => ({
-   kind: 'middleware', subtype: m.subtype, label: m.label, description: m.description,
+   kind: 'middleware', protocol: 'http', subtype: m.subtype, label: m.label, description: m.description,
   }));
-  if (mwRows.length) out.push({
-   key: 'middleware', title: 'Middlewares', icon: Layers,
-   iconClass: 'text-accent-600 dark:text-accent-400', rows: mwRows,
-  });
+   if (mwRows.length) out.push({
+    key: 'http-middleware', title: 'HTTP Middlewares', icon: Layers,
+    iconClass: 'text-accent-600 dark:text-accent-400', rows: mwRows,
+   });
 
-  return out;
- });
+   return out;
+  });
 
  // Collapse state per category, persisted in localStorage so the
  // operator's last-opened set survives a page reload. Default is
@@ -111,7 +156,7 @@
 
  function onDragStart(e: DragEvent, row: PaletteRow) {
   if (!canManage || !e.dataTransfer) return;
-  const payload = JSON.stringify({ kind: row.kind, subtype: row.subtype ?? '' });
+   const payload = JSON.stringify({ kind: row.kind, subtype: row.subtype ?? '', protocol: row.protocol });
   e.dataTransfer.setData(DRAG_MIME, payload);
   // text/plain is a belt-and-braces fallback: Firefox refuses to
   // start the drag if dataTransfer is "empty" of well-known types,
@@ -123,7 +168,7 @@
 
  function onClickAdd(row: PaletteRow) {
   if (!canManage) return;
-  onAddNode(row.kind, row.subtype);
+   onAddNode(row.kind, row.subtype, row.protocol);
  }
 
  const totalRows = $derived(groups.reduce((n, g) => n + g.rows.length, 0));
@@ -132,7 +177,7 @@
 <aside class="w-56 shrink-0 border-r border-slate-200 dark:border-warm-700
               bg-white dark:bg-warm-800 overflow-y-auto">
  <div class="p-3 border-b border-slate-200 dark:border-warm-700">
-  <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Nodes</h3>
+   <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{protocol.toUpperCase()} Nodes</h3>
   {#if canManage}
    <p class="text-[11px] text-slate-400 dark:text-slate-500 mt-1">Drag onto the canvas or click to add.</p>
   {:else}
@@ -170,7 +215,7 @@
        {#each group.rows as row (row.kind + ':' + (row.subtype ?? ''))}
         <li>
          <div
-          class={'row ' + stripeClassFor(row.kind, row.subtype)}
+           class={'row ' + stripeClassFor(row.kind, row.subtype, row.protocol)}
           class:disabled={!canManage}
           role="button"
           tabindex={canManage ? 0 : -1}

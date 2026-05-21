@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/rakunlabs/pika/internal/external"
+	"github.com/rakunlabs/pika/internal/rawfs"
+	"github.com/rakunlabs/pika/internal/registry"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -24,6 +26,10 @@ type fakeService struct {
 	writeExternalErr  error
 	deleteExternalErr error
 	validateTokenErr  error
+	rawMounts         map[string]rawfs.RawFS
+	registries        map[string]registry.Registry
+	registryCORS      map[string][]string
+	registryDisabled  bool
 
 	lastDataKey       string
 	lastExternal      string
@@ -60,6 +66,24 @@ func (f *fakeService) ValidateToken(_ context.Context, _, scope, op string) erro
 	f.lastValidateScope = scope
 	f.lastValidateOp = op
 	return f.validateTokenErr
+}
+
+func (f *fakeService) MountRawFS(prefix string) (rawfs.RawFS, bool) {
+	fsys, ok := f.rawMounts[prefix]
+	return fsys, ok
+}
+
+func (f *fakeService) LookupRegistry(namespace, repo string) (registry.Registry, bool) {
+	reg, ok := f.registries[namespace+"/"+repo]
+	return reg, ok
+}
+
+func (f *fakeService) RegistryEnabled(context.Context) bool {
+	return !f.registryDisabled
+}
+
+func (f *fakeService) RegistryCORSOrigins(_ context.Context, namespace, repo string) []string {
+	return f.registryCORS[namespace+"/"+repo]
 }
 
 // stubMiddlewareRegistry returns a registry with two helpers used by
@@ -219,6 +243,50 @@ func TestCompile_LinearChain(t *testing.T) {
 	}
 	if pipe.Hash == "" {
 		t.Fatal("Hash should be set")
+	}
+}
+
+func TestCompile_TCPChain(t *testing.T) {
+	srv := ProxyServer{
+		Protocol: ProtocolTCP,
+		Port:     "9999",
+		Nodes: []ProxyNode{
+			{ID: "l", Type: NodeTypeListener, Protocol: ProtocolTCP},
+			{ID: "allow", Type: NodeTypeMiddleware, Protocol: ProtocolTCP, Subtype: "tcp-ip-allowlist", Config: json.RawMessage(`{"cidrs":["127.0.0.1/32"]}`)},
+			{ID: "fwd", Type: NodeTypeHandler, Protocol: ProtocolTCP, Subtype: "tcp-forward", Config: json.RawMessage(`{"network":"tcp","address":"127.0.0.1:1"}`)},
+		},
+		Edges: []ProxyEdge{
+			{ID: "e1", Source: "l", Target: "allow"},
+			{ID: "e2", Source: "allow", Target: "fwd"},
+		},
+	}
+	pipe, err := Compile(srv, Default(&fakeService{}))
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if pipe.Protocol != ProtocolTCP || pipe.TCPRoot == nil || pipe.Root != nil {
+		t.Fatalf("unexpected TCP pipe: protocol=%q tcpRoot=%v httpRoot=%v", pipe.Protocol, pipe.TCPRoot != nil, pipe.Root != nil)
+	}
+}
+
+func TestCompile_RejectsMixedProtocolNode(t *testing.T) {
+	srv := ProxyServer{
+		Protocol: ProtocolHTTP,
+		Port:     "9999",
+		Nodes: []ProxyNode{
+			{ID: "l", Type: NodeTypeListener, Protocol: ProtocolHTTP},
+			{ID: "m", Type: NodeTypeMiddleware, Protocol: ProtocolTCP, Subtype: "tcp-ip-allowlist"},
+			{ID: "h", Type: NodeTypeHandler, Protocol: ProtocolHTTP, Subtype: "ok"},
+		},
+		Edges: []ProxyEdge{
+			{ID: "e1", Source: "l", Target: "m"},
+			{ID: "e2", Source: "m", Target: "h"},
+		},
+	}
+	_, err := Compile(srv, stubDeps())
+	var ce *CompileError
+	if !errors.As(err, &ce) || ce.Code != "protocol_mismatch" {
+		t.Fatalf("want protocol_mismatch, got %v", err)
 	}
 }
 

@@ -34,6 +34,7 @@ import type {
 // ─── Envelope helpers ───
 
 const enc = encodeURIComponent;
+const pathTail = (value: string) => value.split('/').map(enc).join('/');
 const fetchOpts: RequestInit = { credentials: 'same-origin' };
 
 /**
@@ -74,6 +75,14 @@ async function postJSON<T>(url: string, body?: unknown): Promise<T> {
     throw new RegistryAPIError(resp.status, `HTTP ${resp.status}`, bodyText);
   }
   return (await resp.json()) as T;
+}
+
+async function deleteNoContent(url: string): Promise<void> {
+  const resp = await fetch(url, { ...fetchOpts, method: 'DELETE' });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    throw new RegistryAPIError(resp.status, `HTTP ${resp.status}`, body);
+  }
 }
 
 async function getText(url: string): Promise<string> {
@@ -130,12 +139,12 @@ export async function getPackageDetail(
   repo: string,
   name: string,
 ): Promise<PackageDetail> {
-  return getJSON(`${basePath}/api/v1/registries/${type}/${enc(ns)}/${enc(repo)}/packages/${name}`);
+  return getJSON(`${basePath}/api/v1/registries/${type}/${enc(ns)}/${enc(repo)}/packages/${pathTail(name)}`);
 }
 
 /** GET /api/v1/registries/npm/{ns}/{repo}/packages/{name}/readme — markdown. */
 export async function getNPMReadme(ns: string, repo: string, name: string): Promise<string> {
-  return getText(`${basePath}/api/v1/registries/npm/${enc(ns)}/${enc(repo)}/packages/${name}/readme`);
+  return getText(`${basePath}/api/v1/registries/npm/${enc(ns)}/${enc(repo)}/packages/${pathTail(name)}/readme`);
 }
 
 /** GET /api/v1/registries/go/{ns}/{repo}/modules/{name...}/versions/{version}/gomod — text. */
@@ -146,7 +155,7 @@ export async function getGoMod(
   version: string,
 ): Promise<string> {
   return getText(
-    `${basePath}/api/v1/registries/go/${enc(ns)}/${enc(repo)}/modules/${module}/versions/${enc(version)}/gomod`,
+    `${basePath}/api/v1/registries/go/${enc(ns)}/${enc(repo)}/modules/${pathTail(module)}/versions/${enc(version)}/gomod`,
   );
 }
 
@@ -171,6 +180,29 @@ export async function purgeCache(
   return postJSON(
     `${basePath}/api/v1/registries/${type}/${enc(ns)}/${enc(repo)}/purge`,
     { all },
+  );
+}
+
+export type DeleteArtifactSelector =
+  | { version: string }
+  | { tag: string }
+  | { digest: string };
+
+/** DELETE /api/v1/registries/{type}/{ns}/{repo}/packages/{name...}?version|tag|digest=... */
+export async function deleteRegistryArtifact(
+  type: RegistryType,
+  ns: string,
+  repo: string,
+  name: string,
+  selector: DeleteArtifactSelector,
+): Promise<void> {
+  const params = new URLSearchParams();
+  if ('version' in selector) params.set('version', selector.version);
+  if ('tag' in selector) params.set('tag', selector.tag);
+  if ('digest' in selector) params.set('digest', selector.digest);
+  const qs = params.toString();
+  await deleteNoContent(
+    `${basePath}/api/v1/registries/${type}/${enc(ns)}/${enc(repo)}/packages/${pathTail(name)}${qs ? '?' + qs : ''}`,
   );
 }
 

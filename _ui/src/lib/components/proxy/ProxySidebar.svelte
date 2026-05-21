@@ -5,8 +5,10 @@
  // the top is special — it switches the main pane back to the
  // overview / test view instead of the editor.
  import type { ProxyServer } from '@/lib/types/config';
- import type { ProxyInstanceStatus } from '@/lib/store/proxy.svelte';
- import { Plus, Trash2, Circle, LayoutDashboard } from 'lucide-svelte';
+  import type { ProxyInstanceStatus } from '@/lib/store/proxy.svelte';
+  import { Plus, Trash2, Circle, LayoutDashboard } from 'lucide-svelte';
+
+  type ProxyProtocol = 'http' | 'tcp';
 
  let {
   servers,
@@ -32,9 +34,13 @@
   onToggleEnabled: (id: string, enabled: boolean) => void;
  } = $props();
 
- function statusFor(id: string): ProxyInstanceStatus | undefined {
-  return status.find(s => s.id === id);
- }
+  function statusFor(id: string): ProxyInstanceStatus | undefined {
+   return status.find(s => s.id === id);
+  }
+
+  function protocolFor(srv: ProxyServer): ProxyProtocol {
+   return (srv.protocol ?? 'http') as ProxyProtocol;
+  }
 
  // Active state classes per DESIGN_SYSTEM §4 "Active nav-item".
  const activeRow =
@@ -91,8 +97,9 @@
   {#each servers as srv (srv.id)}
    {@const st = statusFor(srv.id)}
    {@const isActive = view === 'editor' && srv.id === activeId}
+   {@const protocol = protocolFor(srv)}
    <li>
-    <div class="flex items-stretch gap-1 rounded {isActive ? activeRow : inactiveRow}">
+     <div class="flex items-stretch gap-1 rounded {isActive ? activeRow : inactiveRow}">
      <button
       type="button"
       class="grow text-left px-2 py-1.5 min-w-0 cursor-pointer"
@@ -110,7 +117,7 @@
        <div class="grow min-w-0">
         <div class="text-sm font-medium truncate">{srv.name || srv.id}</div>
         <div class="text-[10px] opacity-70 font-mono truncate">
-         :{srv.port}{st?.addr ? ` · ${st.addr}` : ''}
+         {protocol}:{srv.port}{st?.addr ? ` · ${st.addr}` : ''}
         </div>
        </div>
       </div>

@@ -2,6 +2,7 @@ package npm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -159,6 +160,57 @@ func (s *Store) VersionMetaExists(name, version string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// DeleteVersion removes one published package version, its tarball,
+// derived packument/readme caches, and any dist-tags that pointed to
+// the removed version. The package directory may remain on backends
+// without directory removal; ListPackages ignores empty version dirs.
+func (s *Store) DeleteVersion(name, version string) error {
+	if err := ValidatePackageName(name); err != nil {
+		return err
+	}
+	if strings.TrimSpace(version) == "" {
+		return fmt.Errorf("npm: empty version: %w", ErrInvalidVersion)
+	}
+	wfs, ok := s.fs.(rawfs.WritableRawFS)
+	if !ok {
+		return fmt.Errorf("npm: backend read-only")
+	}
+
+	meta, err := s.ReadVersionMeta(name, version)
+	if err != nil {
+		if errors.Is(err, ErrPackageNotFound) {
+			return err
+		}
+		return fmt.Errorf("npm: read version before delete: %w", err)
+	}
+
+	if err := wfs.Delete(s.versionMetaPath(name, version)); err != nil {
+		if isNotFound(err) {
+			return fmt.Errorf("%s@%s: %w", name, version, ErrPackageNotFound)
+		}
+		return fmt.Errorf("npm: delete version meta: %w", err)
+	}
+	if file := tarballFilenameFromMeta(meta); file != "" {
+		_ = wfs.Delete(s.tarballPath(name, file))
+	}
+
+	if tags, err := s.ReadDistTags(name); err == nil && len(tags) > 0 {
+		changed := false
+		for tag, taggedVersion := range tags {
+			if taggedVersion == version {
+				delete(tags, tag)
+				changed = true
+			}
+		}
+		if changed {
+			_ = s.WriteDistTags(name, tags)
+		}
+	}
+	_ = wfs.Delete(s.packumentCachePath(name))
+	_ = wfs.Delete(s.readmePath(name))
+	return nil
 }
 
 // OpenTarball streams a tarball file by name. file is the filename
@@ -381,7 +433,7 @@ func walkPackages(fs rawfs.RawFS, dir, prefix string) ([]string, error) {
 		}
 		// Detect a package leaf: has a "versions" subdir.
 		vDir := path.Join(dir, e.Name, "versions")
-		if _, err := fs.Stat(vDir); err == nil {
+		if hasVersionMetaFiles(fs, vDir) {
 			pkg := e.Name
 			if prefix != "" {
 				pkg = prefix + "/" + e.Name
@@ -400,6 +452,19 @@ func walkPackages(fs rawfs.RawFS, dir, prefix string) ([]string, error) {
 		out = append(out, sub...)
 	}
 	return out, nil
+}
+
+func hasVersionMetaFiles(fs rawfs.RawFS, dir string) bool {
+	entries, err := fs.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir && strings.HasSuffix(e.Name, ".json") {
+			return true
+		}
+	}
+	return false
 }
 
 // CountPackagesVersionsBytes walks the packages tree and reports

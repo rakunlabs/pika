@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"sync"
@@ -232,6 +234,10 @@ func (m *Manager) applyOne(s ProxyServer) error {
 // for the socket to be released before binding a successor on the
 // same port.
 func (m *Manager) startInstance(id, addr string, pipe CompiledPipeline) (context.CancelFunc, chan struct{}, error) {
+	if pipe.Protocol == ProtocolTCP {
+		return m.startTCPInstance(id, addr, pipe)
+	}
+
 	s := ada.New()
 	// Baseline: panic recovery and a Server header that names the
 	// proxy. We intentionally leave out cors/log/requestid — those
@@ -259,6 +265,65 @@ func (m *Manager) startInstance(id, addr string, pipe CompiledPipeline) (context
 		}
 	}()
 	return pcancel, done, nil
+}
+
+func (m *Manager) startTCPInstance(id, addr string, pipe CompiledPipeline) (context.CancelFunc, chan struct{}, error) {
+	if pipe.TCPRoot == nil {
+		return nil, nil, fmt.Errorf("proxy %s: TCP pipeline root missing", id)
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, nil, err
+	}
+	tcpLn, ok := ln.(*net.TCPListener)
+	if !ok {
+		_ = ln.Close()
+		return nil, nil, fmt.Errorf("proxy %s: listener is not TCP", id)
+	}
+
+	pctx, pcancel := context.WithCancel(m.parent)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer ln.Close()
+		slog.Info("tcp proxy listener starting", "id", id, "addr", addr)
+		go func() {
+			<-pctx.Done()
+			_ = ln.Close()
+		}()
+
+		var wg sync.WaitGroup
+		defer wg.Wait()
+		for {
+			conn, err := tcpLn.AcceptTCP()
+			if err != nil {
+				if pctx.Err() != nil || errorsIsClosed(err) {
+					return
+				}
+				slog.Warn("tcp proxy accept failed", "id", id, "addr", addr, "error", err)
+				continue
+			}
+			wg.Add(1)
+			go func(conn *net.TCPConn) {
+				defer wg.Done()
+				defer conn.Close()
+				connCtx, cancel := context.WithCancel(pctx)
+				defer cancel()
+				go func() {
+					<-connCtx.Done()
+					_ = conn.Close()
+				}()
+				if err := pipe.TCPRoot(connCtx, conn); err != nil && pctx.Err() == nil {
+					slog.Warn("tcp proxy connection failed", "id", id, "remote", conn.RemoteAddr(), "error", err)
+				}
+			}(conn)
+		}
+	}()
+	return pcancel, done, nil
+}
+
+func errorsIsClosed(err error) bool {
+	return errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF)
 }
 
 // stopLocked tears down a running instance. The caller must hold m.mu.

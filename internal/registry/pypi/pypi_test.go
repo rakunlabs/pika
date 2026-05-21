@@ -60,3 +60,31 @@ func TestPyPILocalPublishSimpleDetail(t *testing.T) {
 		t.Fatalf("unexpected detail: %+v", detail)
 	}
 }
+
+func TestPyPIStore_DeleteVersionRemovesAllFiles(t *testing.T) {
+	l := newTestLocal(t)
+	for _, p := range []string{
+		"/packages/demo/demo-1.0.0.tar.gz",
+		"/packages/demo/demo-1.0.0-py3-none-any.whl",
+		"/packages/demo/demo-2.0.0.tar.gz",
+	} {
+		if w := do(l, http.MethodPut, p, bytes.NewReader([]byte("payload"))); w.Code != http.StatusCreated {
+			t.Fatalf("put %s status %d body %s", p, w.Code, w.Body.String())
+		}
+	}
+
+	deleted, err := l.store.DeleteVersion("demo", "1.0.0")
+	if err != nil {
+		t.Fatalf("DeleteVersion: %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("deleted=%d want 2", deleted)
+	}
+	files, err := l.store.ListPackageFiles("demo")
+	if err != nil {
+		t.Fatalf("ListPackageFiles: %v", err)
+	}
+	if len(files) != 1 || !strings.Contains(files[0].Name, "2.0.0") {
+		t.Fatalf("files after delete = %+v", files)
+	}
+}

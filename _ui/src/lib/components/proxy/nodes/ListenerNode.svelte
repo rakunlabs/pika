@@ -11,7 +11,9 @@
  import type { NodeProps } from 'kaykay';
  import { Radio } from 'lucide-svelte';
 
- let { data, selected }: NodeProps<{ label?: string; port?: string }> = $props();
+ let { data, selected }: NodeProps<{ label?: string; port?: string; protocol?: 'http' | 'tcp' }> = $props();
+ const protocol = $derived(data.protocol ?? 'http');
+ const streamPort = $derived(protocol === 'tcp' ? 'tcp-stream' : 'http-stream');
 </script>
 
 <div
@@ -22,13 +24,13 @@
 >
  <div class="flex items-center gap-1.5">
   <Radio size={12} class="text-accent-600 dark:text-accent-400" />
-  <span class="font-semibold text-sm">Listener</span>
+   <span class="font-semibold text-sm">{protocol.toUpperCase()} Listener</span>
  </div>
  <div class="flex justify-between items-baseline mt-1">
   <span class="text-[10px] text-slate-500 dark:text-slate-400">port</span>
   <span class="text-xs font-mono">{data.port ?? '—'}</span>
  </div>
- <Handle id="out" type="output" port="http-stream" position="right" />
+  <Handle id="out" type="output" port={streamPort} position="right" />
 </div>
 
 <style>

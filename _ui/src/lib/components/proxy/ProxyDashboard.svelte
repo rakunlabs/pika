@@ -10,7 +10,9 @@
  // overview.
  import type { ProxyServer } from '@/lib/types/config';
  import type { ProxyInstanceStatus } from '@/lib/store/proxy.svelte';
- import { Network, Circle, ExternalLink, PlayCircle, Plus } from 'lucide-svelte';
+ import { Network, Circle, ExternalLink, PlayCircle, Plus, Cable } from 'lucide-svelte';
+
+ type ProxyProtocol = 'http' | 'tcp';
 
  let {
   servers,
@@ -24,7 +26,7 @@
   status: ProxyInstanceStatus[];
   canManage: boolean;
   onOpenEditor: (id: string) => void;
-  onAdd: () => void;
+   onAdd: (protocol?: ProxyProtocol) => void;
   onTestServer: (id: string) => void;
  } = $props();
 
@@ -39,6 +41,10 @@
    else if (n.type === 'handler') handlers++;
   }
   return { mw, handlers };
+ }
+
+ function protocolFor(srv: ProxyServer): ProxyProtocol {
+  return (srv.protocol ?? 'http') as ProxyProtocol;
  }
 
  // Quick aggregate for the summary strip at the top.
@@ -69,17 +75,30 @@
      Every configured proxy server, its current listener address and a shortcut to the editor or the test console.
     </p>
    </div>
-   {#if canManage}
-    <button
-     type="button"
-     class="px-3 py-1.5 text-xs rounded
-            bg-accent-600 text-white font-medium hover:bg-accent-700
-            inline-flex items-center gap-1.5 cursor-pointer"
-     onclick={onAdd}
-    >
-     <Plus size={12} /> New proxy server
-    </button>
-   {/if}
+    {#if canManage}
+     <div class="flex items-center gap-2">
+     <button
+      type="button"
+      class="px-3 py-1.5 text-xs rounded
+             bg-accent-600 text-white font-medium hover:bg-accent-700
+             inline-flex items-center gap-1.5 cursor-pointer"
+      onclick={() => onAdd('http')}
+     >
+      <Plus size={12} /> New HTTP proxy
+     </button>
+     <button
+      type="button"
+      class="px-3 py-1.5 text-xs rounded
+             bg-slate-100 dark:bg-warm-700
+             hover:bg-slate-200 dark:hover:bg-warm-600
+             text-slate-700 dark:text-slate-200
+             inline-flex items-center gap-1.5 cursor-pointer"
+      onclick={() => onAdd('tcp')}
+     >
+      <Cable size={12} /> New TCP proxy
+     </button>
+     </div>
+    {/if}
   </header>
 
   <!-- Summary strip -->
@@ -110,27 +129,39 @@
      No proxy servers yet
     </div>
     <div class="text-xs mb-4">
-     Build a custom HTTP listener from a graph of middlewares and handlers.
+      Build a custom HTTP or TCP listener from a graph of protocol-specific middlewares and handlers.
      Each server gets its own port and can mount /data, /raw, /external, a Consul KV shim,
      a reverse proxy and more.
     </div>
     {#if canManage}
-     <button
-      type="button"
-      class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded
-             bg-accent-600 text-white font-medium hover:bg-accent-700 cursor-pointer"
-      onclick={onAdd}
-     >
-      <Plus size={12} /> Create your first proxy server
-     </button>
-    {/if}
+      <div class="flex items-center gap-2">
+       <button
+        type="button"
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded
+               bg-accent-600 text-white font-medium hover:bg-accent-700 cursor-pointer"
+        onclick={() => onAdd('http')}
+       >
+        <Plus size={12} /> Create HTTP proxy
+       </button>
+       <button
+        type="button"
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded
+               bg-slate-100 dark:bg-warm-700 hover:bg-slate-200 dark:hover:bg-warm-600
+               text-slate-700 dark:text-slate-200 cursor-pointer"
+        onclick={() => onAdd('tcp')}
+       >
+        <Cable size={12} /> Create TCP proxy
+       </button>
+      </div>
+     {/if}
    </div>
   {:else}
    <!-- Server grid -->
    <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
     {#each servers as srv (srv.id)}
-     {@const st = statusFor(srv.id)}
-     {@const counts = nodeCount(srv)}
+      {@const st = statusFor(srv.id)}
+      {@const counts = nodeCount(srv)}
+      {@const protocol = protocolFor(srv)}
      <div class="bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg p-4 flex flex-col">
       <div class="flex items-start gap-2 mb-2">
        <Circle
@@ -153,11 +184,16 @@
          {st?.addr ?? `:${srv.port}`}
         </div>
        </div>
-       <span class={'shrink-0 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ' + (srv.enabled
-        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300'
-        : 'bg-slate-100 text-slate-600 dark:bg-warm-900 dark:text-slate-400')}>
-        {srv.enabled ? 'enabled' : 'disabled'}
-       </span>
+        <span class={'shrink-0 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ' + (srv.enabled
+         ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300'
+         : 'bg-slate-100 text-slate-600 dark:bg-warm-900 dark:text-slate-400')}>
+         {srv.enabled ? 'enabled' : 'disabled'}
+        </span>
+        <span class={'shrink-0 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded font-mono ' + (protocol === 'tcp'
+         ? 'bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300'
+         : 'bg-accent-50 text-accent-700 dark:bg-accent-900/40 dark:text-accent-300')}>
+         {protocol}
+        </span>
       </div>
 
       <div class="flex items-center gap-4 text-xs text-slate-600 dark:text-slate-300 mb-3">
@@ -182,7 +218,7 @@
        >
         <ExternalLink size={12} /> Open editor
        </button>
-       {#if st?.running}
+        {#if st?.running && protocol === 'http'}
         <button
          type="button"
          class="text-xs text-slate-600 dark:text-slate-300 hover:text-slate-800 dark:hover:text-slate-100 inline-flex items-center gap-1 cursor-pointer"

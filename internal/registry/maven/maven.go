@@ -88,6 +88,50 @@ func (s *Store) Delete(rel string) error {
 	return wfs.Delete(s.join(rel))
 }
 
+// DeleteVersion removes all files under one Maven GAV version
+// directory and invalidates adjacent maven-metadata files. Maven's
+// repository layout is path-defined, so this stays within the
+// group/artifact/version prefix instead of deleting arbitrary paths.
+func (s *Store) DeleteVersion(groupID, artifactID, version string) (int, error) {
+	groupID = strings.TrimSpace(groupID)
+	artifactID = strings.TrimSpace(artifactID)
+	version = strings.TrimSpace(version)
+	if groupID == "" || artifactID == "" || version == "" {
+		return 0, registry.ErrInvalidPackageName
+	}
+	groupPath := strings.ReplaceAll(groupID, ".", "/")
+	versionPrefix := path.Join(groupPath, artifactID, version)
+	files, err := s.ListFiles(versionPrefix)
+	if err != nil {
+		return 0, err
+	}
+	if len(files) == 0 {
+		return 0, registry.ErrPackageNotFound
+	}
+
+	var deleted int
+	var firstErr error
+	for _, f := range files {
+		if err := s.Delete(f.Path); err != nil && !isNotFound(err) {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		deleted++
+	}
+
+	artifactPrefix := path.Join(groupPath, artifactID)
+	if metadata, err := s.ListFiles(artifactPrefix); err == nil {
+		for _, f := range metadata {
+			if path.Dir(f.Path) == artifactPrefix && isMutablePath(f.Path) {
+				_ = s.Delete(f.Path)
+			}
+		}
+	}
+	return deleted, firstErr
+}
+
 type File struct {
 	Path    string
 	Size    int64

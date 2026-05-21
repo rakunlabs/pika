@@ -1,15 +1,20 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path"
 	"strings"
 	"testing"
 
 	"github.com/rakunlabs/pika/internal/external"
+	"github.com/rakunlabs/pika/internal/rawfs"
+	"github.com/rakunlabs/pika/internal/registry"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -29,6 +34,97 @@ func buildHandlerForTest(t *testing.T, subtype, cfg string, svc ServiceDeps) htt
 		t.Fatalf("build %s: %v", subtype, err)
 	}
 	return mw(nil)
+}
+
+type memoryRawFS struct {
+	files map[string][]byte
+	dirs  map[string][]rawfs.DirEntry
+}
+
+func (m *memoryRawFS) Stat(p string) (*rawfs.FileInfo, error) {
+	p = strings.TrimPrefix(p, "/")
+	if data, ok := m.files[p]; ok {
+		return &rawfs.FileInfo{Name: path.Base(p), Size: int64(len(data))}, nil
+	}
+	if _, ok := m.dirs[p]; ok {
+		name := path.Base(p)
+		if name == "." {
+			name = ""
+		}
+		return &rawfs.FileInfo{Name: name, IsDir: true}, nil
+	}
+	return nil, os.ErrNotExist
+}
+
+func (m *memoryRawFS) ReadDir(p string) ([]rawfs.DirEntry, error) {
+	p = strings.TrimPrefix(p, "/")
+	entries, ok := m.dirs[p]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return entries, nil
+}
+
+func (m *memoryRawFS) Open(p string) (rawfs.ReadSeekCloser, *rawfs.FileInfo, error) {
+	p = strings.TrimPrefix(p, "/")
+	data, ok := m.files[p]
+	if !ok {
+		return nil, nil, os.ErrNotExist
+	}
+	return nopReadSeekCloser{Reader: bytes.NewReader(data)}, &rawfs.FileInfo{Name: path.Base(p), Size: int64(len(data))}, nil
+}
+
+func (m *memoryRawFS) Write(p string, r io.Reader, _ int64) error {
+	p = strings.TrimPrefix(p, "/")
+	if m.files == nil {
+		m.files = map[string][]byte{}
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	m.files[p] = data
+	return nil
+}
+
+func (m *memoryRawFS) Delete(p string) error {
+	p = strings.TrimPrefix(p, "/")
+	if _, ok := m.files[p]; !ok {
+		return os.ErrNotExist
+	}
+	delete(m.files, p)
+	return nil
+}
+
+func (m *memoryRawFS) MkDir(p string) error {
+	p = strings.TrimPrefix(p, "/")
+	if m.dirs == nil {
+		m.dirs = map[string][]rawfs.DirEntry{}
+	}
+	m.dirs[p] = nil
+	return nil
+}
+
+type nopReadSeekCloser struct{ *bytes.Reader }
+
+func (nopReadSeekCloser) Close() error { return nil }
+
+type fakeRegistry struct {
+	path   string
+	prefix string
+	hits   int
+}
+
+func (f *fakeRegistry) Namespace() string { return "ns" }
+func (f *fakeRegistry) Name() string      { return "repo" }
+func (f *fakeRegistry) Type() string      { return "npm" }
+func (f *fakeRegistry) Kind() string      { return "local" }
+func (f *fakeRegistry) Close() error      { return nil }
+func (f *fakeRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.hits++
+	f.path = r.URL.Path
+	f.prefix = r.Header.Get("X-Pika-Registry-Prefix")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func TestHealthzHandler(t *testing.T) {
@@ -175,6 +271,127 @@ func TestDataHandler_ServiceError(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status: %d", rec.Code)
+	}
+}
+
+func TestRawResourceHandler_ReadFile(t *testing.T) {
+	fsys := &memoryRawFS{files: map[string][]byte{"file.txt": []byte("hello")}}
+	svc := &fakeService{rawMounts: map[string]rawfs.RawFS{"assets": fsys}}
+	h := buildHandlerForTest(t, "raw", `{"mount":"assets","strip_prefix":"/files"}`, svc)
+	req := httptest.NewRequest(http.MethodGet, "/files/file.txt", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%q", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != "hello" {
+		t.Fatalf("body: %q", rec.Body.String())
+	}
+}
+
+func TestRawResourceHandler_DirectoryListing(t *testing.T) {
+	fsys := &memoryRawFS{dirs: map[string][]rawfs.DirEntry{
+		"dir": []rawfs.DirEntry{{Name: "child.txt", Size: 3}},
+	}}
+	svc := &fakeService{rawMounts: map[string]rawfs.RawFS{"assets": fsys}}
+	h := buildHandlerForTest(t, "raw", `{"mount":"assets","directory_listing":true}`, svc)
+	req := httptest.NewRequest(http.MethodGet, "/dir", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "child.txt") {
+		t.Fatalf("listing: %q", rec.Body.String())
+	}
+
+	h = buildHandlerForTest(t, "raw", `{"mount":"assets"}`, svc)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("disabled listing status: %d", rec.Code)
+	}
+}
+
+func TestRawResourceHandler_WriteAllowed(t *testing.T) {
+	fsys := &memoryRawFS{}
+	svc := &fakeService{rawMounts: map[string]rawfs.RawFS{"assets": fsys}}
+	h := buildHandlerForTest(t, "raw", `{"mount":"assets","allow_write":true,"strip_prefix":"/files"}`, svc)
+
+	req := httptest.NewRequest(http.MethodPut, "/files/new.txt", strings.NewReader("new body"))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("put status: %d", rec.Code)
+	}
+	if string(fsys.files["new.txt"]) != "new body" {
+		t.Fatalf("written body: %q", string(fsys.files["new.txt"]))
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/files/new-dir", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("mkdir status: %d", rec.Code)
+	}
+	if _, ok := fsys.dirs["new-dir"]; !ok {
+		t.Fatal("directory was not created")
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/files/new.txt", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete status: %d", rec.Code)
+	}
+	if _, ok := fsys.files["new.txt"]; ok {
+		t.Fatal("file was not deleted")
+	}
+}
+
+func TestRawResourceHandler_WriteBlockedByDefault(t *testing.T) {
+	fsys := &memoryRawFS{}
+	svc := &fakeService{rawMounts: map[string]rawfs.RawFS{"assets": fsys}}
+	h := buildHandlerForTest(t, "raw", `{"mount":"assets"}`, svc)
+	req := httptest.NewRequest(http.MethodPut, "/new.txt", strings.NewReader("body"))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status: %d", rec.Code)
+	}
+}
+
+func TestRegistryResourceHandler(t *testing.T) {
+	reg := &fakeRegistry{}
+	svc := &fakeService{registries: map[string]registry.Registry{"ns/repo": reg}}
+	h := buildHandlerForTest(t, "registry", `{"namespace":"ns","repository":"repo","strip_prefix":"/npm","public_prefix":"/public"}`, svc)
+	req := httptest.NewRequest(http.MethodGet, "/npm/pkg", nil)
+	req.Header.Set("Authorization", "Bearer pika_token")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status: %d body=%q", rec.Code, rec.Body.String())
+	}
+	if reg.path != "/pkg" || reg.prefix != "/public" {
+		t.Fatalf("registry path/prefix: %q/%q", reg.path, reg.prefix)
+	}
+	if svc.lastValidateScope != "registry/ns/repo/pkg" || svc.lastValidateOp != "read" {
+		t.Fatalf("token validation: scope=%q op=%q", svc.lastValidateScope, svc.lastValidateOp)
+	}
+}
+
+func TestRegistryResourceHandler_RequiresTokenByDefault(t *testing.T) {
+	reg := &fakeRegistry{}
+	svc := &fakeService{registries: map[string]registry.Registry{"ns/repo": reg}}
+	h := buildHandlerForTest(t, "registry", `{"namespace":"ns","repository":"repo"}`, svc)
+	req := httptest.NewRequest(http.MethodGet, "/pkg", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status: %d", rec.Code)
+	}
+	if reg.hits != 0 {
+		t.Fatal("registry should not be called without token")
 	}
 }
 

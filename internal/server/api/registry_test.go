@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/rakunlabs/ada"
@@ -22,6 +24,41 @@ func TestHandleRegistersRoutesWithoutGreedyPanic(t *testing.T) {
 
 	if err := Handle(ada.NewMux(), ada.NewMux(), ada.NewMux(), service.New(store), Info{}, nil, nil, rh, nil, nil); err != nil {
 		t.Fatalf("Handle: %v", err)
+	}
+}
+
+func TestRegistryWildcardRoutesCaptureNestedNames(t *testing.T) {
+	m := ada.NewMux()
+
+	var gotPackageName, gotModulePath string
+	m.GET("/api/v1/registries/go/{ns}/{repo}/modules", m.Wrap(func(c *ada.Context) error {
+		return c.SendNoContent()
+	}))
+	m.GET("/api/v1/registries/go/{ns}/{repo}/packages/*", m.Wrap(func(c *ada.Context) error {
+		gotPackageName = c.Request.PathValue("*")
+		return c.SendNoContent()
+	}))
+	m.GET("/api/v1/registries/go/{ns}/{repo}/modules/*", m.Wrap(func(c *ada.Context) error {
+		gotModulePath = c.Request.PathValue("*")
+		return c.SendNoContent()
+	}))
+
+	rec := httptest.NewRecorder()
+	m.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/registries/go/default/mirror/packages/example.com/acme/foo", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("package detail route status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if gotPackageName != "example.com/acme/foo" {
+		t.Fatalf("package detail wildcard capture = %q, want example.com/acme/foo", gotPackageName)
+	}
+
+	rec = httptest.NewRecorder()
+	m.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/registries/go/default/mirror/modules/example.com/acme/foo/versions/v1.2.3/gomod", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("go.mod route status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if gotModulePath != "example.com/acme/foo/versions/v1.2.3/gomod" {
+		t.Fatalf("go.mod wildcard capture = %q", gotModulePath)
 	}
 }
 

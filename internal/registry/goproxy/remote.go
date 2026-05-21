@@ -19,22 +19,22 @@ import (
 // Remote is a Registry implementation that pull-through-caches an
 // upstream Go module proxy. Every read goes through this flow:
 //
-//   1. Look up the requested file in the local Store.
-//   2. On hit AND the file is immutable (.info / .mod / .zip), serve
-//      from cache. On hit but the file is mutable (@v/list,
-//      @latest), serve from cache when fresh per MutableTTL.
-//   3. On miss (or stale mutable), fetch from upstream. Persist the
-//      response to the Store, then serve the bytes that were just
-//      written.
+//  1. Look up the requested file in the local Store.
+//  2. On hit AND the file is immutable (.info / .mod / .zip), serve
+//     from cache. On hit but the file is mutable (@v/list,
+//     @latest), serve from cache when fresh per MutableTTL.
+//  3. On miss (or stale mutable), fetch from upstream. Persist the
+//     response to the Store, then serve the bytes that were just
+//     written.
 //
-// Concurrency
+// # Concurrency
 //
 // A burst of requests for the same uncached file would otherwise
 // hammer the upstream N times in parallel. The package's singleflight
 // coalescer makes only one fetch happen; the rest of the callers
 // wait on the in-flight call and read the cached file once it lands.
 //
-// Failure modes
+// # Failure modes
 //
 // Upstream 404 → 404 to the client. Upstream 5xx → 502 (we surface
 // the failure rather than serve stale data, matching go-proxy's
@@ -48,6 +48,8 @@ type Remote struct {
 	mutableTTL time.Duration
 	sf         *common.Singleflight
 }
+
+var versionFileExts = []string{"info", "mod", "zip"}
 
 // NewRemoteFactory returns the Factory for ("go", "remote") repos.
 func NewRemoteFactory() registry.Factory {
@@ -111,6 +113,28 @@ func (rr *Remote) Stats(_ context.Context) (registry.Stats, error) {
 	}, nil
 }
 
+// WarmVersionFile ensures the requested immutable Go module file is
+// present in the local cache and then best-effort fetches the sibling
+// files for the same module version. A request for any one of
+// .info/.mod/.zip should leave the version usable offline as a real
+// pull-through cache entry.
+func (rr *Remote) WarmVersionFile(ctx context.Context, mod, ver, requiredExt string) error {
+	if err := ValidateModulePath(mod); err != nil {
+		return err
+	}
+	if err := ValidateVersion(ver); err != nil {
+		return err
+	}
+	if !isVersionFileExt(requiredExt) {
+		return fmt.Errorf("goproxy: unsupported version file extension %q", requiredExt)
+	}
+	key := "version:" + mod + "@" + ver
+	_, err, _ := rr.sf.Do(key, func() (any, error) {
+		return nil, rr.ensureVersionCached(ctx, mod, ver, requiredExt)
+	})
+	return err
+}
+
 // PurgeCache implements registry.CachePurger. With All=false (the
 // default), only the mutable pointers (@v/list, @latest) are
 // deleted — the next request for either re-resolves through
@@ -167,29 +191,46 @@ func (rr *Remote) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // serveVersionFile handles immutable files (.info / .mod / .zip).
 // Cache hit → serve from store. Miss → fetch + persist + serve.
 func (rr *Remote) serveVersionFile(w http.ResponseWriter, r *http.Request, mod, ver, ext string) {
-	if _, err := rr.store.StatVersionFile(mod, ver, ext); err == nil {
-		serveFileFromStore(w, r, rr.store, mod, ver, ext)
-		return
-	}
-
-	key := "version:" + mod + "@" + ver + "." + ext
-	_, _, _ = rr.sf.Do(key, func() (any, error) {
-		// Double-check inside singleflight: a previous winner may
-		// have just landed the file while we waited.
-		if _, err := rr.store.StatVersionFile(mod, ver, ext); err == nil {
-			return nil, nil
-		}
-		return nil, rr.fetchAndStoreVersion(r.Context(), mod, ver, ext)
-	})
+	_ = rr.WarmVersionFile(r.Context(), mod, ver, ext)
 
 	// Whether we won the singleflight or rode someone else's fetch,
-	// re-check the store for the file and serve it. If it's still
-	// missing, the fetch failed — surface 404 / 502.
+	// re-check the store for the requested file and serve it. If it's
+	// still missing, the required upstream fetch failed.
 	if _, err := rr.store.StatVersionFile(mod, ver, ext); err != nil {
 		writeUpstreamFailure(w, mod, ver, ext)
 		return
 	}
 	serveFileFromStore(w, r, rr.store, mod, ver, ext)
+}
+
+func (rr *Remote) ensureVersionCached(ctx context.Context, mod, ver, requiredExt string) error {
+	if _, err := rr.store.StatVersionFile(mod, ver, requiredExt); err != nil {
+		if err := rr.fetchAndStoreVersion(ctx, mod, ver, requiredExt); err != nil {
+			return err
+		}
+	}
+
+	for _, ext := range versionFileExts {
+		if ext == requiredExt {
+			continue
+		}
+		if _, err := rr.store.StatVersionFile(mod, ver, ext); err == nil {
+			continue
+		}
+		// The sibling files are cache warm-up only. Serving the requested
+		// artifact must not fail because a non-critical sibling fetch did.
+		_ = rr.fetchAndStoreVersion(ctx, mod, ver, ext)
+	}
+	return nil
+}
+
+func isVersionFileExt(ext string) bool {
+	for _, known := range versionFileExts {
+		if ext == known {
+			return true
+		}
+	}
+	return false
 }
 
 // fetchAndStoreVersion does the actual upstream GET + Store.Write

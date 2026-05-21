@@ -151,21 +151,6 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	// Protected group: require auth + resolve capabilities.
 	m.Use(mgr.Require(), mgr.CapMiddleware())
 
-	// Proxy manager owns every user-built listener. It is created
-	// here so the api layer (which mutates settings) can reach it
-	// for the per-save Reconcile call. The main server port is
-	// reserved so a misconfigured graph can't knock the admin UI
-	// offline by binding the same socket.
-	proxyMgr := proxy.NewManager(ctx, proxy.ServiceFromService(svc), cfg.Server.Host, []string{cfg.Server.Port})
-	// Deterministic shutdown order: main HTTP server returns first
-	// (via StartWithContext below), then the user-facing protocol
-	// listeners drain (FTP/SFTP/TFTP/WebDAV via api.StopServeServers),
-	// then the user-built proxy graphs (proxyMgr.Stop waits for socket
-	// release per B1). Defers execute LIFO so we register them in
-	// reverse: proxyMgr first, serve listeners second.
-	defer proxyMgr.Stop()
-	defer api.StopServeServers(rh)
-
 	// Build the artifact registry manager BEFORE api.Handle so the
 	// api struct can attach to it during construction. Protocol
 	// factories (registry/goproxy, registry/npm, registry/docker)
@@ -177,6 +162,24 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	if err := registerRegistryFactories(registryMgr); err != nil {
 		return fmt.Errorf("register registry factories: %w", err)
 	}
+
+	// Proxy manager owns every user-built listener. It is created
+	// here so the api layer (which mutates settings) can reach it
+	// for the per-save Reconcile call. The main server port is
+	// reserved so a misconfigured graph can't knock the admin UI
+	// offline by binding the same socket.
+	proxyDeps := proxy.ServiceFromService(svc)
+	proxyDeps.RawMounts = rh
+	proxyDeps.Registries = registryMgr
+	proxyMgr := proxy.NewManager(ctx, proxyDeps, cfg.Server.Host, []string{cfg.Server.Port})
+	// Deterministic shutdown order: main HTTP server returns first
+	// (via StartWithContext below), then the user-facing protocol
+	// listeners drain (FTP/SFTP/TFTP/WebDAV via api.StopServeServers),
+	// then the user-built proxy graphs (proxyMgr.Stop waits for socket
+	// release per B1). Defers execute LIFO so we register them in
+	// reverse: proxyMgr first, serve listeners second.
+	defer proxyMgr.Stop()
+	defer api.StopServeServers(rh)
 
 	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, rh, proxyMgrWrapper{proxyMgr}, registryMgr); err != nil {
 		return err

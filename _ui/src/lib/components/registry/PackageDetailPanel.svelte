@@ -25,7 +25,7 @@
   import { Comark } from '@comark/svelte';
   import {
     X, Loader2, Copy, FileText, Layers, Box, Tag, AlertTriangle,
-    FileCode, Globe, Package,
+    FileCode, Globe, Package, Trash2,
   } from 'lucide-svelte';
   import { addToast } from '@/lib/store/toast.svelte';
   import * as registryAPI from '@/lib/store/registry.svelte';
@@ -40,9 +40,11 @@
     // Public registry endpoint base for client-side install snippets
     // ("npm config set registry …", "go get …", "docker pull …").
     endpoint: string;
+    canDelete?: boolean;
+    ondeleted?: () => void | Promise<void>;
     onclose: () => void;
   };
-  let { namespace, repoName, repoType, packageName, endpoint, onclose }: Props = $props();
+  let { namespace, repoName, repoType, packageName, endpoint, canDelete = false, ondeleted, onclose }: Props = $props();
 
   type Tab = 'overview' | 'versions' | 'readme' | 'install' | 'layers';
   let activeTab = $state<Tab>('overview');
@@ -63,6 +65,7 @@
   // Tag/version focus for the "layers" tab (Docker) and the
   // go.mod viewer (Go). Defaults to latest on first load.
   let focusedVersion = $state<string | null>(null);
+  let deletingRef = $state<string | null>(null);
 
   async function loadDetail() {
     loading = true;
@@ -159,6 +162,26 @@
       addToast('Copied to clipboard', 'success');
     } catch {
       addToast('Clipboard write failed', 'alert');
+    }
+  }
+
+  async function deleteFocusedArtifact(ref: string) {
+    if (!detail || !canDelete) return;
+    const subject = detail.type === 'docker' ? `${detail.name}:${ref}` : `${detail.name}@${ref}`;
+    if (!window.confirm(`Delete ${subject} from ${namespace}/${repoName}?\n\nThis removes the registry artifact reference and cannot be undone.`)) {
+      return;
+    }
+    deletingRef = ref;
+    try {
+      const selector = detail.type === 'docker' ? { tag: ref } : { version: ref };
+      await registryAPI.deleteRegistryArtifact(detail.type, namespace, repoName, detail.name, selector);
+      addToast(`Deleted ${subject}`, 'success');
+      await loadDetail();
+      await ondeleted?.();
+    } catch (err) {
+      addToast(`Delete failed: ${err}`, 'alert');
+    } finally {
+      deletingRef = null;
     }
   }
 
@@ -464,6 +487,7 @@
                   <th class="py-1.5 pr-2">Published</th>
                   <th class="py-1.5 pr-2">Size</th>
                   <th class="py-1.5">Status</th>
+                  {#if canDelete}<th class="py-1.5 text-right">Actions</th>{/if}
                 </tr>
               </thead>
               <tbody>
@@ -484,6 +508,13 @@
                         </span>
                       {/if}
                     </td>
+                    {#if canDelete}
+                      <td class="py-1.5 text-right">
+                        <button class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 disabled:opacity-50" title="Delete version" aria-label="Delete version" disabled={deletingRef === v.version} onclick={() => deleteFocusedArtifact(v.version)}>
+                          {#if deletingRef === v.version}<Loader2 size={12} class="animate-spin" />{:else}<Trash2 size={12} />{/if}
+                        </button>
+                      </td>
+                    {/if}
                   </tr>
                 {/each}
               </tbody>
@@ -497,6 +528,7 @@
                   <th class="py-1.5 pr-2">go.mod</th>
                   <th class="py-1.5 pr-2">.zip</th>
                   <th class="py-1.5">Status</th>
+                  {#if canDelete}<th class="py-1.5 text-right">Actions</th>{/if}
                 </tr>
               </thead>
               <tbody>
@@ -518,6 +550,13 @@
                         </span>
                       {/if}
                     </td>
+                    {#if canDelete}
+                      <td class="py-1.5 text-right">
+                        <button class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 disabled:opacity-50" title="Delete version" aria-label="Delete version" disabled={deletingRef === v.version} onclick={() => deleteFocusedArtifact(v.version)}>
+                          {#if deletingRef === v.version}<Loader2 size={12} class="animate-spin" />{:else}<Trash2 size={12} />{/if}
+                        </button>
+                      </td>
+                    {/if}
                   </tr>
                 {/each}
               </tbody>
@@ -530,6 +569,7 @@
                   <th class="py-1.5 pr-2">Image size</th>
                   <th class="py-1.5 pr-2">Layers</th>
                   <th class="py-1.5">Digest</th>
+                  {#if canDelete}<th class="py-1.5 text-right">Actions</th>{/if}
                 </tr>
               </thead>
               <tbody>
@@ -544,6 +584,13 @@
                     <td class="py-1.5 pr-2 text-warm-500">{formatSize(t.image_size)}</td>
                     <td class="py-1.5 pr-2 text-warm-500">{t.layers?.length ?? 0}</td>
                     <td class="py-1.5 font-mono text-[10px] text-warm-500 truncate max-w-xs">{t.digest ?? ''}</td>
+                    {#if canDelete}
+                      <td class="py-1.5 text-right">
+                        <button class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 disabled:opacity-50" title="Delete tag" aria-label="Delete tag" disabled={deletingRef === t.tag} onclick={() => deleteFocusedArtifact(t.tag)}>
+                          {#if deletingRef === t.tag}<Loader2 size={12} class="animate-spin" />{:else}<Trash2 size={12} />{/if}
+                        </button>
+                      </td>
+                    {/if}
                   </tr>
                 {/each}
               </tbody>
@@ -556,6 +603,7 @@
                   <th class="py-1.5 pr-2">App version</th>
                   <th class="py-1.5 pr-2">Created</th>
                   <th class="py-1.5">Size</th>
+                  {#if canDelete}<th class="py-1.5 text-right">Actions</th>{/if}
                 </tr>
               </thead>
               <tbody>
@@ -570,6 +618,13 @@
                     <td class="py-1.5 pr-2 text-warm-500">{v.app_version ?? ''}</td>
                     <td class="py-1.5 pr-2 text-warm-500">{formatPublishedAt(v.created)}</td>
                     <td class="py-1.5 text-warm-500">{formatSize(v.size)}</td>
+                    {#if canDelete}
+                      <td class="py-1.5 text-right">
+                        <button class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 disabled:opacity-50" title="Delete version" aria-label="Delete version" disabled={deletingRef === v.version} onclick={() => deleteFocusedArtifact(v.version)}>
+                          {#if deletingRef === v.version}<Loader2 size={12} class="animate-spin" />{:else}<Trash2 size={12} />{/if}
+                        </button>
+                      </td>
+                    {/if}
                   </tr>
                 {/each}
               </tbody>
@@ -581,6 +636,7 @@
                   <th class="py-1.5 pr-2">Version</th>
                   <th class="py-1.5 pr-2">JAR</th>
                   <th class="py-1.5">POM</th>
+                  {#if canDelete}<th class="py-1.5 text-right">Actions</th>{/if}
                 </tr>
               </thead>
               <tbody>
@@ -591,6 +647,13 @@
                     </td>
                     <td class="py-1.5 pr-2 text-warm-500">{formatSize(v.jar_size)}</td>
                     <td class="py-1.5 text-warm-500">{formatSize(v.pom_size)}</td>
+                    {#if canDelete}
+                      <td class="py-1.5 text-right">
+                        <button class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 disabled:opacity-50" title="Delete version" aria-label="Delete version" disabled={deletingRef === v.version} onclick={() => deleteFocusedArtifact(v.version)}>
+                          {#if deletingRef === v.version}<Loader2 size={12} class="animate-spin" />{:else}<Trash2 size={12} />{/if}
+                        </button>
+                      </td>
+                    {/if}
                   </tr>
                 {/each}
               </tbody>
@@ -602,6 +665,7 @@
                   <th class="py-1.5 pr-2">Version</th>
                   <th class="py-1.5 pr-2">Files</th>
                   <th class="py-1.5">Size</th>
+                  {#if canDelete}<th class="py-1.5 text-right">Actions</th>{/if}
                 </tr>
               </thead>
               <tbody>
@@ -612,6 +676,13 @@
                     </td>
                     <td class="py-1.5 pr-2 text-warm-500">{v.files?.length ?? 0}</td>
                     <td class="py-1.5 text-warm-500">{formatSize(v.file_size)}</td>
+                    {#if canDelete}
+                      <td class="py-1.5 text-right">
+                        <button class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 disabled:opacity-50" title="Delete version files" aria-label="Delete version files" disabled={deletingRef === v.version} onclick={() => deleteFocusedArtifact(v.version)}>
+                          {#if deletingRef === v.version}<Loader2 size={12} class="animate-spin" />{:else}<Trash2 size={12} />{/if}
+                        </button>
+                      </td>
+                    {/if}
                   </tr>
                 {/each}
               </tbody>
@@ -623,6 +694,7 @@
                   <th class="py-1.5 pr-2">Version</th>
                   <th class="py-1.5 pr-2">Size</th>
                   <th class="py-1.5">Status</th>
+                  {#if canDelete}<th class="py-1.5 text-right">Actions</th>{/if}
                 </tr>
               </thead>
               <tbody>
@@ -635,6 +707,13 @@
                     <td class="py-1.5">
                       {#if v.yanked}<span class="text-[10px] px-1 py-0.5 rounded bg-red-500/10 text-red-500">yanked</span>{/if}
                     </td>
+                    {#if canDelete}
+                      <td class="py-1.5 text-right">
+                        <button class="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 disabled:opacity-50" title="Delete version" aria-label="Delete version" disabled={deletingRef === v.version} onclick={() => deleteFocusedArtifact(v.version)}>
+                          {#if deletingRef === v.version}<Loader2 size={12} class="animate-spin" />{:else}<Trash2 size={12} />{/if}
+                        </button>
+                      </td>
+                    {/if}
                   </tr>
                 {/each}
               </tbody>

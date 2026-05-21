@@ -15,10 +15,14 @@
 
  let { data, selected }: NodeProps<{
   subtype: string;
+  protocol?: 'http' | 'tcp';
   label?: string;
   path?: string;
   hasError?: boolean;
- }> = $props();
+  }> = $props();
+ const protocol = $derived(data.protocol ?? 'http');
+ const streamPort = $derived(protocol === 'tcp' ? 'tcp-stream' : 'http-stream');
+ const accepts = $derived(protocol === 'tcp' ? ['tcp-stream'] : ['http-stream', 'route']);
 </script>
 
 <div
@@ -34,12 +38,12 @@
   <span class="font-semibold text-sm truncate">{data.label ?? data.subtype}</span>
  </div>
  <div class="mt-1">
-  <span class="text-[10px] font-mono opacity-80">{data.subtype}</span>
+   <span class="text-[10px] font-mono opacity-80">{protocol}:{data.subtype}</span>
   {#if data.path}
    <span class="block text-[10px] font-mono opacity-80 mt-0.5">{data.path}</span>
   {/if}
  </div>
- <Handle id="in" type="input" port="http-stream" accept={['http-stream', 'route']} position="left" />
+  <Handle id="in" type="input" port={streamPort} accept={accepts} position="left" />
 </div>
 
 <style>

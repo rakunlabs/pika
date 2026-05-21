@@ -139,6 +139,41 @@ func TestNPMLocal_PublishThenGetTarball(t *testing.T) {
 	}
 }
 
+func TestNPMStore_DeleteVersionRemovesMetadataAndTags(t *testing.T) {
+	l := newNPMLocal(t, true)
+	publishVersion(t, l, "mypkg", "1.0.0", []byte("v1"))
+	publishVersion(t, l, "mypkg", "2.0.0", []byte("v2"))
+
+	if err := l.store.DeleteVersion("mypkg", "2.0.0"); err != nil {
+		t.Fatalf("DeleteVersion: %v", err)
+	}
+	versions, err := l.store.ListVersions("mypkg")
+	if err != nil {
+		t.Fatalf("ListVersions: %v", err)
+	}
+	if len(versions) != 1 || versions[0] != "1.0.0" {
+		t.Fatalf("versions after delete = %v", versions)
+	}
+	tags, err := l.store.ReadDistTags("mypkg")
+	if err != nil {
+		t.Fatalf("ReadDistTags: %v", err)
+	}
+	if _, ok := tags["latest"]; ok {
+		t.Fatalf("latest tag should be removed after deleting tagged version: %v", tags)
+	}
+
+	if err := l.store.DeleteVersion("mypkg", "1.0.0"); err != nil {
+		t.Fatalf("DeleteVersion last: %v", err)
+	}
+	packages, err := l.store.ListPackages()
+	if err != nil {
+		t.Fatalf("ListPackages: %v", err)
+	}
+	if len(packages) != 0 {
+		t.Fatalf("empty package should not list after last version delete: %v", packages)
+	}
+}
+
 func TestNPMLocal_RejectsRepublish(t *testing.T) {
 	l := newNPMLocal(t, true)
 	publishVersion(t, l, "lodash", "1.0.0", []byte("v1"))

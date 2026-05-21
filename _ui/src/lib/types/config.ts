@@ -368,7 +368,9 @@ export interface KafkaSASLEntry {
 }
 
 // Kafka TLS configuration
-// Each field supports: file path, inline PEM text, or reference (raw://mount/path, config://key)
+// Each field supports: file path, inline PEM text, or reference
+// (raw://mount/path, config://key). Structured refs may append
+// #/json/pointer selectors.
 export interface KafkaTLS {
   enabled?: boolean;
   cert_file?: string;    // path to client cert file
@@ -460,6 +462,7 @@ export interface ProxyServer {
   id: string;
   name: string;
   enabled: boolean;
+  protocol?: 'http' | 'tcp';
   host?: string;
   port: string;
   nodes: ProxyNode[];
@@ -467,7 +470,7 @@ export interface ProxyServer {
   // pipeline is read-only from the UI; the backend regenerates it
   // on every save. Carried so the live status panel can compare
   // the row's hash with the runner's hash.
-  pipeline?: { hash?: string; listen_host?: string; listen_port?: string };
+  pipeline?: { hash?: string; protocol?: 'http' | 'tcp'; listen_host?: string; listen_port?: string };
 }
 
 export interface ProxyNode {
@@ -476,6 +479,7 @@ export interface ProxyNode {
   // retired in favour of 'switch' — the latter supports host/IP/
   // path/method/header/query rules with a dedicated default branch.
   type: 'listener' | 'middleware' | 'switch' | 'handler';
+  protocol?: 'http' | 'tcp';
   subtype?: string;
   position: { x: number; y: number };
   // Opaque per-node config matching the backend schema for the
@@ -615,6 +619,8 @@ export interface RegistryRetentionPolicy {
 // bearer auth (npm "_authToken", Docker registry token).
 // Secret-valued fields accept direct "raw://mount/path" and
 // "config://key" references that the server resolves at runtime.
+// Structured JSON/YAML/TOML secrets can select a scalar with a
+// "#/json/pointer" suffix.
 export interface RegistryUpstreamAuth {
   type?: 'basic' | 'bearer' | 'header';
   username?: string;

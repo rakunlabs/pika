@@ -144,6 +144,10 @@ func (s *Store) upsertIndex(name, version string, body []byte) error {
 	if !replaced {
 		entries = append(entries, next)
 	}
+	return s.writeIndexEntries(idx, entries)
+}
+
+func (s *Store) writeIndexEntries(idx string, entries []indexEntry) error {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Version < entries[j].Version })
 	var b strings.Builder
 	for _, ent := range entries {
@@ -152,6 +156,45 @@ func (s *Store) upsertIndex(name, version string, body []byte) error {
 		b.WriteByte('\n')
 	}
 	return s.WriteIndex(idx, []byte(b.String()))
+}
+
+// DeleteVersion removes a crate archive and its sparse-index row.
+func (s *Store) DeleteVersion(name, version string) error {
+	name = norm(name)
+	version = strings.TrimSpace(version)
+	idx := indexPath(name)
+	if idx == "" || version == "" {
+		return registry.ErrInvalidPackageName
+	}
+	wfs, ok := s.fs.(rawfs.WritableRawFS)
+	if !ok {
+		return fmt.Errorf("cargo: backend read-only")
+	}
+	entries, err := s.ReadIndex(idx)
+	if err != nil {
+		return err
+	}
+	next := entries[:0]
+	found := false
+	for _, ent := range entries {
+		if ent.Version == version {
+			found = true
+			continue
+		}
+		next = append(next, ent)
+	}
+	if !found {
+		return registry.ErrPackageNotFound
+	}
+
+	var firstErr error
+	if err := wfs.Delete(s.cratePath(name, version)); err != nil && !isNotFound(err) {
+		firstErr = err
+	}
+	if err := s.writeIndexEntries(idx, next); err != nil {
+		return err
+	}
+	return firstErr
 }
 
 type indexEntry struct {

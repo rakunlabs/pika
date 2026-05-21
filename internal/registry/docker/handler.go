@@ -38,8 +38,8 @@ const (
 type parsedRequest struct {
 	Op       dockerOp
 	Name     string
-	Ref      string             // manifest ref (tag or digest)
-	Digest   blobstore.Digest   // blob/manifest digest when applicable
+	Ref      string           // manifest ref (tag or digest)
+	Digest   blobstore.Digest // blob/manifest digest when applicable
 	UploadID string
 }
 
@@ -196,6 +196,8 @@ func mapError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", err.Error())
 	case errors.Is(err, ErrTagUnknown):
 		writeError(w, http.StatusNotFound, "MANIFEST_UNKNOWN", err.Error())
+	case errors.Is(err, ErrTagImmutable):
+		writeError(w, http.StatusForbidden, "TAG_IMMUTABLE", err.Error())
 	case errors.Is(err, ErrNameInvalid):
 		writeError(w, http.StatusBadRequest, "NAME_INVALID", err.Error())
 	case errors.Is(err, ErrDigestInvalid):

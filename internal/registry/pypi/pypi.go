@@ -124,6 +124,10 @@ func (s *Store) ListPackages() ([]string, error) {
 	var out []string
 	for _, e := range entries {
 		if e.IsDir {
+			files, _ := s.ListPackageFiles(e.Name)
+			if len(files) == 0 {
+				continue
+			}
 			out = append(out, e.Name)
 		}
 	}
@@ -152,6 +156,50 @@ func (s *Store) ListPackageFiles(name string) ([]File, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// DeleteFile removes one distribution file from a package.
+func (s *Store) DeleteFile(name, filename string) error {
+	wfs, ok := s.fs.(rawfs.WritableRawFS)
+	if !ok {
+		return fmt.Errorf("pypi: backend read-only")
+	}
+	if err := wfs.Delete(s.packagePath(name, filename)); err != nil {
+		if isNotFound(err) {
+			return registry.ErrPackageNotFound
+		}
+		return err
+	}
+	return nil
+}
+
+// DeleteVersion removes every distribution file inferred to belong
+// to a version. PyPI can publish multiple files per version (wheel,
+// sdist), so deletion is version-wide rather than file-system-wide.
+func (s *Store) DeleteVersion(name, version string) (int, error) {
+	files, err := s.ListPackageFiles(name)
+	if err != nil {
+		return 0, err
+	}
+	var deleted int
+	var firstErr error
+	for _, f := range files {
+		_, v := InferNameVersion(f.Name)
+		if v != version {
+			continue
+		}
+		if err := s.DeleteFile(name, f.Name); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		deleted++
+	}
+	if deleted == 0 && firstErr == nil {
+		return 0, registry.ErrPackageNotFound
+	}
+	return deleted, firstErr
 }
 
 func (s *Store) Count() (packages, versions, files int, bytes int64) {

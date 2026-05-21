@@ -7,13 +7,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
 
+	"github.com/rakunlabs/pika/internal/rawfs"
+	"github.com/rakunlabs/pika/internal/registry/common"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -52,9 +57,23 @@ func DefaultHandlers() map[string]NodeSpec {
 		{
 			Kind:        KindHandler,
 			Subtype:     "data",
-			Label:       "Configurations (/data)",
+			Label:       "Config resource",
 			Description: "Serve resolved configuration files. Same engine as the main /data endpoint.",
 			Build:       adaptHandler(buildDataHandler),
+		},
+		{
+			Kind:        KindHandler,
+			Subtype:     "raw",
+			Label:       "Raw mount resource",
+			Description: "Serve files from one configured raw mount, with optional PUT/DELETE/MKDIR writes.",
+			Build:       adaptHandler(buildRawResourceHandler),
+		},
+		{
+			Kind:        KindHandler,
+			Subtype:     "registry",
+			Label:       "Registry resource",
+			Description: "Expose one configured artifact registry repository through this proxy listener.",
+			Build:       adaptHandler(buildRegistryResourceHandler),
 		},
 		{
 			Kind:        KindHandler,
@@ -195,6 +214,282 @@ func setFormatContentType(w http.ResponseWriter, format string) {
 	}
 }
 
+// --- raw ---
+
+type rawResourceCfg struct {
+	commonHandlerCfg
+	// Mount is the Raw mount prefix from Settings.Raw.
+	Mount string `json:"mount"`
+	// StripPrefix is removed from URL.Path before looking up the file
+	// inside Mount. Empty means the handler sees URL.Path from the root.
+	StripPrefix string `json:"strip_prefix,omitempty"`
+	// AllowWrite enables PUT, DELETE and POST-as-mkdir against writable mounts.
+	AllowWrite bool `json:"allow_write,omitempty"`
+	// DirectoryListing enables JSON directory responses for directory paths.
+	DirectoryListing bool `json:"directory_listing,omitempty"`
+}
+
+func buildRawResourceHandler(raw json.RawMessage, svc ServiceDeps) (http.Handler, error) {
+	if svc == nil {
+		return nil, errors.New("raw: service dependency missing")
+	}
+	var cfg rawResourceCfg
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, fmt.Errorf("raw handler config: %w", err)
+		}
+	}
+	if cfg.Mount == "" {
+		return nil, errors.New("raw handler: mount is required")
+	}
+	stripPrefix := normaliseStripPrefix(cfg.StripPrefix)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fsys, ok := svc.MountRawFS(cfg.Mount)
+		if !ok {
+			writeServiceError(w, fmt.Errorf("raw mount %q not found: %w", cfg.Mount, service.ErrNotFound))
+			return
+		}
+		path := resourcePath(r.URL.Path, stripPrefix)
+		switch r.Method {
+		case http.MethodGet, http.MethodHead:
+			serveRawResource(w, r, fsys, path, cfg.DirectoryListing)
+		case http.MethodPut:
+			if !cfg.AllowWrite {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			writeRawResource(w, fsys, path, r.Body, r.ContentLength)
+		case http.MethodDelete:
+			if !cfg.AllowWrite {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			deleteRawResource(w, fsys, path)
+		case http.MethodPost:
+			if !cfg.AllowWrite {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			mkdirRawResource(w, fsys, path)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}), nil
+}
+
+func serveRawResource(w http.ResponseWriter, r *http.Request, fsys rawfs.RawFS, path string, directoryListing bool) {
+	info, err := fsys.Stat(path)
+	if err != nil {
+		writeServiceError(w, mapRawFSError(err))
+		return
+	}
+	if info.IsDir {
+		if !directoryListing {
+			http.Error(w, "directory listing disabled", http.StatusForbidden)
+			return
+		}
+		entries, err := fsys.ReadDir(path)
+		if err != nil {
+			writeServiceError(w, mapRawFSError(err))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(entries)
+		return
+	}
+	serveRawFile(w, r, fsys, path)
+}
+
+func serveRawFile(w http.ResponseWriter, r *http.Request, fsys rawfs.RawFS, path string) {
+	reader, info, err := fsys.Open(path)
+	if err != nil {
+		writeServiceError(w, mapRawFSError(err))
+		return
+	}
+	defer reader.Close()
+
+	ext := filepath.Ext(info.Name)
+	contentType := mime.TypeByExtension(ext)
+	if contentType == "" {
+		buf := make([]byte, 512)
+		n, _ := reader.Read(buf)
+		contentType = http.DetectContentType(buf[:n])
+		if _, err := reader.Seek(0, io.SeekStart); err != nil {
+			http.Error(w, "seeking file: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", contentType)
+
+	modTime := info.ModTime
+	if modTime.IsZero() {
+		modTime = time.Now()
+	}
+	http.ServeContent(w, r, info.Name, modTime, reader)
+}
+
+func writeRawResource(w http.ResponseWriter, fsys rawfs.RawFS, path string, body io.Reader, size int64) {
+	wfs, ok := fsys.(rawfs.WritableRawFS)
+	if !ok {
+		writeServiceError(w, fmt.Errorf("raw mount is read-only: %w", service.ErrBadRequest))
+		return
+	}
+	if err := wfs.Write(path, body, size); err != nil {
+		writeServiceError(w, mapRawFSError(err))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func deleteRawResource(w http.ResponseWriter, fsys rawfs.RawFS, path string) {
+	wfs, ok := fsys.(rawfs.WritableRawFS)
+	if !ok {
+		writeServiceError(w, fmt.Errorf("raw mount is read-only: %w", service.ErrBadRequest))
+		return
+	}
+	if err := wfs.Delete(path); err != nil {
+		writeServiceError(w, mapRawFSError(err))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func mkdirRawResource(w http.ResponseWriter, fsys rawfs.RawFS, path string) {
+	wfs, ok := fsys.(rawfs.WritableRawFS)
+	if !ok {
+		writeServiceError(w, fmt.Errorf("raw mount is read-only: %w", service.ErrBadRequest))
+		return
+	}
+	if err := wfs.MkDir(path); err != nil {
+		writeServiceError(w, mapRawFSError(err))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func mapRawFSError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%v: %w", err, service.ErrNotFound)
+	}
+	return err
+}
+
+// --- registry ---
+
+type registryResourceCfg struct {
+	commonHandlerCfg
+	Namespace   string `json:"namespace"`
+	Repository  string `json:"repository"`
+	StripPrefix string `json:"strip_prefix,omitempty"`
+	// PublicPrefix is the externally visible mount point used when a
+	// registry implementation has to emit absolute URLs. Empty defaults
+	// to StripPrefix, which matches the common switch /prefix/* shape.
+	PublicPrefix string `json:"public_prefix,omitempty"`
+	// RequireToken preserves the normal registry token model by default.
+	RequireToken *bool `json:"require_token,omitempty"`
+}
+
+func buildRegistryResourceHandler(raw json.RawMessage, svc ServiceDeps) (http.Handler, error) {
+	if svc == nil {
+		return nil, errors.New("registry: service dependency missing")
+	}
+	var cfg registryResourceCfg
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, fmt.Errorf("registry handler config: %w", err)
+		}
+	}
+	if cfg.Namespace == "" || cfg.Repository == "" {
+		return nil, errors.New("registry handler: namespace and repository are required")
+	}
+	stripPrefix := normaliseStripPrefix(cfg.StripPrefix)
+	publicPrefix := registryPublicPrefix(cfg.PublicPrefix, stripPrefix)
+	requireToken := cfg.RequireToken == nil || *cfg.RequireToken
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !svc.RegistryEnabled(r.Context()) {
+			writeServiceError(w, fmt.Errorf("registry feature disabled: %w", service.ErrNotFound))
+			return
+		}
+		reg, ok := svc.LookupRegistry(cfg.Namespace, cfg.Repository)
+		if !ok {
+			writeServiceError(w, fmt.Errorf("registry %s/%s not found: %w", cfg.Namespace, cfg.Repository, service.ErrNotFound))
+			return
+		}
+
+		if common.ApplyCORS(w, r, svc.RegistryCORSOrigins(r.Context(), cfg.Namespace, cfg.Repository)) {
+			return
+		}
+
+		rest := registryResourcePath(r.URL.Path, stripPrefix)
+		if requireToken {
+			tokenRaw := common.ExtractToken(r)
+			if tokenRaw == "" {
+				writeServiceError(w, fmt.Errorf("missing pika token: %w", service.ErrUnauthorized))
+				return
+			}
+			scope := "registry/" + cfg.Namespace + "/" + cfg.Repository + rest
+			if err := svc.ValidateToken(r.Context(), tokenRaw, scope, registryOperationFor(r.Method)); err != nil {
+				writeServiceError(w, err)
+				return
+			}
+		}
+
+		r2 := cloneRequestWithResourcePath(r, rest)
+		r2.Header.Set("X-Pika-Registry-Prefix", publicPrefix)
+		reg.ServeHTTP(w, r2)
+	}), nil
+}
+
+func registryOperationFor(method string) string {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return common.OpRead
+	case http.MethodDelete:
+		return common.OpDelete
+	default:
+		return common.OpWrite
+	}
+}
+
+func registryPublicPrefix(explicit, stripPrefix string) string {
+	if p := normaliseStripPrefix(explicit); p != "" {
+		return p
+	}
+	return stripPrefix
+}
+
+func registryResourcePath(path, stripPrefix string) string {
+	rest := resourcePath(path, stripPrefix)
+	if rest == "" {
+		return "/"
+	}
+	return "/" + rest
+}
+
+func resourcePath(path, stripPrefix string) string {
+	if stripPrefix != "" {
+		path = strings.TrimPrefix(path, stripPrefix)
+	}
+	return strings.TrimPrefix(path, "/")
+}
+
+func cloneRequestWithResourcePath(r *http.Request, newPath string) *http.Request {
+	r2 := r.Clone(r.Context())
+	if r2.URL != nil {
+		u := *r2.URL
+		u.Path = newPath
+		u.RawPath = ""
+		r2.URL = &u
+	}
+	return r2
+}
+
 // --- external ---
 
 type externalHandlerCfg struct {
@@ -269,7 +564,8 @@ func buildExternalHandler(raw json.RawMessage, svc ServiceDeps) (http.Handler, e
 
 // writeExternalEntry mirrors the api.readExternalEntry response shape
 // while preferring Raw bytes when present.
-func writeExternalEntry(w http.ResponseWriter, e interface{ /* satisfied by *external.Entry */ }) {
+func writeExternalEntry(w http.ResponseWriter, e interface { /* satisfied by *external.Entry */
+}) {
 	type entryLike struct {
 		Data        map[string]any `json:"data,omitempty"`
 		Raw         []byte         `json:"raw,omitempty"`
@@ -578,15 +874,15 @@ func normaliseStripPrefix(explicit string) string {
 // small context exposing the bits of the request a templated
 // response usually needs:
 //
-//   .Method        — HTTP method ("GET").
-//   .Path          — r.URL.Path verbatim.
-//   .RawQuery      — r.URL.RawQuery.
-//   .Query.<key>   — first query value for <key>, empty string if missing.
-//   .Headers.<key> — first request header for <key> (case-insensitive
-//                    canonical key, e.g. .Headers.X_Forwarded_For).
-//   .Host          — r.Host.
-//   .RemoteAddr    — r.RemoteAddr (with port).
-//   .Now           — server-side time.Time at render.
+//	.Method        — HTTP method ("GET").
+//	.Path          — r.URL.Path verbatim.
+//	.RawQuery      — r.URL.RawQuery.
+//	.Query.<key>   — first query value for <key>, empty string if missing.
+//	.Headers.<key> — first request header for <key> (case-insensitive
+//	                 canonical key, e.g. .Headers.X_Forwarded_For).
+//	.Host          — r.Host.
+//	.RemoteAddr    — r.RemoteAddr (with port).
+//	.Now           — server-side time.Time at render.
 //
 // We deliberately do NOT expose request bodies — that would
 // double-buffer and surprise operators when an upstream sends a

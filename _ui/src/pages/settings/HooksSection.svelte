@@ -833,7 +833,7 @@
  <div>
  <label for="kafka-tls-ca-pem" class="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1">CA Certificate (optional)</label>
  <textarea id="kafka-tls-ca-pem" bind:value={targetKafkaTLSCAPEM} rows={3}
- placeholder="Paste PEM content, or use raw://mount/path or config://file/key"
+  placeholder="Paste PEM content, or use raw://mount/path#/key or config://file#/path/to/key"
  class="w-full px-2 py-1.5 text-xs font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 resize-y"></textarea>
  </div>
  <div>
@@ -845,11 +845,11 @@
  <div>
  <label for="kafka-tls-key-pem" class="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1">Client Key (optional)</label>
  <textarea id="kafka-tls-key-pem" bind:value={targetKafkaTLSKeyPEM} rows={3}
- placeholder="Paste PEM content, or use config://tls/kafka-key"
+  placeholder="Paste PEM content, or use config://tls/kafka-key#/pem"
  class="w-full px-2 py-1.5 text-xs font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 resize-y"></textarea>
  </div>
  <p class="text-[10px] text-slate-400 dark:text-slate-500">
- Supports: inline PEM text, <code class="px-0.5 bg-slate-100 dark:bg-warm-900 rounded">raw://mount/path</code> (from raw mounts), or <code class="px-0.5 bg-slate-100 dark:bg-warm-900 rounded">config://file/key</code> (from config store).
+  Supports: inline PEM text, <code class="px-0.5 bg-slate-100 dark:bg-warm-900 rounded">raw://mount/path</code> (from raw mounts), or <code class="px-0.5 bg-slate-100 dark:bg-warm-900 rounded">config://file/key</code> (from config store). Structured JSON/YAML/TOML files can use JSON Pointer selectors like <code class="px-0.5 bg-slate-100 dark:bg-warm-900 rounded">#/client/cert</code>.
  </p>
  </div>
  {/if}
@@ -935,7 +935,7 @@
  </div>
  </div>
  <p class="mb-3 text-[11px] text-slate-400 dark:text-slate-500">
- Paths support references: <code class="px-0.5 bg-slate-100 dark:bg-warm-900 rounded text-[10px]">raw://mount/path</code> (from raw mounts) or <code class="px-0.5 bg-slate-100 dark:bg-warm-900 rounded text-[10px]">config://key</code> (from config store)
+  Paths support references: <code class="px-0.5 bg-slate-100 dark:bg-warm-900 rounded text-[10px]">raw://mount/path</code> (from raw mounts) or <code class="px-0.5 bg-slate-100 dark:bg-warm-900 rounded text-[10px]">config://key</code> (from config store), plus JSON Pointer selectors like <code class="px-0.5 bg-slate-100 dark:bg-warm-900 rounded text-[10px]">#/key</code> for structured files.
  </p>
  {/if}
 

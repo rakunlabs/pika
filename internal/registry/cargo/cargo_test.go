@@ -64,3 +64,28 @@ func TestCargoLocalPublishIndexDetail(t *testing.T) {
 		t.Fatalf("unexpected detail: %+v", detail)
 	}
 }
+
+func TestCargoStore_DeleteVersionRemovesArchiveAndIndexRow(t *testing.T) {
+	l := newTestLocal(t)
+	for _, p := range []string{
+		"/api/v1/crates/demo/1.0.0/download",
+		"/api/v1/crates/demo/2.0.0/download",
+	} {
+		if w := do(l, http.MethodPut, p, bytes.NewReader([]byte("crate-bytes"))); w.Code != http.StatusCreated {
+			t.Fatalf("put %s status %d body %s", p, w.Code, w.Body.String())
+		}
+	}
+	if err := l.store.DeleteVersion("demo", "1.0.0"); err != nil {
+		t.Fatalf("DeleteVersion: %v", err)
+	}
+	versions, err := l.store.ListVersions("demo")
+	if err != nil {
+		t.Fatalf("ListVersions: %v", err)
+	}
+	if len(versions) != 1 || versions[0] != "2.0.0" {
+		t.Fatalf("versions after delete = %v", versions)
+	}
+	if _, _, err := l.store.OpenCrate("demo", "1.0.0"); err == nil {
+		t.Fatalf("deleted crate archive should not open")
+	}
+}

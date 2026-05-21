@@ -6,6 +6,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/rakunlabs/pika/internal/secretref"
 )
 
 // Validate walks RegistrySettings and rejects mis-shaped rows so the
@@ -321,14 +323,19 @@ func validateRegistryAuthSecretValue(field, value string) error {
 		return fmt.Errorf("%s uses unsupported secret:// reference (use raw://mount/path or config://key): %w", field, ErrBadRequest)
 	}
 	if strings.HasPrefix(value, "raw://") {
-		ref := strings.TrimPrefix(value, "raw://")
+		ref, _, _, err := secretref.Split(strings.TrimPrefix(value, "raw://"))
+		if err != nil {
+			return fmt.Errorf("%s raw:// reference is invalid: %w: %w", field, err, ErrBadRequest)
+		}
 		parts := strings.SplitN(ref, "/", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			return fmt.Errorf("%s raw:// reference must be raw://mount/path: %w", field, ErrBadRequest)
 		}
 	}
-	if strings.HasPrefix(value, "config://") && strings.TrimPrefix(value, "config://") == "" {
-		return fmt.Errorf("%s config:// reference requires a key: %w", field, ErrBadRequest)
+	if strings.HasPrefix(value, "config://") {
+		if _, _, _, err := secretref.Split(strings.TrimPrefix(value, "config://")); err != nil {
+			return fmt.Errorf("%s config:// reference is invalid: %w: %w", field, err, ErrBadRequest)
+		}
 	}
 	return nil
 }

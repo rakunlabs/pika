@@ -21,6 +21,7 @@ export interface CatalogSpec {
   // tolerate the absence by treating it as 'middleware' or
   // 'handler' based on which array the entry lives in.
   kind?: 'middleware' | 'handler' | 'switch';
+  protocol?: 'http' | 'tcp';
   subtype: string;
   label: string;
   description?: string;
@@ -34,6 +35,8 @@ export interface ProxyCatalog {
   // node. Always defined for current builds; treat undefined as
   // [] for forwards compat with older API shapes.
   switches?: CatalogSpec[];
+  tcp_middlewares?: CatalogSpec[];
+  tcp_handlers?: CatalogSpec[];
 }
 
 export interface ProxyInstanceStatus {
@@ -103,11 +106,13 @@ async function load(): Promise<void> {
       // to an empty array instead of leaving the field undefined
       // (the palette tests for `catalog.switches ?? []` already).
       switches: raw?.switches ?? [],
+      tcp_middlewares: raw?.tcp_middlewares ?? [],
+      tcp_handlers: raw?.tcp_handlers ?? [],
     };
   } else {
     // Surface as an empty catalogue so the palette shows "no
     // node kinds available" rather than a forever spinner.
-    catalog = { middlewares: [], handlers: [], switches: [] };
+    catalog = { middlewares: [], handlers: [], switches: [], tcp_middlewares: [], tcp_handlers: [] };
   }
   if (statusRes.status === 'fulfilled') {
     status = statusRes.value.data ?? [];

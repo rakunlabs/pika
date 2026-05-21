@@ -13,19 +13,21 @@ import "encoding/json"
 // short helper that round-trips through this struct.
 
 type ProxyServer struct {
-	ID       string             `json:"id"`
-	Name     string             `json:"name"`
-	Enabled  bool               `json:"enabled"`
-	Host     string             `json:"host,omitempty"`
-	Port     string             `json:"port"`
-	Nodes    []ProxyNode        `json:"nodes,omitempty"`
-	Edges    []ProxyEdge        `json:"edges,omitempty"`
-	Pipeline ProxyPipelineMeta  `json:"pipeline,omitempty"`
+	ID       string            `json:"id"`
+	Name     string            `json:"name"`
+	Enabled  bool              `json:"enabled"`
+	Protocol string            `json:"protocol,omitempty"`
+	Host     string            `json:"host,omitempty"`
+	Port     string            `json:"port"`
+	Nodes    []ProxyNode       `json:"nodes,omitempty"`
+	Edges    []ProxyEdge       `json:"edges,omitempty"`
+	Pipeline ProxyPipelineMeta `json:"pipeline,omitempty"`
 }
 
 type ProxyNode struct {
 	ID       string          `json:"id"`
 	Type     string          `json:"type"`
+	Protocol string          `json:"protocol,omitempty"`
 	Subtype  string          `json:"subtype,omitempty"`
 	Position ProxyPoint      `json:"position"`
 	Config   json.RawMessage `json:"config,omitempty"`
@@ -50,6 +52,7 @@ type ProxyEdge struct {
 // for change detection between the row and the live runtime.
 type ProxyPipelineMeta struct {
 	Hash       string `json:"hash,omitempty"`
+	Protocol   string `json:"protocol,omitempty"`
 	ListenHost string `json:"listen_host,omitempty"`
 	ListenPort string `json:"listen_port,omitempty"`
 }

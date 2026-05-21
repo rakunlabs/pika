@@ -13,9 +13,15 @@
 
  let { data, selected }: NodeProps<{
   subtype: string;
+  protocol?: 'http' | 'tcp';
   label?: string;
   hasError?: boolean;
- }> = $props();
+  }> = $props();
+ const protocol = $derived(data.protocol ?? 'http');
+ const streamPort = $derived(protocol === 'tcp' ? 'tcp-stream' : 'http-stream');
+ const iconClass = $derived(protocol === 'tcp'
+  ? 'text-violet-600 dark:text-violet-400'
+  : 'text-accent-600 dark:text-accent-400');
 </script>
 
 <div
@@ -27,14 +33,14 @@
         {selected ? 'ring-2 ring-accent-500 ring-offset-2 ring-offset-slate-100 dark:ring-offset-warm-950' : ''}"
 >
  <div class="flex items-center gap-1.5">
-  <Layers size={12} class="text-accent-600 dark:text-accent-400" />
-  <span class="font-semibold text-sm truncate">{data.label ?? data.subtype}</span>
+   <Layers size={12} class={iconClass} />
+   <span class="font-semibold text-sm truncate">{data.label ?? data.subtype}</span>
  </div>
  <div class="mt-1">
-  <span class="text-[10px] font-mono text-slate-500 dark:text-slate-400">{data.subtype}</span>
- </div>
- <Handle id="in" type="input" port="http-stream" position="left" />
- <Handle id="out" type="output" port="http-stream" position="right" />
+   <span class="text-[10px] font-mono text-slate-500 dark:text-slate-400">{protocol}:{data.subtype}</span>
+  </div>
+  <Handle id="in" type="input" port={streamPort} position="left" />
+  <Handle id="out" type="output" port={streamPort} position="right" />
 </div>
 
 <style>

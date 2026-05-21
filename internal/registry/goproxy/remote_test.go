@@ -39,9 +39,9 @@ func newFakeUpstream() *fakeUpstream {
 	return fu
 }
 
-func (fu *fakeUpstream) URL() string  { return fu.server.URL }
-func (fu *fakeUpstream) Hits() int32  { return fu.hits.Load() }
-func (fu *fakeUpstream) Close()       { fu.server.Close() }
+func (fu *fakeUpstream) URL() string { return fu.server.URL }
+func (fu *fakeUpstream) Hits() int32 { return fu.hits.Load() }
+func (fu *fakeUpstream) Close()      { fu.server.Close() }
 
 func (fu *fakeUpstream) Serve(path, contentType, body string) {
 	fu.mu.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
@@ -92,10 +92,13 @@ func TestRemote_GetVersionInfoFetchesAndCaches(t *testing.T) {
 	encoded := EncodeModulePath(mod)
 	fu.Serve("/"+encoded+"/@v/v1.0.0.info", "application/json",
 		`{"Version":"v1.0.0","Time":"2024-01-01T00:00:00Z"}`)
+	fu.Serve("/"+encoded+"/@v/v1.0.0.mod", "text/plain", "module github.com/foo/bar\n")
+	fu.Serve("/"+encoded+"/@v/v1.0.0.zip", "application/zip", "ZIPDATA")
 
 	rr, _ := newRemote(t, fu.URL())
 
-	// First fetch — hits upstream.
+	// First fetch — hits upstream for the requested file and warms
+	// the sibling .mod/.zip so the version is fully cached.
 	r := httptest.NewRequest(http.MethodGet, "/"+encoded+"/@v/v1.0.0.info", nil)
 	w := httptest.NewRecorder()
 	rr.ServeHTTP(w, r)
@@ -106,8 +109,13 @@ func TestRemote_GetVersionInfoFetchesAndCaches(t *testing.T) {
 		t.Fatalf("body %q", w.Body.String())
 	}
 	hits1 := fu.Hits()
-	if hits1 != 1 {
-		t.Fatalf("expected 1 upstream hit, got %d", hits1)
+	if hits1 != 3 {
+		t.Fatalf("expected 3 upstream hits during whole-version warm-up, got %d", hits1)
+	}
+	for _, ext := range []string{"info", "mod", "zip"} {
+		if _, err := rr.store.StatVersionFile(mod, "v1.0.0", ext); err != nil {
+			t.Fatalf("%s was not cached: %v", ext, err)
+		}
 	}
 
 	// Second fetch — served from cache.
@@ -119,6 +127,17 @@ func TestRemote_GetVersionInfoFetchesAndCaches(t *testing.T) {
 	}
 	if fu.Hits() != hits1 {
 		t.Fatalf("cache miss: upstream hit again (%d → %d)", hits1, fu.Hits())
+	}
+
+	// The sibling zip was warmed too; reading it must not hit upstream.
+	r3 := httptest.NewRequest(http.MethodGet, "/"+encoded+"/@v/v1.0.0.zip", nil)
+	w3 := httptest.NewRecorder()
+	rr.ServeHTTP(w3, r3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("cached zip status %d", w3.Code)
+	}
+	if fu.Hits() != hits1 {
+		t.Fatalf("warmed zip missed cache: upstream hit again (%d → %d)", hits1, fu.Hits())
 	}
 }
 
@@ -276,6 +295,8 @@ func TestRemote_PurgeMutableForcesRefetch(t *testing.T) {
 		`{"Version":"v1.2.3","Time":"2024-01-15T00:00:00Z"}`)
 	fu.Serve("/"+encoded+"/@v/v1.0.0.info", "application/json",
 		`{"Version":"v1.0.0","Time":"2024-01-01T00:00:00Z"}`)
+	fu.Serve("/"+encoded+"/@v/v1.0.0.mod", "text/plain", "module github.com/foo/bar\n")
+	fu.Serve("/"+encoded+"/@v/v1.0.0.zip", "application/zip", "ZIPDATA")
 
 	rr, _ := newRemote(t, fu.URL())
 
@@ -330,6 +351,8 @@ func TestRemote_PurgeAllDropsImmutables(t *testing.T) {
 	encoded := EncodeModulePath(mod)
 	fu.Serve("/"+encoded+"/@v/v1.0.0.info", "application/json",
 		`{"Version":"v1.0.0","Time":"2024-01-01T00:00:00Z"}`)
+	fu.Serve("/"+encoded+"/@v/v1.0.0.mod", "text/plain", "module github.com/foo/bar\n")
+	fu.Serve("/"+encoded+"/@v/v1.0.0.zip", "application/zip", "ZIPDATA")
 
 	rr, _ := newRemote(t, fu.URL())
 	// Warm.
@@ -338,8 +361,8 @@ func TestRemote_PurgeAllDropsImmutables(t *testing.T) {
 		rr.ServeHTTP(httptest.NewRecorder(), r)
 	}
 	hitsBeforePurge := fu.Hits()
-	if hitsBeforePurge != 1 {
-		t.Fatalf("expected 1 upstream hit during warm-up, got %d", hitsBeforePurge)
+	if hitsBeforePurge != 3 {
+		t.Fatalf("expected 3 upstream hits during whole-version warm-up, got %d", hitsBeforePurge)
 	}
 
 	if _, err := rr.PurgeCache(context.Background(), registry.PurgeOptions{All: true}); err != nil {

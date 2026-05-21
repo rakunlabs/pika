@@ -72,8 +72,10 @@
  const canManage = $derived(appStore.hasPermission('proxy.manage'));
  const featureEnabled = $derived(appStore.info?.proxy_enabled ?? true);
 
- // ── Page-level state ─────────────────────────────────────────────
- type View = 'dashboard' | 'test' | 'editor';
+  // ── Page-level state ─────────────────────────────────────────────
+  type View = 'dashboard' | 'test' | 'editor';
+  type ProxyProtocol = 'http' | 'tcp';
+  type ProxyNodeKind = 'middleware' | 'switch' | 'handler';
 
  let booted = $state(false);
  let view = $state<View>('dashboard');
@@ -125,9 +127,10 @@
  let initialNodes = $state<FlowNode[]>([]);
  let initialEdges = $state<FlowEdge[]>([]);
 
- const activeServer = $derived<ProxyServer | null>(
-  activeId ? (proxyStore.servers.find(s => s.id === activeId) ?? null) : null,
- );
+  const activeServer = $derived<ProxyServer | null>(
+   activeId ? (proxyStore.servers.find(s => s.id === activeId) ?? null) : null,
+  );
+  const activeProtocol = $derived<ProxyProtocol>((activeServer?.protocol ?? 'http') as ProxyProtocol);
 
  // Re-bind every reactive store read through a $derived so the
  // dependency graph stays explicit. Without the wrapper, passing
@@ -157,13 +160,15 @@
 
  // ── Conversions ──────────────────────────────────────────────────
 
- function toFlowNode(n: ProxyNode): FlowNode {
+ function toFlowNode(n: ProxyNode, serverProtocol: ProxyProtocol = 'http'): FlowNode {
+  const protocol = (n.protocol ?? serverProtocol) as ProxyProtocol;
   return {
    id: n.id,
    type: n.type,
    position: { x: n.position.x, y: n.position.y },
    data: {
     type: n.type,
+    protocol,
     subtype: n.subtype ?? '',
     config: n.config ?? {},
     // Surfaced at the top of data so SwitchNode.svelte can read
@@ -178,6 +183,7 @@
   return {
    id: fn.id,
    type: d.type as ProxyNode['type'],
+   protocol: (d.protocol as ProxyProtocol | undefined),
    subtype: (d.subtype as string) || undefined,
    position: { x: fn.position.x, y: fn.position.y },
    config: (d.config as Record<string, unknown>) ?? {},
@@ -219,7 +225,8 @@
    if (flow) flow.fromJSON({ nodes: [], edges: [] });
    return;
   }
-  const nodes = (srv.nodes ?? []).map(toFlowNode);
+  const serverProtocol = (srv.protocol ?? 'http') as ProxyProtocol;
+  const nodes = (srv.nodes ?? []).map(n => toFlowNode(n, serverProtocol));
   const edges = (srv.edges ?? []).map(toFlowEdge);
   initialNodes = nodes;
   initialEdges = edges;
@@ -248,6 +255,7 @@
   const json = flow ? flow.toJSON() : { nodes: [], edges: [] };
   return {
    ...activeServer,
+   protocol: activeProtocol,
    name: activeName,
    port: activePort,
    host: activeHost || undefined,
@@ -273,11 +281,14 @@
   const node = selectedNode;
   const cat = proxyStore.catalog;
   if (!node || !cat) return null;
+  const protocol = node.protocol ?? activeProtocol;
   if (node.type === 'middleware') {
-   return cat.middlewares.find(m => m.subtype === node.subtype) ?? null;
+   const bucket = protocol === 'tcp' ? (cat.tcp_middlewares ?? []) : cat.middlewares;
+   return bucket.find(m => m.subtype === node.subtype) ?? null;
   }
   if (node.type === 'handler') {
-   return cat.handlers.find(h => h.subtype === node.subtype) ?? null;
+   const bucket = protocol === 'tcp' ? (cat.tcp_handlers ?? []) : cat.handlers;
+   return bucket.find(h => h.subtype === node.subtype) ?? null;
   }
   if (node.type === 'switch') {
    return (cat.switches ?? []).find(s => s.subtype === (node.subtype || 'switch')) ?? null;
@@ -287,24 +298,31 @@
 
  // ── Actions ───────────────────────────────────────────────────────
 
- async function addServer() {
+ async function addServer(protocol: ProxyProtocol = 'http') {
   const id = (crypto as any).randomUUID?.() ?? Math.random().toString(36).slice(2);
   // Seed every new server with the smallest graph that compiles:
-  // listener → healthz. Path matching now lives in switches, so a
-  // bare handler catches everything; the operator drops a switch
-  // in front when they need real routing. This is intentionally
-  // simpler than the old default (which embedded a router) — new
-  // operators get a working "ping me" listener and grow from there.
+  // HTTP gets listener → healthz; TCP gets listener → tcp-forward.
+  // Operators can then add protocol-specific middlewares between
+  // those two endpoints.
+  const isTCP = protocol === 'tcp';
   const srv: ProxyServer = {
    id,
-   name: 'New proxy',
+   name: isTCP ? 'New TCP proxy' : 'New proxy',
    enabled: false,
-   port: '9090',
-   nodes: [
-    { id: 'listener', type: 'listener', position: { x: 80, y: 120 }, config: {} },
-    { id: 'healthz',  type: 'handler',  subtype: 'healthz', position: { x: 380, y: 120 }, config: {} },
-   ],
-   edges: [{ id: 'e-listener-healthz', source: 'listener', target: 'healthz' }],
+   protocol,
+   port: isTCP ? '9091' : '9090',
+   nodes: isTCP
+    ? [
+     { id: 'listener', type: 'listener', protocol: 'tcp', position: { x: 80, y: 120 }, config: {} },
+     { id: 'tcp-forward', type: 'handler', protocol: 'tcp', subtype: 'tcp-forward', position: { x: 380, y: 120 }, config: { network: 'tcp', address: '127.0.0.1:80' } },
+    ]
+    : [
+     { id: 'listener', type: 'listener', protocol: 'http', position: { x: 80, y: 120 }, config: {} },
+     { id: 'healthz', type: 'handler', protocol: 'http', subtype: 'healthz', position: { x: 380, y: 120 }, config: {} },
+    ],
+   edges: [isTCP
+    ? { id: 'e-listener-tcp-forward', source: 'listener', target: 'tcp-forward' }
+    : { id: 'e-listener-healthz', source: 'listener', target: 'healthz' }],
   };
   try {
    const created = await proxyStore.create(srv);
@@ -367,28 +385,31 @@
  // config its kind needs. Switch starts with an empty rules list
  // (operator adds the first rule from the config panel); other
  // kinds inherit the empty object — their forms fill in defaults.
- function defaultConfigFor(kind: 'middleware' | 'switch' | 'handler', _subtype?: string): Record<string, unknown> {
-  if (kind === 'switch') return { rules: [] };
-  return {};
- }
+  function defaultConfigFor(kind: ProxyNodeKind, subtype?: string): Record<string, unknown> {
+   if (kind === 'switch') return { rules: [] };
+   if (subtype === 'tcp-forward') return { network: 'tcp', address: '127.0.0.1:80' };
+   return {};
+  }
 
- function spawnNode(kind: 'middleware' | 'switch' | 'handler', subtype: string | undefined, position: { x: number; y: number }) {
-  if (!activeServer || !canManage || !flow) return;
-  const id = `${kind}-${Date.now().toString(36)}`;
-  const node: ProxyNode = {
-   id,
-   type: kind,
-   subtype,
-   position,
+  function spawnNode(kind: ProxyNodeKind, subtype: string | undefined, protocol: ProxyProtocol, position: { x: number; y: number }) {
+   if (!activeServer || !canManage || !flow) return;
+   if (protocol !== activeProtocol) return;
+   const id = `${kind}-${Date.now().toString(36)}`;
+   const node: ProxyNode = {
+    id,
+    type: kind,
+    protocol,
+    subtype,
+    position,
    config: defaultConfigFor(kind, subtype),
   };
   flow.addNode(toFlowNode(node) as FlowNode);
   selectedNodeId = id;
  }
 
- function addNodeOnCanvas(kind: 'middleware' | 'switch' | 'handler', subtype?: string) {
-  spawnNode(kind, subtype, nextNodePosition());
- }
+  function addNodeOnCanvas(kind: ProxyNodeKind, subtype: string | undefined, protocol: ProxyProtocol) {
+   spawnNode(kind, subtype, protocol, nextNodePosition());
+  }
 
  // Canvas drop handling — standard React Flow / SvelteFlow pattern.
  //
@@ -435,7 +456,7 @@
            || e.dataTransfer?.getData('text/plain')
            || '';
   if (!raw) return;
-  let payload: { kind?: string; subtype?: string };
+  let payload: { kind?: string; subtype?: string; protocol?: ProxyProtocol };
   try { payload = JSON.parse(raw); } catch { return; }
   if (payload.kind !== 'middleware' && payload.kind !== 'switch' && payload.kind !== 'handler') return;
 
@@ -448,7 +469,7 @@
    const r = dropZone.getBoundingClientRect();
    pos = { x: e.clientX - r.left, y: e.clientY - r.top };
   }
-  spawnNode(payload.kind, payload.subtype || undefined, pos ?? { x: 0, y: 0 });
+  spawnNode(payload.kind, payload.subtype || undefined, payload.protocol ?? 'http', pos ?? { x: 0, y: 0 });
  }
 
  function updateSelectedNode(next: ProxyNode) {
@@ -460,6 +481,7 @@
   // node card only sees the initial rule list on mount.
   flow.updateNodeData(next.id, {
    type: next.type,
+   protocol: next.protocol ?? activeProtocol,
    subtype: next.subtype ?? '',
    config: next.config ?? {},
    rules: (next.config as any)?.rules,
@@ -678,11 +700,12 @@
 
     {#if view === 'editor' && activeServer}
      <!-- Editor view: palette + canvas + config panel -->
-     <ProxyPalette
-      catalog={proxyCatalog}
-      {canManage}
-      onAddNode={addNodeOnCanvas}
-     />
+      <ProxyPalette
+       catalog={proxyCatalog}
+       protocol={activeProtocol}
+       {canManage}
+       onAddNode={addNodeOnCanvas}
+      />
 
      <div class="flex-1 flex flex-col min-w-0 bg-slate-50 dark:bg-warm-900">
       <!-- Toolbar. Navigation back to the dashboard happens through
@@ -700,9 +723,14 @@
        bind:value={activeName}
        disabled={!canManage}
        placeholder="Server name"
-      />
-      <label class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-       Port
+       />
+       <span class={'shrink-0 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded font-mono ' + (activeProtocol === 'tcp'
+        ? 'bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300'
+        : 'bg-accent-50 text-accent-700 dark:bg-accent-900/40 dark:text-accent-300')}>
+        {activeProtocol}
+       </span>
+       <label class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+        Port
        <input
         type="text"
         class="w-20 px-2 py-1.5 text-sm rounded

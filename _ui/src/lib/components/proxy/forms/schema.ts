@@ -258,6 +258,23 @@ export const middlewareForms: Record<string, FormDef> = {
         help: 'Responses larger than this stream through unchanged. Body knobs no-op for oversize responses.' },
     ],
   },
+
+  'tcp-ip-allowlist': {
+    intro: 'TCP source filter. The connection is closed before reaching the terminal TCP handler unless the client IP matches one of these networks.',
+    fields: [
+      { key: 'cidrs', label: 'Allowed CIDRs', kind: 'string-list',
+        placeholder: '10.0.0.0/8, 192.168.1.5',
+        help: 'A bare IP is accepted and treated as /32 or /128. Empty list rejects everything.' },
+    ],
+  },
+
+  'tcp-ip-denylist': {
+    intro: 'TCP source filter. Connections from these networks are closed before reaching the terminal TCP handler.',
+    fields: [
+      { key: 'cidrs', label: 'Blocked CIDRs', kind: 'string-list',
+        placeholder: '203.0.113.0/24' },
+    ],
+  },
 };
 
 // ── Handlers ────────────────────────────────────────────────────
@@ -275,6 +292,36 @@ export const handlerForms: Record<string, FormDef> = {
           { value: 'yaml', label: 'yaml' },
           { value: 'toml', label: 'toml' },
         ] },
+    ],
+  },
+
+  raw: {
+    intro: 'Serves one configured Raw mount through this proxy listener. Add auth middleware in front if the listener is public.',
+    fields: [
+      { key: 'mount', label: 'Raw mount', kind: 'string', required: true,
+        placeholder: 'assets',
+        help: 'Must match a prefix in Settings → Raw mounts.' },
+      STRIP_PREFIX_FIELD,
+      { key: 'directory_listing', label: 'Enable directory listing', kind: 'boolean', default: false,
+        help: 'When on, directory paths return a JSON list. When off, directories return 403.' },
+      { key: 'allow_write', label: 'Allow PUT / DELETE / mkdir', kind: 'boolean', default: false,
+        help: 'Off by default. When on, PUT writes files, DELETE removes files, and POST creates a directory on writable mounts.' },
+    ],
+  },
+
+  registry: {
+    intro: 'Publishes one existing artifact registry repository on this proxy listener. The request path after Strip prefix is passed to the registry implementation.',
+    fields: [
+      { key: 'namespace', label: 'Namespace', kind: 'string', required: true,
+        placeholder: 'default' },
+      { key: 'repository', label: 'Repository', kind: 'string', required: true,
+        placeholder: 'npm-local' },
+      STRIP_PREFIX_FIELD,
+      { key: 'public_prefix', label: 'Public prefix', kind: 'string',
+        placeholder: '/npm',
+        help: 'Used when registry responses emit absolute URLs. Empty = use Strip prefix. Use empty Strip/Public prefix for a dedicated root-port registry.' },
+      { key: 'require_token', label: 'Require pika token', kind: 'boolean', default: true,
+        help: 'On by default to preserve the normal /registries token model. Turn off only if another middleware enforces access.' },
     ],
   },
 
@@ -357,6 +404,31 @@ export const handlerForms: Record<string, FormDef> = {
         placeholder: '{ "path": "{{.Path}}", "tenant": "{{.Headers.X_Tenant}}" }',
         help: 'Empty body is allowed. Template parse errors surface as compile errors when you Save.' },
       { key: 'headers', label: 'Additional response headers', kind: 'kv-map' },
+    ],
+  },
+
+  'tcp-forward': {
+    intro: 'Forwards one raw TCP connection to an upstream TCP, Unix, or UDP address. This is the TCP terminal node, equivalent to turna redirect.',
+    fields: [
+      { key: 'network', label: 'Upstream network', kind: 'select', default: 'tcp',
+        options: [
+          { value: 'tcp', label: 'tcp' },
+          { value: 'tcp4', label: 'tcp4' },
+          { value: 'tcp6', label: 'tcp6' },
+          { value: 'unix', label: 'unix' },
+          { value: 'unixpacket', label: 'unixpacket' },
+          { value: 'udp', label: 'udp' },
+          { value: 'udp4', label: 'udp4' },
+          { value: 'udp6', label: 'udp6' },
+        ] },
+      { key: 'address', label: 'Upstream address', kind: 'string', required: true,
+        placeholder: '127.0.0.1:5432 or /var/run/docker.sock' },
+      { key: 'dial_timeout', label: 'Dial timeout', kind: 'string', placeholder: '5s',
+        help: 'Go duration string. Empty means no explicit dial timeout.' },
+      { key: 'buffer', label: 'Copy buffer bytes', kind: 'number', placeholder: '65535' },
+      { key: 'disable_nagle', label: 'Disable Nagle (TCP_NODELAY)', kind: 'boolean', default: false },
+      { key: 'proxy_protocol', label: 'Send PROXY protocol v1 header', kind: 'boolean', default: false,
+        help: 'Only applies to TCP upstreams.' },
     ],
   },
 };

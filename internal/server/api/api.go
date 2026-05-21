@@ -310,18 +310,25 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// CapRegistryRead is enough — the UI uses this for the
 	// "Statistics" card in the repo detail panel.
 	m.GET("/api/v1/registries/{type}/{ns}/{repo}/stats", m.Wrap(api.withPerm(service.CapRegistryRead, api.getRegistryStats)))
-	// Per-package detail. The {name...} wildcard catches the rest
-	// of the path so Go ("example.com/foo/bar"), NPM scoped
-	// ("@scope/pkg"), and Docker ("library/nginx") names all
-	// route into the same handler.
-	m.GET("/api/v1/registries/{type}/{ns}/{repo}/packages/{name...}", m.Wrap(api.withPerm(service.CapRegistryRead, api.getRegistryPackageDetail)))
+	// Per-package detail and registry-aware artifact deletion. These are
+	// registered per concrete type instead of under /{type}/ because Ada
+	// prefers static children over params; the protocol-specific list
+	// routes below would otherwise shadow the generic package route.
+	for _, regType := range service.KnownRegistryTypes {
+		regType := regType
+		packageRoute := fmt.Sprintf("/api/v1/registries/%s/{ns}/{repo}/packages/*", regType)
+		m.GET(packageRoute, m.Wrap(api.withPerm(service.CapRegistryRead, api.getRegistryPackageDetailFor(regType))))
+		// Query shape is protocol-specific: version= for Go/NPM/Helm/Maven/
+		// PyPI/Cargo, tag= or digest= for Docker.
+		m.DELETE(packageRoute, m.Wrap(api.withPerm(service.CapRegistryDelete, api.deleteRegistryPackageArtifactFor(regType))))
+	}
 	// NPM-only: cached README markdown for the package's latest
 	// version. Falls back to a lazy tarball extract when the
 	// cache is empty.
 	m.GET("/api/v1/registries/npm/{ns}/{repo}/packages/{name}/readme", m.Wrap(api.withPerm(service.CapRegistryRead, api.getNPMPackageReadme)))
 	// Go-only: raw go.mod bytes for one module version. Used by
 	// the detail UI's go.mod viewer.
-	m.GET("/api/v1/registries/go/{ns}/{repo}/modules/{path...}", m.Wrap(api.withPerm(service.CapRegistryRead, api.getGoModuleGoMod)))
+	m.GET("/api/v1/registries/go/{ns}/{repo}/modules/*", m.Wrap(api.withPerm(service.CapRegistryRead, api.getGoModuleGoMod)))
 	// Remote-only: connectivity probe against the configured
 	// upstream. Admin-gated because the probe uses the registry's
 	// real auth credentials.

@@ -63,3 +63,36 @@ func TestMavenLocalPublishListDetail(t *testing.T) {
 		t.Fatalf("unexpected detail: %+v", detail)
 	}
 }
+
+func TestMavenStore_DeleteVersionRemovesVersionFiles(t *testing.T) {
+	l := newTestLocal(t)
+	paths := []string{
+		"/com/example/app/1.0.0/app-1.0.0.jar",
+		"/com/example/app/1.0.0/app-1.0.0.pom",
+		"/com/example/app/2.0.0/app-2.0.0.jar",
+		"/com/example/app/maven-metadata.xml",
+	}
+	for _, p := range paths {
+		if w := do(l, http.MethodPut, p, bytes.NewReader([]byte("payload"))); w.Code != http.StatusCreated {
+			t.Fatalf("put %s status %d body %s", p, w.Code, w.Body.String())
+		}
+	}
+
+	deleted, err := l.store.DeleteVersion("com.example", "app", "1.0.0")
+	if err != nil {
+		t.Fatalf("DeleteVersion: %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("deleted=%d want 2", deleted)
+	}
+	arts, err := l.store.ListArtifacts()
+	if err != nil {
+		t.Fatalf("ListArtifacts: %v", err)
+	}
+	if len(arts) != 1 || len(arts[0].Versions) != 1 || arts[0].Versions[0] != "2.0.0" {
+		t.Fatalf("artifacts after delete = %+v", arts)
+	}
+	if _, _, err := l.store.Open("/com/example/app/maven-metadata.xml"); err == nil {
+		t.Fatalf("maven metadata should be invalidated")
+	}
+}

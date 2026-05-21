@@ -26,6 +26,7 @@ import (
 	"github.com/rakunlabs/pika/internal/registry/maven"
 	"github.com/rakunlabs/pika/internal/registry/npm"
 	"github.com/rakunlabs/pika/internal/registry/pypi"
+	"github.com/rakunlabs/pika/internal/secretref"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -44,6 +45,10 @@ func storeFromRegistry[T any](r registry.Registry) (*T, bool) {
 		return s.Store(), true
 	}
 	return nil, false
+}
+
+type goVersionFileWarmer interface {
+	WarmVersionFile(ctx context.Context, module, version, ext string) error
 }
 
 // resolveRegistry folds the boilerplate every admin/read handler
@@ -136,42 +141,61 @@ func (r *registrySecretResolver) ResolveSecret(ctx context.Context, value string
 }
 
 func (r *registrySecretResolver) resolveRaw(path string) (string, error) {
-	parts := strings.SplitN(path, "/", 2)
+	location, selector, hasSelector, err := secretref.Split(path)
+	if err != nil {
+		return "", fmt.Errorf("raw ref %q: %w", path, err)
+	}
+	parts := strings.SplitN(location, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", fmt.Errorf("raw ref %q: expected mount/path", path)
+		return "", fmt.Errorf("raw ref %q: expected mount/path", location)
 	}
 	if r == nil || r.rh == nil {
-		return "", fmt.Errorf("raw ref %q: raw mount resolver not available", path)
+		return "", fmt.Errorf("raw ref %q: raw mount resolver not available", location)
 	}
 	fs, ok := r.rh.MountFS(parts[0])
 	if !ok {
-		return "", fmt.Errorf("raw ref %q: mount %q not found", path, parts[0])
+		return "", fmt.Errorf("raw ref %q: mount %q not found", location, parts[0])
 	}
 	rc, _, err := fs.Open(parts[1])
 	if err != nil {
-		return "", fmt.Errorf("raw ref %q: open: %w", path, err)
+		return "", fmt.Errorf("raw ref %q: open: %w", location, err)
 	}
 	defer rc.Close()
 	buf, err := io.ReadAll(io.LimitReader(rc, 64*1024+1))
 	if err != nil {
-		return "", fmt.Errorf("raw ref %q: read: %w", path, err)
+		return "", fmt.Errorf("raw ref %q: read: %w", location, err)
 	}
 	if len(buf) > 64*1024 {
-		return "", fmt.Errorf("raw ref %q: value too large", path)
+		return "", fmt.Errorf("raw ref %q: value too large", location)
+	}
+	if hasSelector {
+		selected, err := secretref.Select(buf, selector)
+		if err != nil {
+			return "", fmt.Errorf("raw ref %q: %w", path, err)
+		}
+		return strings.TrimSpace(selected), nil
 	}
 	return strings.TrimSpace(string(buf)), nil
 }
 
 func (r *registrySecretResolver) resolveConfig(ctx context.Context, key string) (string, error) {
-	if key == "" {
-		return "", fmt.Errorf("config ref: key is empty")
+	location, selector, hasSelector, err := secretref.Split(key)
+	if err != nil {
+		return "", fmt.Errorf("config ref %q: %w", key, err)
 	}
 	if r == nil || r.svc == nil {
-		return "", fmt.Errorf("config ref %q: config resolver not available", key)
+		return "", fmt.Errorf("config ref %q: config resolver not available", location)
 	}
-	file, err := r.svc.File(ctx, key, 0)
+	file, err := r.svc.File(ctx, location, 0)
 	if err != nil {
-		return "", fmt.Errorf("config ref %q: read: %w", key, err)
+		return "", fmt.Errorf("config ref %q: read: %w", location, err)
+	}
+	if hasSelector {
+		selected, err := secretref.Select(file.Data, selector)
+		if err != nil {
+			return "", fmt.Errorf("config ref %q: %w", key, err)
+		}
+		return strings.TrimSpace(selected), nil
 	}
 	return strings.TrimSpace(string(file.Data)), nil
 }
@@ -1135,6 +1159,12 @@ func (a *api) listRegistryNPMPackages(c *ada.Context) error {
 	return c.SetStatus(http.StatusOK).SendJSON(out)
 }
 
+func (a *api) getRegistryPackageDetailFor(expectedType string) func(*ada.Context) error {
+	return func(c *ada.Context) error {
+		return a.getRegistryPackageDetail(c, expectedType)
+	}
+}
+
 // getRegistryPackageDetail returns the per-package detail document.
 // URL: GET /api/v1/registries/{type}/{ns}/{repo}/packages/{name...}.
 //
@@ -1146,8 +1176,8 @@ func (a *api) listRegistryNPMPackages(c *ada.Context) error {
 // caller bugs cleanly.
 //
 // Gated on CapRegistryRead — read-only browsing.
-func (a *api) getRegistryPackageDetail(c *ada.Context) error {
-	reg, ns, repo, err := a.resolveRegistry(c, "")
+func (a *api) getRegistryPackageDetail(c *ada.Context, expectedType string) error {
+	reg, ns, repo, err := a.resolveRegistry(c, expectedType)
 	if err != nil {
 		return err
 	}
@@ -1155,7 +1185,7 @@ func (a *api) getRegistryPackageDetail(c *ada.Context) error {
 	// wildcard segment may carry one through depending on the URL
 	// pattern flavour. Normalise so downstream stores see the
 	// canonical form.
-	name := strings.TrimPrefix(c.Request.PathValue("name"), "/")
+	name := registryPackageName(c)
 	if name == "" {
 		return fmt.Errorf("package name is required: %w", service.ErrBadRequest)
 	}
@@ -1180,6 +1210,246 @@ func (a *api) getRegistryPackageDetail(c *ada.Context) error {
 		return fmt.Errorf("package detail: %w", err)
 	}
 	return c.SetStatus(http.StatusOK).SendJSON(out)
+}
+
+func registryPackageName(c *ada.Context) string {
+	return strings.TrimPrefix(c.Request.PathValue("*"), "/")
+}
+
+// deleteRegistryPackageArtifact removes one protocol-level artifact
+// reference from a registry store. It intentionally does not expose
+// raw paths: callers supply package/module/image/chart names plus the
+// protocol's stable selector (version, tag, digest), and each store
+// performs its own consistency work.
+func (a *api) deleteRegistryPackageArtifactFor(expectedType string) func(*ada.Context) error {
+	return func(c *ada.Context) error {
+		return a.deleteRegistryPackageArtifact(c, expectedType)
+	}
+}
+
+func (a *api) deleteRegistryPackageArtifact(c *ada.Context, expectedType string) error {
+	reg, ns, repo, err := a.resolveRegistry(c, expectedType)
+	if err != nil {
+		return err
+	}
+	name := registryPackageName(c)
+	if name == "" {
+		return fmt.Errorf("package name is required: %w", service.ErrBadRequest)
+	}
+	q := c.Request.URL.Query()
+
+	subject := ""
+	switch reg.Type() {
+	case service.RegistryTypeGo:
+		version, err := requiredQuery(q.Get("version"), "version")
+		if err != nil {
+			return err
+		}
+		store, ok := storeFromRegistry[goproxy.Store](reg)
+		if !ok {
+			return fmt.Errorf("go store unavailable for %s/%s: %w", ns, repo, service.ErrBadRequest)
+		}
+		versions, err := store.ListVersions(name)
+		if err != nil {
+			return fmt.Errorf("list go versions for %s: %w", name, err)
+		}
+		if !stringSliceContains(versions, version) {
+			return fmt.Errorf("go version %s@%s not found: %w", name, version, service.ErrNotFound)
+		}
+		if err := store.DeleteVersion(name, version); err != nil {
+			return mapRegistryDeleteError(name+"@"+version, err)
+		}
+		subject = name + "@" + version
+
+	case service.RegistryTypeNPM:
+		version, err := requiredQuery(q.Get("version"), "version")
+		if err != nil {
+			return err
+		}
+		store, ok := storeFromRegistry[npm.Store](reg)
+		if !ok {
+			return fmt.Errorf("npm store unavailable for %s/%s: %w", ns, repo, service.ErrBadRequest)
+		}
+		if err := store.DeleteVersion(name, version); err != nil {
+			return mapRegistryDeleteError(name+"@"+version, err)
+		}
+		subject = name + "@" + version
+
+	case service.RegistryTypeDocker:
+		refKind, ref, err := dockerDeleteRef(q.Get("tag"), q.Get("digest"))
+		if err != nil {
+			return err
+		}
+		if local, ok := reg.(*docker.Local); ok {
+			if err := local.DeleteReference(name, ref); err != nil {
+				return mapRegistryDeleteError(name+"@"+ref, err)
+			}
+			return c.SendNoContent()
+		}
+		store, ok := storeFromRegistry[docker.Store](reg)
+		if !ok {
+			return fmt.Errorf("docker store unavailable for %s/%s: %w", ns, repo, service.ErrBadRequest)
+		}
+		if refKind == "tag" {
+			if err := store.DeleteTag(name, ref); err != nil {
+				return mapRegistryDeleteError(name+":"+ref, err)
+			}
+			subject = name + ":" + ref
+		} else {
+			dgst, err := blobstore.ParseDigest(ref)
+			if err != nil {
+				return mapRegistryDeleteError(name+"@"+ref, fmt.Errorf("%w: %v", docker.ErrDigestInvalid, err))
+			}
+			if err := store.DeleteManifest(name, dgst); err != nil {
+				return mapRegistryDeleteError(name+"@"+ref, err)
+			}
+			subject = name + "@" + ref
+		}
+
+	case service.RegistryTypeHelm:
+		version, err := requiredQuery(q.Get("version"), "version")
+		if err != nil {
+			return err
+		}
+		store, ok := storeFromRegistry[helm.Store](reg)
+		if !ok {
+			return fmt.Errorf("helm store unavailable for %s/%s: %w", ns, repo, service.ErrBadRequest)
+		}
+		versions, err := store.ListVersions(name)
+		if err != nil {
+			return fmt.Errorf("list helm versions for %s: %w", name, err)
+		}
+		if !stringSliceContains(versions, version) {
+			return fmt.Errorf("helm version %s@%s not found: %w", name, version, service.ErrNotFound)
+		}
+		if err := store.DeleteVersion(name, version); err != nil {
+			return mapRegistryDeleteError(name+"@"+version, err)
+		}
+		subject = name + "@" + version
+
+	case service.RegistryTypeMaven:
+		version, err := requiredQuery(q.Get("version"), "version")
+		if err != nil {
+			return err
+		}
+		groupID, artifactID := splitRegistryMavenName(name)
+		if groupID == "" || artifactID == "" {
+			return fmt.Errorf("invalid maven artifact name %q: %w", name, service.ErrBadRequest)
+		}
+		store, ok := storeFromRegistry[maven.Store](reg)
+		if !ok {
+			return fmt.Errorf("maven store unavailable for %s/%s: %w", ns, repo, service.ErrBadRequest)
+		}
+		if _, err := store.DeleteVersion(groupID, artifactID, version); err != nil {
+			return mapRegistryDeleteError(name+"@"+version, err)
+		}
+		subject = groupID + ":" + artifactID + "@" + version
+
+	case service.RegistryTypePyPI:
+		version, err := requiredQuery(q.Get("version"), "version")
+		if err != nil {
+			return err
+		}
+		store, ok := storeFromRegistry[pypi.Store](reg)
+		if !ok {
+			return fmt.Errorf("pypi store unavailable for %s/%s: %w", ns, repo, service.ErrBadRequest)
+		}
+		if _, err := store.DeleteVersion(name, version); err != nil {
+			return mapRegistryDeleteError(name+"@"+version, err)
+		}
+		subject = name + "@" + version
+
+	case service.RegistryTypeCargo:
+		version, err := requiredQuery(q.Get("version"), "version")
+		if err != nil {
+			return err
+		}
+		store, ok := storeFromRegistry[cargo.Store](reg)
+		if !ok {
+			return fmt.Errorf("cargo store unavailable for %s/%s: %w", ns, repo, service.ErrBadRequest)
+		}
+		if err := store.DeleteVersion(name, version); err != nil {
+			return mapRegistryDeleteError(name+"@"+version, err)
+		}
+		subject = name + "@" + version
+
+	default:
+		return fmt.Errorf("registry type %q does not support delete: %w", reg.Type(), service.ErrBadRequest)
+	}
+
+	a.emitRegistryEvent(hook.Event{
+		Type:     hook.EventRegistryDeleted,
+		Mount:    ns,
+		Path:     repo + "/" + subject,
+		Protocol: "registry-" + reg.Type(),
+	})
+	return c.SendNoContent()
+}
+
+func requiredQuery(value, name string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("query parameter %q is required: %w", name, service.ErrBadRequest)
+	}
+	return value, nil
+}
+
+func dockerDeleteRef(tag, digest string) (kind, ref string, err error) {
+	tag = strings.TrimSpace(tag)
+	digest = strings.TrimSpace(digest)
+	if tag == "" && digest == "" {
+		return "", "", fmt.Errorf("query parameter \"tag\" or \"digest\" is required: %w", service.ErrBadRequest)
+	}
+	if tag != "" && digest != "" {
+		return "", "", fmt.Errorf("only one of \"tag\" or \"digest\" may be supplied: %w", service.ErrBadRequest)
+	}
+	if tag != "" {
+		return "tag", tag, nil
+	}
+	return "digest", digest, nil
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+func splitRegistryMavenName(name string) (string, string) {
+	if strings.Contains(name, ":") {
+		parts := strings.SplitN(name, ":", 2)
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	}
+	parts := strings.Split(strings.Trim(name, "/"), "/")
+	if len(parts) < 2 {
+		return "", ""
+	}
+	return strings.Join(parts[:len(parts)-1], "."), parts[len(parts)-1]
+}
+
+func mapRegistryDeleteError(target string, err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, registry.ErrInvalidPackageName),
+		errors.Is(err, npm.ErrInvalidPackage),
+		errors.Is(err, npm.ErrInvalidVersion),
+		errors.Is(err, docker.ErrNameInvalid),
+		errors.Is(err, docker.ErrDigestInvalid):
+		return fmt.Errorf("delete %s: %w: %w", target, err, service.ErrBadRequest)
+	case errors.Is(err, registry.ErrPackageNotFound),
+		errors.Is(err, npm.ErrPackageNotFound),
+		errors.Is(err, docker.ErrTagUnknown),
+		errors.Is(err, docker.ErrManifestUnknown):
+		return fmt.Errorf("delete %s: %w: %w", target, err, service.ErrNotFound)
+	case errors.Is(err, docker.ErrTagImmutable):
+		return fmt.Errorf("delete %s: %w: %w", target, err, service.ErrForbidden)
+	default:
+		return fmt.Errorf("delete %s: %w", target, err)
+	}
 }
 
 // getNPMPackageReadme returns the cached README markdown for an NPM
@@ -1277,7 +1547,7 @@ func (a *api) getGoModuleGoMod(c *ada.Context) error {
 	if err != nil {
 		return err
 	}
-	name, version, ok := parseGoModuleGoModPath(c.Request.PathValue("path"))
+	name, version, ok := parseGoModuleGoModPath(c.Request.PathValue("*"))
 	if !ok {
 		return fmt.Errorf("name and version are required: %w", service.ErrBadRequest)
 	}
@@ -1286,6 +1556,14 @@ func (a *api) getGoModuleGoMod(c *ada.Context) error {
 		return fmt.Errorf("go store unavailable for %s/%s: %w", ns, repo, service.ErrBadRequest)
 	}
 	body, err := store.ReadGoMod(name, version)
+	if err != nil {
+		if warmer, ok := reg.(goVersionFileWarmer); ok {
+			if warmErr := warmer.WarmVersionFile(c.Request.Context(), name, version, "mod"); warmErr != nil {
+				return fmt.Errorf("go.mod for %s@%s: %w: %w", name, version, warmErr, service.ErrNotFound)
+			}
+			body, err = store.ReadGoMod(name, version)
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("go.mod for %s@%s: %w: %w", name, version, err, service.ErrNotFound)
 	}

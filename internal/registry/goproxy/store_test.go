@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rakunlabs/pika/internal/rawfs"
 	"github.com/rakunlabs/pika/internal/rawfs/localfs"
 )
 
@@ -99,6 +100,34 @@ func TestStore_ListVersions_OnlyComplete(t *testing.T) {
 	}
 	if len(got) != 1 || got[0] != "v1.0.0" {
 		t.Fatalf("got %v, want [v1.0.0]", got)
+	}
+}
+
+func TestStore_ListVersions_UsesRemoteCacheMarkers(t *testing.T) {
+	s := newTempStore(t, "")
+	wfs := s.RawFS().(rawfs.WritableRawFS)
+	mod := "github.com/foo/cacheonly"
+	list := "v1.0.0\nv1.2.0\n"
+	if err := wfs.Write(s.listPath(mod), strings.NewReader(list), int64(len(list))); err != nil {
+		t.Fatalf("write list: %v", err)
+	}
+	latest := []byte(`{"Version":"v2.0.0","Time":"2024-01-01T00:00:00Z"}`)
+	if err := wfs.Write(s.latestPath(mod), strings.NewReader(string(latest)), int64(len(latest))); err != nil {
+		t.Fatalf("write latest: %v", err)
+	}
+
+	got, err := s.ListVersions(mod)
+	if err != nil {
+		t.Fatalf("ListVersions: %v", err)
+	}
+	want := []string{"v1.0.0", "v1.2.0", "v2.0.0"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("[%d] got %s want %s", i, got[i], want[i])
+		}
 	}
 }
 
@@ -198,6 +227,7 @@ func TestStore_ListModules(t *testing.T) {
 	s := newTempStore(t, "")
 	mods := []string{
 		"github.com/foo/bar",
+		"github.com/foo/bar/submodule",
 		"github.com/foo/baz",
 		"github.com/Azure/azure-sdk-for-go",
 		"golang.org/x/sync",
@@ -213,11 +243,12 @@ func TestStore_ListModules(t *testing.T) {
 		t.Fatalf("ListModules: %v", err)
 	}
 	want := map[string]bool{
-		"github.com/foo/bar":                  true,
-		"github.com/foo/baz":                  true,
-		"github.com/Azure/azure-sdk-for-go":   true,
-		"golang.org/x/sync":                   true,
-		"k8s.io/api":                          true,
+		"github.com/foo/bar":                true,
+		"github.com/foo/bar/submodule":      true,
+		"github.com/foo/baz":                true,
+		"github.com/Azure/azure-sdk-for-go": true,
+		"golang.org/x/sync":                 true,
+		"k8s.io/api":                        true,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)

@@ -10,6 +10,7 @@
 
 export type PaletteCategory =
   | 'auth'      // basic-auth, auth-bearer, ip lists, header-compare
+  | 'tcp-auth'  // TCP source IP access middleware
   | 'path'      // strip-prefix, add-prefix, regex-path
   | 'headers'   // cors, header-inject, header-remove
   | 'traffic'   // ratelimit, timeout, request-size-limit
@@ -21,6 +22,7 @@ export type PaletteCategory =
 // so the palette stays legible on either theme.
 export const PALETTE_COLOUR_BY_CATEGORY: Record<PaletteCategory, string> = {
   auth:      'border-rose-500 dark:border-rose-400',
+  'tcp-auth': 'border-violet-500 dark:border-violet-400',
   path:      'border-amber-500 dark:border-amber-400',
   headers:   'border-sky-500 dark:border-sky-400',
   traffic:   'border-violet-500 dark:border-violet-400',
@@ -62,11 +64,12 @@ const MIDDLEWARE_CATEGORY: Record<string, PaletteCategory> = {
   requestid:         'transform',
 };
 
-export function categoryFor(kind: string, subtype: string | undefined): PaletteCategory {
+export function categoryFor(kind: string, subtype: string | undefined, protocol: string = 'http'): PaletteCategory {
   if (kind !== 'middleware' || !subtype) return 'default';
+  if (protocol === 'tcp') return 'tcp-auth';
   return MIDDLEWARE_CATEGORY[subtype] ?? 'default';
 }
 
-export function stripeClassFor(kind: string, subtype: string | undefined): string {
-  return PALETTE_COLOUR_BY_CATEGORY[categoryFor(kind, subtype)];
+export function stripeClassFor(kind: string, subtype: string | undefined, protocol: string = 'http'): string {
+  return PALETTE_COLOUR_BY_CATEGORY[categoryFor(kind, subtype, protocol)];
 }

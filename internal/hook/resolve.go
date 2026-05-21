@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/rakunlabs/pika/internal/rawfs"
+	"github.com/rakunlabs/pika/internal/secretref"
 )
 
 // Resolver resolves PEM references like "raw://mount/path" and "config://file/path"
@@ -32,8 +33,10 @@ func NewResolver(
 }
 
 // Resolve resolves a PEM value. If it starts with "raw://" or "config://",
-// the content is fetched from the corresponding source. Otherwise it is
-// returned as-is (treated as inline PEM text).
+// the content is fetched from the corresponding source. References may select
+// nested scalar values with "#" selectors, for example
+// "config://tls/secrets#/client/cert" or "raw://m/secrets.yaml#/client/cert".
+// Otherwise the value is returned as-is (treated as inline PEM text).
 func (r *Resolver) Resolve(ctx context.Context, value string) (string, error) {
 	if r == nil || value == "" {
 		return value, nil
@@ -54,11 +57,15 @@ func (r *Resolver) resolveRaw(path string) (string, error) {
 	if r.rawMounts == nil {
 		return "", fmt.Errorf("raw mount resolver not available")
 	}
+	location, selector, hasSelector, err := secretref.Split(path)
+	if err != nil {
+		return "", fmt.Errorf("invalid raw reference %q: %w", path, err)
+	}
 
 	// Split into mount prefix and file path
-	parts := strings.SplitN(path, "/", 2)
+	parts := strings.SplitN(location, "/", 2)
 	if len(parts) < 2 {
-		return "", fmt.Errorf("invalid raw reference %q: expected format mount/path", path)
+		return "", fmt.Errorf("invalid raw reference %q: expected format mount/path", location)
 	}
 	mountPrefix, filePath := parts[0], parts[1]
 
@@ -70,15 +77,18 @@ func (r *Resolver) resolveRaw(path string) (string, error) {
 
 	reader, _, err := fs.Open(filePath)
 	if err != nil {
-		return "", fmt.Errorf("reading raw://%s: %w", path, err)
+		return "", fmt.Errorf("reading raw://%s: %w", location, err)
 	}
 	defer reader.Close()
 
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return "", fmt.Errorf("reading raw://%s: %w", path, err)
+		return "", fmt.Errorf("reading raw://%s: %w", location, err)
 	}
 
+	if hasSelector {
+		return secretref.Select(data, selector)
+	}
 	return string(data), nil
 }
 
@@ -87,11 +97,18 @@ func (r *Resolver) resolveConfig(ctx context.Context, key string) (string, error
 	if r.configData == nil {
 		return "", fmt.Errorf("config resolver not available")
 	}
-
-	data, err := r.configData(ctx, key)
+	location, selector, hasSelector, err := secretref.Split(key)
 	if err != nil {
-		return "", fmt.Errorf("reading config://%s: %w", key, err)
+		return "", fmt.Errorf("invalid config reference %q: %w", key, err)
 	}
 
+	data, err := r.configData(ctx, location)
+	if err != nil {
+		return "", fmt.Errorf("reading config://%s: %w", location, err)
+	}
+
+	if hasSelector {
+		return secretref.Select(data, selector)
+	}
 	return string(data), nil
 }

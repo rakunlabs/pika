@@ -35,20 +35,22 @@
  let body = $state('');
  let timeoutMs = $state(10_000);
 
- let response = $state<ProxyTestResponse | null>(null);
- let sending = $state(false);
+  let response = $state<ProxyTestResponse | null>(null);
+  let sending = $state(false);
+
+  const httpServers = $derived(servers.filter(s => (s.protocol ?? 'http') === 'http'));
 
  // Auto-pick the dashboard's selected server (or whichever the
  // user clicked "Test" on) when the tab mounts.
  $effect(() => {
-  if (initialServerId && !selectedServerId) {
-   selectedServerId = initialServerId;
-  } else if (!selectedServerId && servers.length > 0) {
-   selectedServerId = servers[0].id;
-  }
- });
+   if (initialServerId && !selectedServerId && httpServers.some(s => s.id === initialServerId)) {
+    selectedServerId = initialServerId;
+   } else if (!selectedServerId && httpServers.length > 0) {
+    selectedServerId = httpServers[0].id;
+   }
+  });
 
- const currentServer = $derived(servers.find(s => s.id === selectedServerId) ?? null);
+  const currentServer = $derived(httpServers.find(s => s.id === selectedServerId) ?? null);
 
  const handlerOptions = $derived.by(() => {
   const srv = currentServer;
@@ -160,9 +162,12 @@
     <div>
      <label class={labelClass} for="srv-select">Proxy server</label>
      <select id="srv-select" class={inputClass} bind:value={selectedServerId}>
-      {#each servers as srv}
-       <option value={srv.id}>{srv.name || srv.id} :{srv.port}</option>
+     {#each httpServers as srv}
+        <option value={srv.id}>{srv.name || srv.id} :{srv.port}</option>
       {/each}
+      {#if httpServers.length === 0}
+       <option value="" disabled>(no HTTP proxy servers)</option>
+      {/if}
      </select>
     </div>
     <div>

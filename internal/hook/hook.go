@@ -103,7 +103,8 @@ type KafkaSecurity struct {
 //   - File path: e.g. "/etc/ssl/ca.pem"
 //   - PEM content: paste the PEM text directly into the _pem field
 //   - Reference: "raw://mount/path" reads from a raw mount,
-//     "config://file/path" reads from the config store.
+//     "config://file/path" reads from the config store. Add a selector
+//     for structured files, e.g. "config://tls/secrets#/client/cert".
 //
 // When both a file path and PEM content are provided, PEM content takes precedence.
 type KafkaTLS struct {
@@ -178,6 +179,7 @@ type RedisTarget struct {
 
 // RedisTLS configures TLS for the Redis connection.
 // File fields support plain paths, "raw://mount/path", and "config://key" references.
+// References may include selectors such as "raw://m/tls.yaml#/client/cert".
 type RedisTLS struct {
 	// Enabled activates TLS for the connection.
 	Enabled bool `json:"enabled,omitempty"`

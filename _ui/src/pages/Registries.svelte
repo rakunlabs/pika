@@ -4,8 +4,7 @@
   //
   // ── Scope of this page ────────────────────────────────────────────
   // Phase 1 surface: namespace + repository listing, type/kind
-  // badges, per-Go-repo module browser with version list, "copy
-  // GOPROXY" snippet for client config. Local repos additionally
+  // badges and per-repo artifact browser. Local repos additionally
   // show an upload guide (manual `curl PUT` for now; a form-based
   // uploader is queued for a later phase).
   //
@@ -93,6 +92,13 @@
     detailPackage = null;
   }
 
+  async function refreshAfterArtifactDelete() {
+    if (selectedNS && selectedRepo) {
+      await loadEntries(selectedNS, selectedRepo);
+      await loadStats(selectedNS, selectedRepo);
+    }
+  }
+
   // Per-list text filters. Each browser's list is filtered against
   // its respective state below; an empty filter shows everything.
   // The filter inputs render inside the browser headers (see template
@@ -102,6 +108,7 @@
   let entryFilter = $state('');
 
   const canAdmin = $derived(appStore.hasPermission('registry.admin'));
+  const canDelete = $derived(appStore.hasPermission('registry.delete'));
   // Server-side feature toggle. When disabled, the data plane and
   // every /api/v1/registries/* endpoint return 404, so we render a
   // dedicated empty-state instead of letting load() spam "Failed to
@@ -1159,44 +1166,6 @@
                   <Copy size={14} />
                 </button>
               </div>
-              {#if repo.type === 'go'}
-                <div class="mt-2 text-[11px] text-warm-500">
-                  <span class="font-medium">Client setup:</span>
-                  <code class="font-mono">GOPROXY={endpoint},direct</code>
-                </div>
-              {:else if repo.type === 'npm'}
-                <div class="mt-2 text-[11px] text-warm-500">
-                  <span class="font-medium">Client setup:</span>
-                  <code class="font-mono">npm config set registry {endpoint}/</code>
-                </div>
-              {:else if repo.type === 'docker'}
-                <div class="mt-2 text-[11px] text-warm-500">
-                  <span class="font-medium">Client setup:</span>
-                  <code class="font-mono">docker login {endpoint.replace(/^https?:\/\//, '').split('/')[0]}</code>
-                  <br />
-                  <code class="font-mono">docker push {endpoint.replace(/^https?:\/\//, '')}/v2/&lt;image&gt;:&lt;tag&gt;</code>
-                </div>
-              {:else if repo.type === 'helm'}
-                <div class="mt-2 text-[11px] text-warm-500">
-                  <span class="font-medium">Client setup:</span>
-                  <code class="font-mono">helm repo add {repo.name} {endpoint}</code>
-                </div>
-              {:else if repo.type === 'maven'}
-                <div class="mt-2 text-[11px] text-warm-500">
-                  <span class="font-medium">Client setup:</span>
-                  <code class="font-mono">&lt;url&gt;{endpoint}/&lt;/url&gt;</code>
-                </div>
-              {:else if repo.type === 'pypi'}
-                <div class="mt-2 text-[11px] text-warm-500">
-                  <span class="font-medium">Client setup:</span>
-                  <code class="font-mono">pip install --index-url {endpoint}/simple/ &lt;package&gt;</code>
-                </div>
-              {:else if repo.type === 'cargo'}
-                <div class="mt-2 text-[11px] text-warm-500">
-                  <span class="font-medium">Client setup:</span>
-                  <code class="font-mono">registry = "sparse+{endpoint}/"</code>
-                </div>
-              {/if}
             </div>
 
             <!-- Per-kind metadata strip -->
@@ -2125,7 +2094,7 @@
                       <input
                         type={revealPassword ? 'text' : 'password'}
                         class="w-full px-2 py-1 pr-7 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
-                        placeholder="password, raw://mount/path, or config://key"
+                        placeholder="password, raw://mount/file#/key, or config://file#/path/to/key"
                         bind:value={repoDraft.auth.password}
                       />
                       <button
@@ -2143,7 +2112,7 @@
                     <input
                       type={revealToken ? 'text' : 'password'}
                       class="w-full px-2 py-1 pr-7 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
-                      placeholder="token, raw://mount/path, or config://key"
+                      placeholder="token, raw://mount/file#/key, or config://file#/path/to/key"
                       bind:value={repoDraft.auth.token}
                     />
                     <button
@@ -2167,7 +2136,7 @@
                       <input
                         type={revealHeaderValue ? 'text' : 'password'}
                         class="w-full px-2 py-1 pr-7 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
-                        placeholder="value, raw://mount/path, or config://key"
+                        placeholder="value, raw://mount/file#/key, or config://file#/path/to/key"
                         bind:value={repoDraft.auth.value}
                       />
                       <button
@@ -2185,8 +2154,9 @@
                 <p class="text-[10px] text-warm-500 leading-relaxed">
                   Secret values can be inline plaintext or direct
                   <code class="font-mono">raw://mount/path</code> /
-                  <code class="font-mono">config://key</code> references. Plaintext values are
-                  sealed before persistence; references are resolved at request time.
+                  <code class="font-mono">config://key</code> references. For structured JSON/YAML/TOML
+                  secrets, append a JSON Pointer like <code class="font-mono">#/registry/token</code>.
+                  Plaintext values are sealed before persistence; references are resolved at request time.
                 </p>
               </div>
             {:else}
@@ -2319,6 +2289,8 @@
       repoType={detailPackage.type}
       packageName={detailPackage.name}
       endpoint={endpointURL(selectedNS, selectedRepo.name)}
+      canDelete={canDelete}
+      ondeleted={refreshAfterArtifactDelete}
       onclose={closeDetail}
     />
   {/if}

@@ -35,7 +35,7 @@ func TestBuildCatalog_StableOrderAndCoverage(t *testing.T) {
 			t.Errorf("middleware %q missing from catalog", k)
 		}
 	}
-	wantHandlers := []string{"data", "external", "proxy-pass", "consul-kv", "healthz"}
+	wantHandlers := []string{"data", "raw", "registry", "external", "proxy-pass", "consul-kv", "healthz"}
 	for _, k := range wantHandlers {
 		found := false
 		for _, h := range cat.Handlers {

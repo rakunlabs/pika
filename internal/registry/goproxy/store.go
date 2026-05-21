@@ -182,40 +182,101 @@ func (s *Store) DeleteVersion(modulePath, version string) error {
 	return firstErr
 }
 
-// ListVersions enumerates every version present under @v/. The list
-// is computed by listing the @v/ directory and gathering filenames
-// of the form "{version}.info" (info is the canonical marker — a
-// version without .info is considered incomplete and skipped).
+// ListVersions enumerates every version present under @v/. Local
+// repos use .info as the canonical marker; Remote caches may only
+// have upstream @v/list or @latest bodies, so those markers are
+// folded in as well for the admin browser.
 //
 // Returns versions sorted ascending using semver-ish lexicographic
 // order. Real semver sorting (handling pre-release, build metadata)
 // is the go client's job once it has the list; here we just need a
 // stable order for ETag / list serialisation.
 func (s *Store) ListVersions(modulePath string) ([]string, error) {
+	seen := map[string]struct{}{}
 	dir := path.Join(s.moduleDir(modulePath), "@v")
 	entries, err := s.fs.ReadDir(dir)
-	if err != nil {
-		if isNotFound(err) {
-			return nil, nil
-		}
+	if err != nil && !isNotFound(err) {
 		return nil, fmt.Errorf("goproxy: list versions: %w", err)
 	}
+	if err == nil {
+		for _, e := range entries {
+			if e.IsDir {
+				continue
+			}
+			if !strings.HasSuffix(e.Name, ".info") {
+				continue
+			}
+			v := strings.TrimSuffix(e.Name, ".info")
+			if v == "" {
+				continue
+			}
+			seen[v] = struct{}{}
+		}
+	}
+
+	if listVersions, err := s.cachedListVersions(modulePath); err == nil {
+		for _, v := range listVersions {
+			seen[v] = struct{}{}
+		}
+	} else if !isNotFound(err) {
+		return nil, err
+	}
+	if latest, err := s.cachedLatestVersion(modulePath); err == nil && latest != "" {
+		seen[latest] = struct{}{}
+	} else if err != nil && !isNotFound(err) {
+		return nil, err
+	}
+
+	versions := make([]string, 0, len(seen))
+	for v := range seen {
+		versions = append(versions, v)
+	}
+	sort.Strings(versions)
+	return versions, nil
+}
+
+func (s *Store) cachedListVersions(modulePath string) ([]string, error) {
+	rc, _, err := s.fs.Open(s.listPath(modulePath))
+	if err != nil {
+		if isNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("goproxy: open cached list: %w", err)
+	}
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, fmt.Errorf("goproxy: read cached list: %w", err)
+	}
 	var versions []string
-	for _, e := range entries {
-		if e.IsDir {
-			continue
-		}
-		if !strings.HasSuffix(e.Name, ".info") {
-			continue
-		}
-		v := strings.TrimSuffix(e.Name, ".info")
+	for _, line := range strings.Split(string(body), "\n") {
+		v := strings.TrimSpace(line)
 		if v == "" {
 			continue
 		}
 		versions = append(versions, v)
 	}
-	sort.Strings(versions)
 	return versions, nil
+}
+
+func (s *Store) cachedLatestVersion(modulePath string) (string, error) {
+	rc, _, err := s.fs.Open(s.latestPath(modulePath))
+	if err != nil {
+		if isNotFound(err) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("goproxy: open cached latest: %w", err)
+	}
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
+	if err != nil {
+		return "", fmt.Errorf("goproxy: read cached latest: %w", err)
+	}
+	var info VersionInfo
+	if err := json.Unmarshal(body, &info); err != nil {
+		return "", nil
+	}
+	return strings.TrimSpace(info.Version), nil
 }
 
 // CachedList returns the lazily-derived @v/list content. If a cached
@@ -322,9 +383,11 @@ func walkModules(fs rawfs.RawFS, dir, prefix string) ([]string, error) {
 		if !e.IsDir {
 			continue
 		}
-		// Detect a module leaf: this dir contains "@v".
-		atV := path.Join(dir, e.Name, "@v")
-		if _, err := fs.Stat(atV); err == nil {
+		child := path.Join(dir, e.Name)
+		// Detect a module leaf: this dir contains cached version
+		// markers. Still descend afterwards because Go modules can be
+		// nested (e.g. github.com/acme/root and github.com/acme/root/sub).
+		if moduleDirHasVersionMarkers(fs, child) {
 			mod := prefix
 			if mod != "" {
 				mod += "/"
@@ -335,10 +398,9 @@ func walkModules(fs rawfs.RawFS, dir, prefix string) ([]string, error) {
 				continue
 			}
 			out = append(out, decoded)
-			continue
 		}
 		// Otherwise descend.
-		sub, err := walkModules(fs, path.Join(dir, e.Name), joinPrefix(prefix, e.Name))
+		sub, err := walkModules(fs, child, joinPrefix(prefix, e.Name))
 		if err != nil {
 			// Non-fatal — surface the modules we did find.
 			continue
@@ -346,6 +408,24 @@ func walkModules(fs rawfs.RawFS, dir, prefix string) ([]string, error) {
 		out = append(out, sub...)
 	}
 	return out, nil
+}
+
+func moduleDirHasVersionMarkers(fs rawfs.RawFS, dir string) bool {
+	atV := path.Join(dir, "@v")
+	if entries, err := fs.ReadDir(atV); err == nil {
+		for _, e := range entries {
+			if e.IsDir {
+				continue
+			}
+			if e.Name == "list" || strings.HasSuffix(e.Name, ".info") {
+				return true
+			}
+		}
+	}
+	if _, err := fs.Stat(path.Join(dir, "@latest")); err == nil {
+		return true
+	}
+	return false
 }
 
 func joinPrefix(prefix, seg string) string {

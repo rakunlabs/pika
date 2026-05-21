@@ -17,7 +17,7 @@
 //   - GET /v2/{name}/tags/list              — tag list with pagination
 //   - GET /v2/_catalog                      — repo catalog
 //
-// Auth challenge model
+// # Auth challenge model
 //
 // Docker clients first poke /v2/ unauthenticated. We reply 401 with
 // a WWW-Authenticate header pointing at our token endpoint. The
@@ -49,6 +49,7 @@ var (
 	ErrBlobUnknown      = errors.New("docker: blob unknown")
 	ErrManifestUnknown  = errors.New("docker: manifest unknown")
 	ErrTagUnknown       = errors.New("docker: tag unknown")
+	ErrTagImmutable     = errors.New("docker: tag immutable")
 	ErrNameInvalid      = errors.New("docker: invalid name")
 	ErrDigestInvalid    = errors.New("docker: invalid digest")
 	ErrUploadUnknown    = errors.New("docker: upload session unknown")
