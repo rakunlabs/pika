@@ -395,10 +395,6 @@ type registryResourceCfg struct {
 	Namespace   string `json:"namespace"`
 	Repository  string `json:"repository"`
 	StripPrefix string `json:"strip_prefix,omitempty"`
-	// PublicPrefix is the externally visible mount point used when a
-	// registry implementation has to emit absolute URLs. Empty defaults
-	// to StripPrefix, which matches the common switch /prefix/* shape.
-	PublicPrefix string `json:"public_prefix,omitempty"`
 	// RequireToken preserves the normal registry token model by default.
 	RequireToken *bool `json:"require_token,omitempty"`
 }
@@ -417,7 +413,6 @@ func buildRegistryResourceHandler(raw json.RawMessage, svc ServiceDeps) (http.Ha
 		return nil, errors.New("registry handler: namespace and repository are required")
 	}
 	stripPrefix := normaliseStripPrefix(cfg.StripPrefix)
-	publicPrefix := registryPublicPrefix(cfg.PublicPrefix, stripPrefix)
 	requireToken := cfg.RequireToken == nil || *cfg.RequireToken
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -450,7 +445,7 @@ func buildRegistryResourceHandler(raw json.RawMessage, svc ServiceDeps) (http.Ha
 		}
 
 		r2 := cloneRequestWithResourcePath(r, rest)
-		r2.Header.Set("X-Pika-Registry-Prefix", publicPrefix)
+		r2.Header.Set("X-Pika-Registry-Prefix", stripPrefix)
 		reg.ServeHTTP(w, r2)
 	}), nil
 }
@@ -464,13 +459,6 @@ func registryOperationFor(method string) string {
 	default:
 		return common.OpWrite
 	}
-}
-
-func registryPublicPrefix(explicit, stripPrefix string) string {
-	if p := normaliseStripPrefix(explicit); p != "" {
-		return p
-	}
-	return stripPrefix
 }
 
 func registryResourcePath(path, stripPrefix string) string {

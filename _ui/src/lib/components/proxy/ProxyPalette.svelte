@@ -62,7 +62,7 @@
   const groups = $derived.by<PaletteGroup[]>(() => {
    const out: PaletteGroup[] = [];
 
-   const resourceSubtypes = new Set(['data', 'raw', 'registry']);
+   const resourceSubtypes = new Set(['data', 'raw', 'registry', 'cdn']);
 
    if (protocol === 'tcp') {
     const tcpHandlerRows = (catalog?.tcp_handlers ?? []).map<PaletteRow>((h) => ({

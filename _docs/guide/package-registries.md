@@ -5,7 +5,7 @@ Pika can act as an artifact registry for package-manager clients and as a packag
 | Surface | URL shape | Used by |
 | ------- | --------- | ------- |
 | Registry | `/registries/{namespace}/{repo}/...` | `npm install`, `npm publish`, package-manager protocol clients. |
-| Package CDN | `/cdn/npm/{namespace}/{repo}/{package[@version]}/{file...}` | Browsers, import maps, bundlers, static websites, or proxy-published CDN domains. |
+| Package CDN | Proxy listener, for example `/npm/{package[@version]}/{file...}` | Browsers, import maps, bundlers, static websites, and dedicated CDN hostnames. |
 
 The CDN is not a replacement for the NPM registry protocol. `npm install` still talks to `/registries/...`; the CDN extracts individual files from the package tarball and returns cache-friendly HTTP responses.
 
@@ -16,7 +16,7 @@ All registry types use the same admin model: **namespace → repository → kind
 | Type | Used for | Typical clients |
 | ---- | -------- | --------------- |
 | `go` | Go module proxy/cache | `go env GOPROXY=...`, `go get` |
-| `npm` | JavaScript packages | `npm`, `pnpm`, `yarn`, direct CDN reads |
+| `npm` | JavaScript packages | `npm`, `pnpm`, `yarn`, Proxy CDN reads |
 | `docker` | Docker/OCI images | `docker`, `podman`, `oras` |
 | `helm` | Classic Helm chart repositories | `helm repo add`, `helm pull` |
 | `maven` | JVM artifacts in Maven layout | Maven, Gradle, sbt |
@@ -102,7 +102,7 @@ The same tree gives you these data-plane endpoints:
 ```txt
 NPM publish target:  http://localhost:8080/registries/default/npm-local/
 NPM install target:  http://localhost:8080/registries/default/npm/
-Package CDN target:  http://localhost:8080/cdn/npm/default/npm/lodash@4.17.21/lodash.js
+CDN proxy target:    http://localhost:9090/npm/lodash@4.17.21/lodash.js
 ```
 
 ### 3. Mint a token
@@ -148,30 +148,38 @@ registry=http://localhost:8080/registries/default/npm/
 always-auth=true
 ```
 
-### 5. Use the package CDN
+### 5. Publish the package CDN through Pika Proxy
 
-Direct CDN URLs are authenticated with the same registry read scope as `/registries/...`:
+Use **Proxy → New CDN proxy** to create a listener that terminates in a **Package CDN resource** handler. The generated graph does not depend on the built-in `/cdn/npm/...` route; it serves jsDelivr-style package paths directly from the selected NPM repository.
+
+The default generated handler config is:
+
+```json
+{
+  "namespace": "default",
+  "repository": "npm",
+  "strip_prefix": "/npm"
+}
+```
+
+Enable the proxy server, then fetch assets from the proxy port or from the hostname you route to that listener:
 
 ```sh
-curl -H "Authorization: Bearer $PIKA_TOKEN" \
-  http://localhost:8080/cdn/npm/default/npm/lodash@4.17.21/lodash.js
+curl http://localhost:9090/npm/lodash@4.17.21/lodash.js
 
-curl -H "Authorization: Bearer $PIKA_TOKEN" \
-  http://localhost:8080/cdn/npm/default/npm/@acme/button@1.2.0/dist/index.js
+curl http://localhost:9090/npm/@acme/button@1.2.0/dist/index.js
 ```
 
 If the version is omitted, Pika resolves the package's `latest` dist-tag:
 
 ```txt
-/cdn/npm/default/npm/lodash/lodash.js
-/cdn/npm/default/npm/@acme/button/dist/index.js
+/npm/lodash/lodash.js
+/npm/@acme/button/dist/index.js
 ```
 
 Explicit versions are served with long-lived immutable cache headers. `latest` and other dist-tag requests use revalidating cache headers because the tag can move.
 
-## Publish the CDN through Pika Proxy
-
-Use a proxy graph when you want a clean public path or a dedicated CDN hostname such as `https://cdn.example.com/assets/...`.
+Use a custom proxy graph when you want a different public path or a dedicated CDN hostname such as `https://cdn.example.com/assets/...`.
 
 Create a proxy server under **Proxy**, route a path such as `/assets/*`, and terminate it with a **Package CDN resource** handler:
 
@@ -207,6 +215,8 @@ Proxy CDN resources are public by default because they are usually used by brows
 ```
 
 When `require_token` is enabled, the token must have read scope for the selected repo, for example `registry/default/npm/**`.
+
+The built-in `/cdn/npm/{namespace}/{repo}/...` endpoint remains available for authenticated direct reads, but public CDN exposure should go through Proxy.
 
 ## Remote cache behavior
 

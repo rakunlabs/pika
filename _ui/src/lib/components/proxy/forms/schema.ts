@@ -52,6 +52,12 @@ const STRIP_PREFIX_FIELD: FieldDef = {
   help: 'Removed from r.URL.Path before the handler runs. Empty = handler sees the full path. Useful when a switch routes /api/* to this handler but the handler expects URLs starting at /.',
 };
 
+const REGISTRY_STRIP_PREFIX_FIELD: FieldDef = {
+  ...STRIP_PREFIX_FIELD,
+  placeholder: '/npm',
+  help: 'Removed before the registry handles the request, and also used as the public mount point when registry responses emit absolute URLs. Empty = dedicated root-port registry.',
+};
+
 // ── Middlewares ─────────────────────────────────────────────────
 
 export const middlewareForms: Record<string, FormDef> = {
@@ -316,12 +322,24 @@ export const handlerForms: Record<string, FormDef> = {
         placeholder: 'default' },
       { key: 'repository', label: 'Repository', kind: 'string', required: true,
         placeholder: 'npm-local' },
-      STRIP_PREFIX_FIELD,
-      { key: 'public_prefix', label: 'Public prefix', kind: 'string',
-        placeholder: '/npm',
-        help: 'Used when registry responses emit absolute URLs. Empty = use Strip prefix. Use empty Strip/Public prefix for a dedicated root-port registry.' },
+      REGISTRY_STRIP_PREFIX_FIELD,
       { key: 'require_token', label: 'Require pika token', kind: 'boolean', default: true,
         help: 'On by default to preserve the normal /registries token model. Turn off only if another middleware enforces access.' },
+    ],
+  },
+
+  cdn: {
+    intro: 'Publishes jsDelivr-style package file URLs from one existing NPM registry repository through this proxy listener.',
+    fields: [
+      { key: 'namespace', label: 'Namespace', kind: 'string', required: true,
+        placeholder: 'default' },
+      { key: 'repository', label: 'NPM repository', kind: 'string', required: true,
+        placeholder: 'npm' },
+      { key: 'strip_prefix', label: 'Strip prefix', kind: 'string',
+        placeholder: '/npm',
+        help: 'Removed before parsing the jsDelivr-style package path. Example: /npm/lodash@4.17.21/lodash.js becomes lodash@4.17.21/lodash.js.' },
+      { key: 'require_token', label: 'Require pika token', kind: 'boolean', default: false,
+        help: 'Off by default for browser/runtime asset fetches. Turn on, or add auth middleware, for private CDN paths.' },
     ],
   },
 

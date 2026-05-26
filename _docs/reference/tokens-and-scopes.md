@@ -1,6 +1,6 @@
 # Tokens & scopes
 
-API tokens authenticate non-human consumers against `/data/*`, `/raw/*`, `/registries/*`, direct `/cdn/npm/*`, and the admin API. Each token has a list of **scopes** (for path-based read/write/delete) and an optional list of **capabilities** (for admin operations).
+API tokens authenticate non-human consumers against `/data/*`, `/raw/*`, `/registries/*`, protected proxy CDN resources, direct `/cdn/npm/*`, and the admin API. Each token has a list of **scopes** (for path-based read/write/delete) and an optional list of **capabilities** (for admin operations).
 
 ## Token format
 
@@ -47,14 +47,14 @@ Scope paths use a small custom glob — segments are split on `/`:
 The matcher is intentionally simpler than `filepath.Match` or doublestar — there are no character classes or single-char wildcards. Use `*` for "exactly one segment" and `**` for "zero or more segments".
 
 ::: tip
-Scopes apply to `/data/{path}`, `/raw/{prefix}/{path}`, `/registries/{namespace}/{repo}/...`, and direct `/cdn/npm/{namespace}/{repo}/...` requests. To grant access to raw mounts, prefix the scope path with `raw/`. To grant access to package registries or direct CDN reads, prefix it with `registry/`.
+Scopes apply to `/data/{path}`, `/raw/{prefix}/{path}`, `/registries/{namespace}/{repo}/...`, protected proxy CDN resources, and direct `/cdn/npm/{namespace}/{repo}/...` requests. To grant access to raw mounts, prefix the scope path with `raw/`. To grant access to package registries or CDN reads, prefix it with `registry/`.
 :::
 
 ### Operations
 
 | Operation | Endpoints                                                  |
 | --------- | ---------------------------------------------------------- |
-| `read`    | `GET /data/...`, `GET /raw/...`, `HEAD /raw/...`, package pulls, direct package CDN reads |
+| `read`    | `GET /data/...`, `GET /raw/...`, `HEAD /raw/...`, package pulls, protected proxy CDN reads, direct package CDN reads |
 | `write`   | `PUT /raw/...`, package publishes / pushes to local registries |
 | `delete`  | `DELETE /raw/...`, registry artifact deletes where supported |
 | `*`       | All of the above                                           |
@@ -91,7 +91,7 @@ Use the virtual repo for reads and the local repo for publishes:
 ]
 ```
 
-The same read scope covers direct `/cdn/npm/default/npm/...` reads. Proxy-published CDN resources are public unless the proxy handler sets `require_token` or an auth middleware is placed in front.
+The same read scope covers CDN reads from a proxy **Package CDN resource** when `require_token` is enabled. Proxy-published CDN resources are public unless the proxy handler sets `require_token` or an auth middleware is placed in front.
 
 #### Per-tenant isolation
 
@@ -112,7 +112,7 @@ Mint one token per tenant with a scope like:
 ]
 ```
 
-Use sparingly — a token with `**` and `*` is a master key for `/data/*`, `/raw/*`, `/registries/*`, and direct `/cdn/npm/*`.
+Use sparingly — a token with `**` and `*` is a master key for `/data/*`, `/raw/*`, `/registries/*`, protected proxy CDN resources, and direct `/cdn/npm/*`.
 
 ## Capabilities (admin operations)
 
@@ -135,7 +135,7 @@ Tokens used against the admin API (`/api/v1/...`) check **capabilities**, not sc
 | `users.manage`       | Create, edit, delete, kick users (built-in auth only).                       |
 | `permissions.manage` | Define permission bundles and assign them (built-in auth only).              |
 
-A token with no capabilities can still consume `/data/*`, `/raw/*`, `/registries/*`, and direct `/cdn/npm/*` (subject to its scopes); it just can't call any admin endpoints.
+A token with no capabilities can still consume `/data/*`, `/raw/*`, `/registries/*`, protected proxy CDN resources, and direct `/cdn/npm/*` (subject to its scopes); it just can't call any admin endpoints.
 
 ## Rotation and revocation
 

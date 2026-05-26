@@ -34,7 +34,7 @@ features:
     details: Mount local disks, S3, FTP/SFTP, WebDAV, or Vercel Blob and serve them over HTTP, FTP, SFTP, TFTP, or WebDAV.
   - icon: 📦
     title: Package registries & CDN
-    details: Host or proxy NPM packages, then expose browser-ready files through a jsDelivr-style CDN endpoint or proxy resource.
+    details: Host or proxy NPM packages, then expose browser-ready files through a jsDelivr-style Proxy CDN listener.
   - icon: 🪝
     title: Event hooks
     details: Push file and config changes to HTTP webhooks, Kafka, Redis Pub/Sub, or NATS — with custom Go templates for the payload.

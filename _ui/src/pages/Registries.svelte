@@ -64,6 +64,7 @@
   } from '@/lib/components/registry/utils';
 
   let booted = $state(false);
+  let settingsLoadRequested = $state(false);
   let namespaces = $state<Namespace[]>([]);
   let selectedNS = $state<string | null>(null);
   let selectedRepo = $state<Repository | null>(null);
@@ -856,12 +857,16 @@
   });
 
   onMount(async () => {
-    // Settings are needed so we can preserve the disabled flag
-    // across saves. Independent of the registry tree load.
-    if (canAdmin) {
-      await configStore.loadSettings();
-    }
     await load();
+  });
+
+  $effect(() => {
+    // Settings are needed so admin saves preserve the registry disabled
+    // flag. canAdmin can be false on the first refresh tick while
+    // /api/v1/info is still loading, so trigger this when it becomes true.
+    if (!canAdmin || settingsLoadRequested) return;
+    settingsLoadRequested = true;
+    void configStore.loadSettings();
   });
 </script>
 

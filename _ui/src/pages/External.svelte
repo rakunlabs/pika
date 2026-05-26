@@ -26,7 +26,6 @@
   // External page is no longer needed here because we don't write
   // settings — write-to-backend goes straight to Vault/etc.
 
-  import { onMount } from 'svelte';
   import { link } from 'svelte-spa-router';
   import { configStore } from '@/lib/store/config.svelte';
   import { appStore } from '@/lib/store/store.svelte';
@@ -43,6 +42,7 @@
 
   // ── Page state ────────────────────────────────────────────────────
   let booted = $state(false);
+  let resourcesLoadRequested = $state(false);
   let resources = $state<ExternalResourceSummary[]>([]);
   let resourceFilter = $state('');
 
@@ -135,13 +135,23 @@
     );
   });
 
-  onMount(async () => {
+  async function loadResourceList() {
+    resources = await configStore.listExternalResourceSummaries();
+    booted = true;
+  }
+
+  // Same boot race as other permission-gated pages: canManage can be
+  // false until /api/v1/info finishes. Only set the one-shot loaded
+  // flag after the permission is actually true and the fetch starts.
+  $effect(() => {
     if (!canManage) {
       booted = true;
       return;
     }
-    resources = await configStore.listExternalResourceSummaries();
-    booted = true;
+    if (resourcesLoadRequested) return;
+    resourcesLoadRequested = true;
+    booted = false;
+    void loadResourceList();
   });
 
   // ── Resource selection ────────────────────────────────────────────

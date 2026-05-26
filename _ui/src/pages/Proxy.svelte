@@ -75,9 +75,11 @@
   // ── Page-level state ─────────────────────────────────────────────
   type View = 'dashboard' | 'test' | 'editor';
   type ProxyProtocol = 'http' | 'tcp';
+  type ProxyServerPreset = ProxyProtocol | 'cdn';
   type ProxyNodeKind = 'middleware' | 'switch' | 'handler';
 
  let booted = $state(false);
+ let proxyLoadRequested = $state(false);
  let view = $state<View>('dashboard');
  // The tab strip on the dashboard pane. Kept separate from `view`
  // so the editor can return to whichever dashboard tab the user
@@ -151,6 +153,32 @@
   if (view === 'editor' && proxyCatalog === null && booted) {
    void proxyStore.load();
   }
+ });
+
+ async function loadProxyPage() {
+  try {
+   await proxyStore.load();
+   const current = activeId ? proxyStore.servers.find(s => s.id === activeId) : null;
+   const next = current ?? proxyStore.servers[0] ?? null;
+   activeId = next?.id ?? null;
+   syncFromServer(next);
+  } catch {/* toast in store */}
+  finally { booted = true; }
+ }
+
+ // Permission data comes from /api/v1/info, which can arrive after
+ // /login/me on a hard refresh. Do not mark the page as permanently
+ // loaded just because canRead was false on the first effect run;
+ // when the permission flips true, fire the initial load exactly once.
+ $effect(() => {
+  if (!canRead || !featureEnabled) {
+   booted = true;
+   return;
+  }
+  if (proxyLoadRequested) return;
+  proxyLoadRequested = true;
+  booted = false;
+  void loadProxyPage();
  });
 
  // Drag-over visual feedback. Toggled in the wrapper's ondragover /
@@ -298,16 +326,19 @@
 
  // ── Actions ───────────────────────────────────────────────────────
 
- async function addServer(protocol: ProxyProtocol = 'http') {
+ async function addServer(preset: ProxyServerPreset = 'http') {
   const id = (crypto as any).randomUUID?.() ?? Math.random().toString(36).slice(2);
   // Seed every new server with the smallest graph that compiles:
-  // HTTP gets listener → healthz; TCP gets listener → tcp-forward.
-  // Operators can then add protocol-specific middlewares between
-  // those two endpoints.
-  const isTCP = protocol === 'tcp';
+  // HTTP gets listener → healthz; TCP gets listener → tcp-forward;
+  // CDN gets listener → Package CDN resource with jsDelivr-style
+  // /npm/{package}@{version}/{file} paths. Operators can then add
+  // protocol-specific middlewares between those endpoints.
+  const isTCP = preset === 'tcp';
+  const isCDN = preset === 'cdn';
+  const protocol: ProxyProtocol = isTCP ? 'tcp' : 'http';
   const srv: ProxyServer = {
    id,
-   name: isTCP ? 'New TCP proxy' : 'New proxy',
+   name: isTCP ? 'New TCP proxy' : (isCDN ? 'New CDN proxy' : 'New proxy'),
    enabled: false,
    protocol,
    port: isTCP ? '9091' : '9090',
@@ -316,13 +347,20 @@
      { id: 'listener', type: 'listener', protocol: 'tcp', position: { x: 80, y: 120 }, config: {} },
      { id: 'tcp-forward', type: 'handler', protocol: 'tcp', subtype: 'tcp-forward', position: { x: 380, y: 120 }, config: { network: 'tcp', address: '127.0.0.1:80' } },
     ]
-    : [
-     { id: 'listener', type: 'listener', protocol: 'http', position: { x: 80, y: 120 }, config: {} },
-     { id: 'healthz', type: 'handler', protocol: 'http', subtype: 'healthz', position: { x: 380, y: 120 }, config: {} },
-    ],
+    : (isCDN
+     ? [
+      { id: 'listener', type: 'listener', protocol: 'http', position: { x: 80, y: 120 }, config: {} },
+      { id: 'cdn', type: 'handler', protocol: 'http', subtype: 'cdn', position: { x: 380, y: 120 }, config: { namespace: 'default', repository: 'npm', strip_prefix: '/npm' } },
+     ]
+     : [
+      { id: 'listener', type: 'listener', protocol: 'http', position: { x: 80, y: 120 }, config: {} },
+      { id: 'healthz', type: 'handler', protocol: 'http', subtype: 'healthz', position: { x: 380, y: 120 }, config: {} },
+     ]),
    edges: [isTCP
     ? { id: 'e-listener-tcp-forward', source: 'listener', target: 'tcp-forward' }
-    : { id: 'e-listener-healthz', source: 'listener', target: 'healthz' }],
+    : (isCDN
+     ? { id: 'e-listener-cdn', source: 'listener', target: 'cdn' }
+     : { id: 'e-listener-healthz', source: 'listener', target: 'healthz' })],
   };
   try {
    const created = await proxyStore.create(srv);
@@ -385,11 +423,12 @@
  // config its kind needs. Switch starts with an empty rules list
  // (operator adds the first rule from the config panel); other
  // kinds inherit the empty object — their forms fill in defaults.
-  function defaultConfigFor(kind: ProxyNodeKind, subtype?: string): Record<string, unknown> {
-   if (kind === 'switch') return { rules: [] };
-   if (subtype === 'tcp-forward') return { network: 'tcp', address: '127.0.0.1:80' };
-   return {};
-  }
+ function defaultConfigFor(kind: ProxyNodeKind, subtype?: string): Record<string, unknown> {
+  if (kind === 'switch') return { rules: [] };
+  if (subtype === 'tcp-forward') return { network: 'tcp', address: '127.0.0.1:80' };
+  if (subtype === 'cdn') return { namespace: 'default', repository: 'npm', strip_prefix: '/npm' };
+  return {};
+ }
 
   function spawnNode(kind: ProxyNodeKind, subtype: string | undefined, protocol: ProxyProtocol, position: { x: number; y: number }) {
    if (!activeServer || !canManage || !flow) return;
@@ -633,21 +672,10 @@
  let pollHandle: ReturnType<typeof setInterval> | null = null;
  let themeObserver: MutationObserver | null = null;
 
- onMount(async () => {
-  if (!canRead || !featureEnabled) { booted = true; return; }
-  try {
-   await proxyStore.load();
-   activeId = proxyStore.servers[0]?.id ?? null;
-   // Seed the editor state even if the user opens the dashboard
-   // first — switching to the editor view later will then have
-   // initialNodes/initialEdges ready for the first Canvas mount.
-   if (activeId) {
-    syncFromServer(proxyStore.servers.find(s => s.id === activeId) ?? null);
-   }
-  } catch {/* toast */}
-  booted = true;
-  pollHandle = setInterval(() => proxyStore.refreshStatus(), 5000);
-
+ onMount(() => {
+  pollHandle = setInterval(() => {
+   if (canRead && featureEnabled) void proxyStore.refreshStatus();
+  }, 5000);
   updateCanvasTheme();
   if (typeof document !== 'undefined') {
    themeObserver = new MutationObserver(updateCanvasTheme);

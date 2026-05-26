@@ -5,10 +5,11 @@
  // the top is special — it switches the main pane back to the
  // overview / test view instead of the editor.
  import type { ProxyServer } from '@/lib/types/config';
-  import type { ProxyInstanceStatus } from '@/lib/store/proxy.svelte';
-  import { Plus, Trash2, Circle, LayoutDashboard } from 'lucide-svelte';
+ import type { ProxyInstanceStatus } from '@/lib/store/proxy.svelte';
+ import { Plus, Trash2, Circle, LayoutDashboard } from 'lucide-svelte';
 
-  type ProxyProtocol = 'http' | 'tcp';
+ type ProxyProtocol = 'http' | 'tcp';
+ type ProxyServerPreset = ProxyProtocol | 'cdn';
 
  let {
   servers,
@@ -29,18 +30,18 @@
   canManage: boolean;
   onSelectDashboard: () => void;
   onSelect: (id: string) => void;
-  onAdd: () => void;
+  onAdd: (preset?: ProxyServerPreset) => void;
   onDelete: (id: string) => void;
   onToggleEnabled: (id: string, enabled: boolean) => void;
  } = $props();
 
-  function statusFor(id: string): ProxyInstanceStatus | undefined {
-   return status.find(s => s.id === id);
-  }
+ function statusFor(id: string): ProxyInstanceStatus | undefined {
+  return status.find(s => s.id === id);
+ }
 
-  function protocolFor(srv: ProxyServer): ProxyProtocol {
-   return (srv.protocol ?? 'http') as ProxyProtocol;
-  }
+ function protocolFor(srv: ProxyServer): ProxyProtocol {
+  return (srv.protocol ?? 'http') as ProxyProtocol;
+ }
 
  // Active state classes per DESIGN_SYSTEM §4 "Active nav-item".
  const activeRow =
@@ -58,16 +59,30 @@
  <header class="flex items-center justify-between p-3 border-b border-slate-200 dark:border-warm-700">
   <h2 class="text-sm font-semibold text-slate-800 dark:text-slate-100">Proxy</h2>
   {#if canManage}
-   <button
-    type="button"
-    aria-label="Add proxy server"
-    title="Add proxy server"
-    class="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-warm-700
-           text-slate-500 dark:text-slate-400 cursor-pointer"
-    onclick={onAdd}
-   >
-    <Plus size={14} />
-   </button>
+   <div class="flex items-center gap-1">
+    <button
+     type="button"
+     aria-label="Add CDN proxy server"
+     title="Add CDN proxy server"
+     class="px-2 py-1 rounded text-[10px] font-medium
+            bg-accent-50 text-accent-700 hover:bg-accent-100
+            dark:bg-accent-900/40 dark:text-accent-300 dark:hover:bg-accent-900/60
+            cursor-pointer"
+     onclick={() => onAdd('cdn')}
+    >
+     CDN
+    </button>
+    <button
+     type="button"
+     aria-label="Add proxy server"
+     title="Add proxy server"
+     class="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-warm-700
+            text-slate-500 dark:text-slate-400 cursor-pointer"
+     onclick={() => onAdd('http')}
+    >
+     <Plus size={14} />
+    </button>
+   </div>
   {/if}
  </header>
 

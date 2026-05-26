@@ -371,6 +371,8 @@ func TestRawResourceHandler_WriteBlockedByDefault(t *testing.T) {
 func TestRegistryResourceHandler(t *testing.T) {
 	reg := &fakeRegistry{}
 	svc := &fakeService{registries: map[string]registry.Registry{"ns/repo": reg}}
+	// public_prefix used to be configurable. It is now intentionally ignored;
+	// strip_prefix is the single source of truth for the public mount point.
 	h := buildHandlerForTest(t, "registry", `{"namespace":"ns","repository":"repo","strip_prefix":"/npm","public_prefix":"/public"}`, svc)
 	req := httptest.NewRequest(http.MethodGet, "/npm/pkg", nil)
 	req.Header.Set("Authorization", "Bearer pika_token")
@@ -379,7 +381,7 @@ func TestRegistryResourceHandler(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status: %d body=%q", rec.Code, rec.Body.String())
 	}
-	if reg.path != "/pkg" || reg.prefix != "/public" {
+	if reg.path != "/pkg" || reg.prefix != "/npm" {
 		t.Fatalf("registry path/prefix: %q/%q", reg.path, reg.prefix)
 	}
 	if svc.lastValidateScope != "registry/ns/repo/pkg" || svc.lastValidateOp != "read" {

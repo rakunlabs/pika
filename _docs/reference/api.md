@@ -72,7 +72,7 @@ These data-plane endpoints are reachable on the admin port and require a token o
 | Method         | Path                  | Notes                                     |
 | -------------- | --------------------- | ----------------------------------------- |
 | `GET`,`HEAD`,`POST`,`PUT`,`PATCH`,`DELETE` | `/registries/{namespace}/{repo}/...` | Package-manager registry traffic. See [Package registries & CDN](/guide/package-registries). |
-| `GET`,`HEAD`,`OPTIONS` | `/cdn/npm/{namespace}/{repo}/{package[@version]}/{file...}` | Direct NPM package CDN reads. |
+| `GET`,`HEAD`,`OPTIONS` | `/cdn/npm/{namespace}/{repo}/{package[@version]}/{file...}` | Authenticated direct NPM package CDN reads. Prefer a Proxy CDN listener for public CDN paths. |
 
 ## Conventions
 

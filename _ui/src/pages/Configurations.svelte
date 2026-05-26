@@ -8,9 +8,9 @@
  import RenderPreview from "@/lib/components/config/RenderPreview.svelte";
  import ResizablePanel from "@/lib/components/config/ResizablePanel.svelte";
  import { Blocks } from "lucide-svelte";
- import { onMount } from "svelte";
 
  let showRenderPreview = $state(false);
+ let openedFromURL = $state(false);
 
  // Permission gate: /configurations is the default landing page (see
  // routes.ts) so a freshly-created user with no roles lands here even
@@ -23,14 +23,14 @@
  const canRead = $derived(appStore.hasPermission('files.read'));
  const info = $derived(appStore.info);
 
- onMount(() => {
+ $effect(() => {
  // Open file from URL deep link (e.g., #/configurations?file=app/db&variant=prod)
- // Only meaningful when the user can actually read configs — otherwise
- // the call would race against an empty mount list and noisy-log a
- // failed lookup.
- if (canRead) {
+ // only after the files.read capability is known. On a hard refresh
+ // /login/me can resolve before /api/v1/info, making canRead false
+ // during component init; this effect retries once canRead flips true.
+ if (!canRead || openedFromURL) return;
+ openedFromURL = true;
  configStore.openFromURL();
- }
  });
 
  function handleRenderClick() {
