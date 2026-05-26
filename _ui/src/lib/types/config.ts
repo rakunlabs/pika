@@ -553,6 +553,50 @@ export interface Settings {
   registry?: RegistrySettings;
 }
 
+// Runtime cluster connection status from /api/v1/cluster/status.
+// This is not persisted in Settings; it reflects the current alan/bw view.
+export interface ClusterStatus {
+  enabled: boolean;
+  role: 'standalone' | 'leader' | 'leader_unhealthy' | 'follower';
+  is_leader: boolean;
+  leader_healthy: boolean;
+  leader_addr?: string;
+  local_addr?: string;
+  peer_count: number;
+  online_nodes: number;
+  expected_replicas: number;
+  quorum_nodes_required: number;
+  has_quorum: boolean;
+  version: number;
+  config: ClusterConfigStatus;
+  nodes: ClusterNode[];
+}
+
+export interface ClusterConfigStatus {
+  dns_addr?: string;
+  bind_addr?: string;
+  port?: number;
+  replicas?: number;
+  security_enabled: boolean;
+  lock_key: string;
+  prefix: string;
+  refresh_interval?: string;
+  heartbeat_interval?: string;
+  heartbeat_timeout?: string;
+  sync_interval?: string;
+  forward_timeout?: string;
+}
+
+export interface ClusterNode {
+  id: string;
+  label: string;
+  address?: string;
+  role: 'standalone' | 'leader' | 'follower' | 'peer';
+  self: boolean;
+  leader: boolean;
+  connected: boolean;
+}
+
 // ProxySettings is the deployment-wide feature flag for the
 // user-built Proxy Servers. Default disabled=false → enabled.
 export interface ProxySettings {

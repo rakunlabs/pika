@@ -349,6 +349,70 @@ func (a *api) serveRegistry(c *ada.Context) error {
 	return nil
 }
 
+// serveNPMCDN is the direct data-plane entry for CDN-style package
+// files backed by one configured NPM registry repository:
+//
+//	/cdn/npm/{namespace}/{repo}/{package[@version]}/{file...}
+//
+// Direct access requires the same registry.read token/session auth as
+// /registries/*. Public CDN domains should use the proxy "cdn" handler,
+// which explicitly selects a namespace/repo and can opt into token auth.
+func (a *api) serveNPMCDN(c *ada.Context) error {
+	if a.registryMgr == nil {
+		return fmt.Errorf("registry not configured: %w", service.ErrNotFound)
+	}
+	if !a.svc.RegistryEnabled(c.Request.Context()) {
+		return fmt.Errorf("registry feature disabled: %w", service.ErrNotFound)
+	}
+
+	path := "/" + strings.TrimPrefix(c.Request.PathValue("*"), "/")
+	ns, repo, rest, ok := registry.SplitRequestPath(path)
+	if !ok || rest == "" {
+		return fmt.Errorf("invalid npm CDN path %q: %w", path, service.ErrBadRequest)
+	}
+
+	reg, found := a.registryMgr.Lookup(ns, repo)
+	if !found {
+		return fmt.Errorf("registry %s/%s not found: %w", ns, repo, service.ErrNotFound)
+	}
+	if reg.Type() != service.RegistryTypeNPM {
+		return fmt.Errorf("registry %s/%s is not an npm registry (got %s): %w", ns, repo, reg.Type(), service.ErrBadRequest)
+	}
+	provider, ok := reg.(registry.CDNAssetProvider)
+	if !ok {
+		return fmt.Errorf("registry %s/%s does not support CDN assets: %w", ns, repo, service.ErrBadRequest)
+	}
+	if common.ApplyCORS(c.Response, c.Request, a.registryCORSOrigins(c.Request.Context(), ns, repo)) {
+		return nil
+	}
+
+	scope := "registry/" + ns + "/" + repo + rest
+	tokenRaw := common.ExtractToken(c.Request)
+	if tokenRaw != "" {
+		if err := a.svc.ValidateToken(c.Request.Context(), tokenRaw, scope, common.OpRead); err != nil {
+			return err
+		}
+	} else {
+		if a.mgr == nil {
+			return fmt.Errorf("authentication required: %w", service.ErrUnauthorized)
+		}
+		id, capKeys, _, _, _ := a.mgr.ResolveRequest(c.Request)
+		if id == nil {
+			return fmt.Errorf("authentication required: %w", service.ErrUnauthorized)
+		}
+		if !service.Capabilities(capKeys).Has(service.CapRegistryRead) {
+			return fmt.Errorf("capability %q required: %w", service.CapRegistryRead, service.ErrForbidden)
+		}
+	}
+
+	asset, err := npm.ParseCDNAssetPath(rest)
+	if err != nil {
+		return fmt.Errorf("invalid npm CDN asset path: %w: %w", err, service.ErrBadRequest)
+	}
+	provider.ServeCDNAsset(c.Response, c.Request, asset)
+	return nil
+}
+
 func (a *api) registryCORSOrigins(ctx context.Context, namespace, repo string) []string {
 	rs := a.svc.GetRegistrySettings(ctx)
 	ns := rs.FindNamespace(namespace)

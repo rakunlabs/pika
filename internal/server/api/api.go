@@ -12,6 +12,7 @@ import (
 	"log/slog"
 
 	"github.com/rakunlabs/ada"
+	pcluster "github.com/rakunlabs/pika/internal/cluster"
 	"github.com/rakunlabs/pika/internal/config"
 	"github.com/rakunlabs/pika/internal/external"
 	"github.com/rakunlabs/pika/internal/hook"
@@ -54,6 +55,7 @@ type api struct {
 	rawHandler    *RawHandler         // nil if no raw mounts configured
 	proxyMgr      ProxyReconciler     // nil until server.go injects via Handle
 	syncScheduler *usersync.Scheduler // nil until set by server.go
+	cluster       *pcluster.Cluster   // nil only in tests or custom embeddings
 	// registryMgr owns the per-(namespace, repo) routing table for
 	// the artifact registry feature. nil until server.go calls
 	// SetRegistryManager during boot. The data-mux entry handler
@@ -67,7 +69,7 @@ type response struct {
 	Message string `json:"message,omitempty"`
 }
 
-func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, mgr *authx.Manager, rh *RawHandler, proxyMgr ProxyReconciler, registryMgr *registry.Manager) error {
+func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, mgr *authx.Manager, rh *RawHandler, proxyMgr ProxyReconciler, registryMgr *registry.Manager, cl *pcluster.Cluster) error {
 	// Set hook service identification from config
 	hook.ServiceName = config.ServiceName
 	hook.Version = config.Version
@@ -77,7 +79,7 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// path share one instance. Started below after the routes register.
 	syncSched := usersync.NewScheduler(svc)
 
-	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, rawHandler: rh, proxyMgr: proxyMgr, syncScheduler: syncSched, registryMgr: registryMgr}
+	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, rawHandler: rh, proxyMgr: proxyMgr, syncScheduler: syncSched, cluster: cl, registryMgr: registryMgr}
 
 	// Perform the initial registry reload so the routing table is
 	// hot the first time a client hits /registries/*. If the manager
@@ -97,6 +99,14 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	mData.GET("/raw/*", mData.Wrap(api.getRaw))
 	mData.PUT("/raw/*", mData.Wrap(api.putRaw))
 	mData.DELETE("/raw/*", mData.Wrap(api.deleteRaw))
+
+	// Package CDN endpoints. These expose package files from an
+	// existing NPM registry repo; the direct data-plane route keeps
+	// registry.read auth, while proxy graph "cdn" resources can publish
+	// the same handler under public domains/paths when desired.
+	mData.GET("/cdn/npm/*", mData.Wrap(api.serveNPMCDN))
+	mData.HEAD("/cdn/npm/*", mData.Wrap(api.serveNPMCDN))
+	mData.OPTIONS("/cdn/npm/*", mData.Wrap(api.serveNPMCDN))
 
 	// Artifact registry endpoints. One catch-all per method because
 	// every protocol (Go, NPM, Docker) needs both safe and unsafe
@@ -271,6 +281,7 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// Settings
 	m.GET("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.getSettings)))
 	m.POST("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.postSettings)))
+	m.GET("/api/v1/cluster/status", m.Wrap(api.withPerm(service.CapSettingsManage, api.getClusterStatus)))
 
 	// Artifact registry admin endpoints. listRegistryNamespaces and
 	// listRegistryRepos are read-only (Registry Read or above);
@@ -561,6 +572,10 @@ func (a *api) getSettings(c *ada.Context) error {
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(settings)
+}
+
+func (a *api) getClusterStatus(c *ada.Context) error {
+	return c.SetStatus(http.StatusOK).SendJSON(a.cluster.Status())
 }
 
 func (a *api) postSettings(c *ada.Context) error {

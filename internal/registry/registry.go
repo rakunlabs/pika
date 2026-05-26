@@ -209,6 +209,25 @@ type CachePurger interface {
 	PurgeCache(ctx context.Context, opts PurgeOptions) (PurgeStats, error)
 }
 
+// CDNAssetRequest describes one package file request for CDN-style
+// delivery surfaces. Version is the requested version or dist-tag;
+// an empty Version means the protocol implementation should resolve
+// its normal latest tag. Path is the file path inside the package
+// archive, never the backing registry storage path.
+type CDNAssetRequest struct {
+	Package string
+	Version string
+	Path    string
+}
+
+// CDNAssetProvider is an optional interface implemented by registries
+// that can expose package files directly for jsDelivr-like delivery.
+// The registry owns protocol-specific version/tag resolution and
+// cache headers; callers only parse the public CDN URL and dispatch.
+type CDNAssetProvider interface {
+	ServeCDNAsset(w http.ResponseWriter, r *http.Request, asset CDNAssetRequest)
+}
+
 // Stats is the response shape for GET .../stats. Fields are
 // type-specific and zero when the underlying registry doesn't
 // produce a value (e.g. a Go repo never has TagCount).

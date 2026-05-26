@@ -1,5 +1,5 @@
 <script lang="ts">
- import { Key, Globe, FolderOpen, Share2, Server, Webhook, RotateCw, ToggleLeft, HardDrive, ShieldCheck, Info, Users, Palette, KeyRound, Vault } from "lucide-svelte";
+ import { Key, Globe, FolderOpen, Share2, Server, Webhook, RotateCw, ToggleLeft, HardDrive, ShieldCheck, Info, Users, Palette, KeyRound, Vault, Network } from "lucide-svelte";
  import { appStore } from '@/lib/store/store.svelte';
 
  import AppearanceSection from "@/pages/settings/AppearanceSection.svelte";
@@ -15,10 +15,11 @@
  import UserSyncSection from "@/pages/settings/UserSyncSection.svelte";
  import KeyRotationSection from "@/pages/settings/KeyRotationSection.svelte";
  import FeaturesSection from "@/pages/settings/FeaturesSection.svelte";
+ import ClusterSection from "@/pages/settings/ClusterSection.svelte";
  import BackupSection from "@/pages/settings/BackupSection.svelte";
  import AboutSection from "@/pages/settings/AboutSection.svelte";
 
- type Section = 'appearance' | 'account_security' | 'vault' | 'tokens' | 'external' | 'raw_mounts' | 'ftp_shares' | 'file_servers' | 'hooks' | 'auth' | 'user_sync' | 'rotation' | 'features' | 'backup' | 'about';
+ type Section = 'appearance' | 'account_security' | 'vault' | 'tokens' | 'external' | 'raw_mounts' | 'ftp_shares' | 'file_servers' | 'hooks' | 'auth' | 'user_sync' | 'rotation' | 'features' | 'cluster' | 'backup' | 'about';
 
  // Section → required capability. `null` means always visible (e.g.
  // About, Appearance, Account Security — these are per-user and
@@ -38,6 +39,7 @@
  user_sync: 'settings.manage',
  rotation: 'settings.manage',
  features: 'settings.manage',
+ cluster: 'settings.manage',
  backup: 'settings.manage',
  about: null,
  };
@@ -56,6 +58,7 @@
  { key: 'user_sync', label: 'User Sync', icon: Users },
  { key: 'rotation', label: 'Key Rotation', icon: RotateCw },
  { key: 'features', label: 'Features', icon: ToggleLeft },
+ { key: 'cluster', label: 'Cluster', icon: Network },
  { key: 'backup', label: 'Backup', icon: HardDrive },
  { key: 'about', label: 'About', icon: Info },
  ];
@@ -135,6 +138,8 @@
  <KeyRotationSection />
  {:else if activeSection === 'features'}
  <FeaturesSection />
+ {:else if activeSection === 'cluster'}
+ <ClusterSection />
  {:else if activeSection === 'backup'}
  <BackupSection />
  {:else if activeSection === 'about'}

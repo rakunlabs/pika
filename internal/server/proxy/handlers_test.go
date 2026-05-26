@@ -110,9 +110,10 @@ type nopReadSeekCloser struct{ *bytes.Reader }
 func (nopReadSeekCloser) Close() error { return nil }
 
 type fakeRegistry struct {
-	path   string
-	prefix string
-	hits   int
+	path     string
+	prefix   string
+	hits     int
+	cdnAsset registry.CDNAssetRequest
 }
 
 func (f *fakeRegistry) Namespace() string { return "ns" }
@@ -125,6 +126,12 @@ func (f *fakeRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.path = r.URL.Path
 	f.prefix = r.Header.Get("X-Pika-Registry-Prefix")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (f *fakeRegistry) ServeCDNAsset(w http.ResponseWriter, _ *http.Request, asset registry.CDNAssetRequest) {
+	f.cdnAsset = asset
+	w.Header().Set("Content-Type", "text/plain")
+	_, _ = w.Write([]byte("cdn:" + asset.Package + "@" + asset.Version + "/" + asset.Path))
 }
 
 func TestHealthzHandler(t *testing.T) {
@@ -392,6 +399,47 @@ func TestRegistryResourceHandler_RequiresTokenByDefault(t *testing.T) {
 	}
 	if reg.hits != 0 {
 		t.Fatal("registry should not be called without token")
+	}
+}
+
+func TestCDNResourceHandler_PublicByDefault(t *testing.T) {
+	reg := &fakeRegistry{}
+	svc := &fakeService{registries: map[string]registry.Registry{"ns/repo": reg}}
+	h := buildHandlerForTest(t, "cdn", `{"namespace":"ns","repository":"repo","strip_prefix":"/assets"}`, svc)
+	req := httptest.NewRequest(http.MethodGet, "/assets/lodash@1.0.0/dist/index.js", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%q", rec.Code, rec.Body.String())
+	}
+	want := registry.CDNAssetRequest{Package: "lodash", Version: "1.0.0", Path: "dist/index.js"}
+	if reg.cdnAsset != want {
+		t.Fatalf("asset=%+v want %+v", reg.cdnAsset, want)
+	}
+	if svc.lastValidateScope != "" {
+		t.Fatalf("unexpected token validation: %q", svc.lastValidateScope)
+	}
+}
+
+func TestCDNResourceHandler_OptionalToken(t *testing.T) {
+	reg := &fakeRegistry{}
+	svc := &fakeService{registries: map[string]registry.Registry{"ns/repo": reg}}
+	h := buildHandlerForTest(t, "cdn", `{"namespace":"ns","repository":"repo","require_token":true}`, svc)
+	req := httptest.NewRequest(http.MethodGet, "/lodash@1.0.0/index.js", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status without token: %d", rec.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/lodash@1.0.0/index.js", nil)
+	req.Header.Set("Authorization", "Bearer pika_token")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status with token: %d body=%q", rec.Code, rec.Body.String())
+	}
+	if svc.lastValidateScope != "registry/ns/repo/lodash@1.0.0/index.js" || svc.lastValidateOp != "read" {
+		t.Fatalf("token validation: scope=%q op=%q", svc.lastValidateScope, svc.lastValidateOp)
 	}
 }
 

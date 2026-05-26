@@ -18,7 +18,9 @@ import (
 	"time"
 
 	"github.com/rakunlabs/pika/internal/rawfs"
+	"github.com/rakunlabs/pika/internal/registry"
 	"github.com/rakunlabs/pika/internal/registry/common"
+	"github.com/rakunlabs/pika/internal/registry/npm"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -74,6 +76,13 @@ func DefaultHandlers() map[string]NodeSpec {
 			Label:       "Registry resource",
 			Description: "Expose one configured artifact registry repository through this proxy listener.",
 			Build:       adaptHandler(buildRegistryResourceHandler),
+		},
+		{
+			Kind:        KindHandler,
+			Subtype:     "cdn",
+			Label:       "Package CDN resource",
+			Description: "Serve jsDelivr-style files from one configured NPM registry repository.",
+			Build:       adaptHandler(buildCDNResourceHandler),
 		},
 		{
 			Kind:        KindHandler,
@@ -470,6 +479,86 @@ func registryResourcePath(path, stripPrefix string) string {
 		return "/"
 	}
 	return "/" + rest
+}
+
+// --- package CDN ---
+
+type cdnResourceCfg struct {
+	commonHandlerCfg
+	Namespace   string `json:"namespace"`
+	Repository  string `json:"repository"`
+	StripPrefix string `json:"strip_prefix,omitempty"`
+	// RequireToken is false by default because CDN proxy resources are
+	// commonly published for browser/runtime asset fetches. Operators who
+	// want protected CDN paths can either set this true or put an
+	// auth-bearer middleware before the handler.
+	RequireToken *bool `json:"require_token,omitempty"`
+}
+
+func buildCDNResourceHandler(raw json.RawMessage, svc ServiceDeps) (http.Handler, error) {
+	if svc == nil {
+		return nil, errors.New("cdn: service dependency missing")
+	}
+	var cfg cdnResourceCfg
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, fmt.Errorf("cdn handler config: %w", err)
+		}
+	}
+	if cfg.Namespace == "" || cfg.Repository == "" {
+		return nil, errors.New("cdn handler: namespace and repository are required")
+	}
+	stripPrefix := normaliseStripPrefix(cfg.StripPrefix)
+	requireToken := cfg.RequireToken != nil && *cfg.RequireToken
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !svc.RegistryEnabled(r.Context()) {
+			writeServiceError(w, fmt.Errorf("registry feature disabled: %w", service.ErrNotFound))
+			return
+		}
+		reg, ok := svc.LookupRegistry(cfg.Namespace, cfg.Repository)
+		if !ok {
+			writeServiceError(w, fmt.Errorf("registry %s/%s not found: %w", cfg.Namespace, cfg.Repository, service.ErrNotFound))
+			return
+		}
+		if reg.Type() != service.RegistryTypeNPM {
+			writeServiceError(w, fmt.Errorf("registry %s/%s is not an npm registry: %w", cfg.Namespace, cfg.Repository, service.ErrBadRequest))
+			return
+		}
+		provider, ok := reg.(registry.CDNAssetProvider)
+		if !ok {
+			writeServiceError(w, fmt.Errorf("registry %s/%s does not support CDN assets: %w", cfg.Namespace, cfg.Repository, service.ErrBadRequest))
+			return
+		}
+		if common.ApplyCORS(w, r, svc.RegistryCORSOrigins(r.Context(), cfg.Namespace, cfg.Repository)) {
+			return
+		}
+
+		rest := registryResourcePath(r.URL.Path, stripPrefix)
+		if requireToken {
+			tokenRaw := common.ExtractToken(r)
+			if tokenRaw == "" {
+				writeServiceError(w, fmt.Errorf("missing pika token: %w", service.ErrUnauthorized))
+				return
+			}
+			scope := "registry/" + cfg.Namespace + "/" + cfg.Repository + rest
+			if err := svc.ValidateToken(r.Context(), tokenRaw, scope, common.OpRead); err != nil {
+				writeServiceError(w, err)
+				return
+			}
+		}
+
+		asset, err := npm.ParseCDNAssetPath(rest)
+		if err != nil {
+			writeServiceError(w, fmt.Errorf("invalid npm CDN asset path: %w: %w", err, service.ErrBadRequest))
+			return
+		}
+		provider.ServeCDNAsset(w, r, asset)
+	}), nil
 }
 
 func resourcePath(path, stripPrefix string) string {

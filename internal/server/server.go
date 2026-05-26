@@ -181,7 +181,7 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	defer proxyMgr.Stop()
 	defer api.StopServeServers(rh)
 
-	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, rh, proxyMgrWrapper{proxyMgr}, registryMgr); err != nil {
+	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, rh, proxyMgrWrapper{proxyMgr}, registryMgr, cl); err != nil {
 		return err
 	}
 

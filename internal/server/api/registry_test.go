@@ -22,7 +22,7 @@ func TestHandleRegistersRoutesWithoutGreedyPanic(t *testing.T) {
 	t.Cleanup(cancel)
 	rh := NewRawHandler(nil, ctx, nil)
 
-	if err := Handle(ada.NewMux(), ada.NewMux(), ada.NewMux(), service.New(store), Info{}, nil, nil, rh, nil, nil); err != nil {
+	if err := Handle(ada.NewMux(), ada.NewMux(), ada.NewMux(), service.New(store), Info{}, nil, nil, rh, nil, nil, nil); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 }

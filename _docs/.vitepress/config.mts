@@ -13,6 +13,7 @@ export default defineConfig({
 
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
+      { text: 'Registries', link: '/guide/package-registries' },
       { text: 'Reference', link: '/reference/consuming-data' },
       {
         text: 'Links',
@@ -60,6 +61,12 @@ export default defineConfig({
           items: [
             { text: 'Raw file serving', link: '/guide/raw-files' },
             { text: 'Hooks', link: '/guide/hooks' },
+          ],
+        },
+        {
+          text: 'Registries',
+          items: [
+            { text: 'Package registries & CDN', link: '/guide/package-registries' },
           ],
         },
         {

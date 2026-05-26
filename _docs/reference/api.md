@@ -41,12 +41,17 @@ Token capabilities for admin operations are different from path scopes used on `
 | `POST`                  | `/api/v1/tls-generate`                | `settings.manage`      | Generate a TLS certificate / key pair.                               |
 | `POST`                  | `/api/v1/ssh-keygen`                  | `settings.manage`      | Generate an SSH key pair.                                            |
 | `GET`,`POST`            | `/api/v1/settings`                    | `settings.manage`      | Read / patch the entire settings document.                           |
+| `GET`                   | `/api/v1/cluster/status`              | `settings.manage`      | Runtime cluster role, quorum, leader and visible alan peers.         |
 | `GET`,`POST`            | `/api/v1/backup[/info]`               | `settings.manage`      | Export / inspect / import a full backup archive.                     |
 | `GET`,`PUT`,`DELETE`    | `/api/v1/raw/{prefix}/{path}`         | `raw.read`/`write`     | Raw FS browsing (UI, session-auth side).                             |
 | `POST`                  | `/api/v1/raw-mkdir/{prefix}/{path}`   | `raw.write`            | Create a folder on a raw mount.                                      |
 | `POST`                  | `/api/v1/raw-rename`                  | `raw.write`            | Rename a file on a raw mount.                                        |
 | `POST`                  | `/api/v1/raw-copy`                    | `raw.write`            | Copy a file (possibly cross-mount).                                  |
 | `POST`                  | `/api/v1/raw-move`                    | `raw.write`            | Move a file (possibly cross-mount).                                  |
+| `GET`,`PUT`             | `/api/v1/registries`                  | `registry.read`/`registry.admin` | Read or replace the namespace/repository tree.                      |
+| `GET`                   | `/api/v1/registries/{type}/{ns}/{repo}/stats` | `registry.read` | Registry storage/package statistics.                                |
+| `POST`                  | `/api/v1/registries/{type}/{ns}/{repo}/purge` | `registry.admin` | Purge remote registry cache.                                        |
+| `POST`                  | `/api/v1/registries/{type}/{ns}/{repo}/test-upstream` | `registry.admin` | Probe a remote registry upstream.                                  |
 | `GET`                   | `/api/v1/external/{name}/paths`       | `settings.manage`      | Browse paths in a configured external resource (Vault, Consul, …).   |
 | `GET`                   | `/api/v1/user-sync/status`            | `settings.manage`      | Last-run report for every configured user-sync source.               |
 | `POST`                  | `/api/v1/user-sync/run/{id}`          | `settings.manage`      | Trigger a one-shot user-sync run.                                    |
@@ -61,6 +66,13 @@ These are reachable on both the admin port (with token) and the public port (wit
 | `GET`          | `/data/{path}`        | Resolved config — see [Consuming data](./consuming-data). |
 | `GET`,`PUT`,`DELETE` | `/raw/{prefix}/{path}` | Raw filesystem browsing — see [Raw file serving](/guide/raw-files). |
 | `GET`          | `/healthz`            | Health probe.                             |
+
+These data-plane endpoints are reachable on the admin port and require a token or UI session unless you publish them through a proxy graph:
+
+| Method         | Path                  | Notes                                     |
+| -------------- | --------------------- | ----------------------------------------- |
+| `GET`,`HEAD`,`POST`,`PUT`,`PATCH`,`DELETE` | `/registries/{namespace}/{repo}/...` | Package-manager registry traffic. See [Package registries & CDN](/guide/package-registries). |
+| `GET`,`HEAD`,`OPTIONS` | `/cdn/npm/{namespace}/{repo}/{package[@version]}/{file...}` | Direct NPM package CDN reads. |
 
 ## Conventions
 
