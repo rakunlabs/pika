@@ -136,6 +136,38 @@ func TestClient_BasicAuth(t *testing.T) {
 	resp.Body.Close()
 }
 
+func TestClient_BasicAuthWithUsernameRef(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, p, ok := r.BasicAuth()
+		if !ok || u != "resolved-user" || p != "resolved-pass" {
+			t.Errorf("bad auth: u=%q p=%q ok=%v", u, p, ok)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	resolver := &stubResolver{values: map[string]string{
+		"config://upstream/docker#/auth/user": "resolved-user",
+		"raw://upstream/docker-pass":          "resolved-pass",
+	}}
+	c, _ := NewClient(Config{
+		BaseURL: srv.URL,
+		Auth: &service.RegistryUpstreamAuth{
+			Type:     service.RegistryAuthBasic,
+			Username: "config://upstream/docker#/auth/user",
+			Password: "raw://upstream/docker-pass",
+		},
+		Resolver: resolver,
+	})
+	resp, err := c.Get(context.Background(), "/")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	resp.Body.Close()
+}
+
 func TestClient_BearerWithRawRef(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got := r.Header.Get("Authorization")

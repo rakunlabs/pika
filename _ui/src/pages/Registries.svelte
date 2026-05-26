@@ -2079,7 +2079,7 @@
                     <input
                       type="text"
                       class="px-2 py-1 rounded border border-warm-300 dark:border-warm-700 bg-white dark:bg-warm-800 font-mono text-xs"
-                      placeholder="username"
+                      placeholder="username, raw://mount/file#/key, or config://file#/path/to/key"
                       bind:value={repoDraft.auth.username}
                     />
                     <!--
@@ -2152,11 +2152,11 @@
                 {/if}
 
                 <p class="text-[10px] text-warm-500 leading-relaxed">
-                  Secret values can be inline plaintext or direct
+                  Credential values can be inline plaintext or direct
                   <code class="font-mono">raw://mount/path</code> /
                   <code class="font-mono">config://key</code> references. For structured JSON/YAML/TOML
                   secrets, append a JSON Pointer like <code class="font-mono">#/registry/token</code>.
-                  Plaintext values are sealed before persistence; references are resolved at request time.
+                  Plaintext secret values are sealed before persistence; references are resolved at request time.
                 </p>
               </div>
             {:else}

@@ -667,7 +667,7 @@ export interface RegistryRetentionPolicy {
 // RegistryUpstreamAuth — credentials for a Remote repository's
 // upstream. Username/Password supports HTTP basic; Token supports
 // bearer auth (npm "_authToken", Docker registry token).
-// Secret-valued fields accept direct "raw://mount/path" and
+// Credential value fields accept direct "raw://mount/path" and
 // "config://key" references that the server resolves at runtime.
 // Structured JSON/YAML/TOML secrets can select a scalar with a
 // "#/json/pointer" suffix.

@@ -222,11 +222,15 @@ func (c *Client) applyAuth(ctx context.Context, req *http.Request) error {
 	}
 	switch c.auth.Type {
 	case service.RegistryAuthBasic:
+		username, err := c.resolveSecret(ctx, c.auth.Username)
+		if err != nil {
+			return fmt.Errorf("resolve basic username: %w", err)
+		}
 		password, err := c.resolveSecret(ctx, c.auth.Password)
 		if err != nil {
 			return fmt.Errorf("resolve basic password: %w", err)
 		}
-		req.SetBasicAuth(c.auth.Username, password)
+		req.SetBasicAuth(username, password)
 	case service.RegistryAuthBearer:
 		token, err := c.resolveSecret(ctx, c.auth.Token)
 		if err != nil {

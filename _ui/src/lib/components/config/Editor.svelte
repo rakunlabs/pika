@@ -8,9 +8,10 @@
  import type { Extension } from '@codemirror/state';
  import type { EditorView } from '@codemirror/view';
  import { configStore } from '@/lib/store/config.svelte';
+ import { prefsStore } from '@/lib/store/prefs.svelte';
  import { addToast } from '@/lib/store/toast.svelte';
  import type { FileFormat, ViewMode } from '@/lib/types/config';
- import { Save, Sparkles, ArrowRightLeft, Upload, Binary, Type, Eye, EyeOff, Copy, Check, RefreshCw } from 'lucide-svelte';
+ import { Save, Sparkles, ArrowRightLeft, Upload, Binary, Type, Eye, EyeOff, Copy, Check, RefreshCw, TextWrap } from 'lucide-svelte';
  import { AlertTriangle } from 'lucide-svelte';
  import axios from 'axios';
  import jsYaml from 'js-yaml';
@@ -150,6 +151,7 @@
  const isHexMode = $derived(activeTab?.viewMode === 'hex');
  const hexData = $derived(activeTab?.rawData || '');
  const canMask = $derived(!!activeTab && activeTab.format !== 'raw' && !isHexMode);
+ const isLineWrapped = $derived(prefsStore.editor.line_wrap);
 
  // Mask state surfaced from the editor. The button reflects this directly:
  // anything other than "fully masked, no reveals" flips the button to
@@ -354,6 +356,10 @@
  configStore.setTabViewMode(activeTab.id, newMode);
  }
 
+ function toggleLineWrap() {
+ prefsStore.updatePreferences({ editor: { line_wrap: !prefsStore.editor.line_wrap } });
+ }
+
  function handleKeyDown(e: KeyboardEvent) {
  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
  e.preventDefault();
@@ -434,6 +440,19 @@
  <span>Hex</span>
  </button>
  </div>
+
+ {#if !isHexMode}
+ <button
+ class="flex items-center gap-1 px-2 py-1 bg-transparent border border-[#3c3c3c] rounded text-[11px] cursor-pointer transition-colors
+ {isLineWrapped ? 'bg-[#3c3c3c] text-accent-300 border-accent-700 hover:text-accent-200' : 'text-gray-400 dark:text-slate-500 hover:bg-[#333] hover:text-gray-200'}"
+ onclick={toggleLineWrap}
+ title={isLineWrapped ? 'Disable line wrap' : 'Enable line wrap'}
+ aria-pressed={isLineWrapped}
+ >
+ <TextWrap size={12} />
+ <span>Wrap</span>
+ </button>
+ {/if}
 
  <!-- Mask toggle: hides scalar values behind black tape.
  Reflects the actual editor state — if any value is revealed

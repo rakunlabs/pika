@@ -289,6 +289,9 @@ func validateRegistryAuth(a *RegistryUpstreamAuth) error {
 		if a.Username == "" {
 			return fmt.Errorf("basic auth requires username: %w", ErrBadRequest)
 		}
+		if err := validateRegistryAuthSecretValue("basic username", a.Username); err != nil {
+			return err
+		}
 		if err := validateRegistryAuthSecretValue("basic password", a.Password); err != nil {
 			return err
 		}

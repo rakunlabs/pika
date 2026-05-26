@@ -460,6 +460,10 @@ func TestValidate_UpstreamAuth(t *testing.T) {
 		wantErr bool
 	}{
 		{"basic ok", &RegistryUpstreamAuth{Type: "basic", Username: "u", Password: "p"}, false},
+		{"basic username raw ref ok", &RegistryUpstreamAuth{Type: "basic", Username: "raw://secrets/docker.json#/auth/user", Password: "p"}, false},
+		{"basic username config ref ok", &RegistryUpstreamAuth{Type: "basic", Username: "config://secrets/docker#/auth/user", Password: "p"}, false},
+		{"basic username malformed raw ref", &RegistryUpstreamAuth{Type: "basic", Username: "raw://secrets", Password: "p"}, true},
+		{"basic username secret ref rejected", &RegistryUpstreamAuth{Type: "basic", Username: "secret://secrets/docker-user", Password: "p"}, true},
 		{"basic no user", &RegistryUpstreamAuth{Type: "basic", Password: "p"}, true},
 		{"bearer ok", &RegistryUpstreamAuth{Type: "bearer", Token: "t"}, false},
 		{"bearer raw ref ok", &RegistryUpstreamAuth{Type: "bearer", Token: "raw://secrets/npm-token"}, false},

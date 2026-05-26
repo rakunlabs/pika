@@ -177,14 +177,14 @@ type RegistryRetentionPolicy struct {
 }
 
 // RegistryUpstreamAuth describes how to authenticate to an upstream
-// registry when proxying remote repositories. The Password / Token /
-// Value fields support direct "raw://mount/path" and "config://key"
+// registry when proxying remote repositories. The Username / Password /
+// Token / Value fields support direct "raw://mount/path" and "config://key"
 // references, plus nested scalar selectors such as
 // "config://secrets/app#/registry/token" or
 // "raw://vault/secrets.yaml#/registry/token". References are resolved
-// at runtime instead of persisted as plaintext in Settings. The wrapper
-// layer (internal/secret/settings_seal.go) extracts and seals any
-// remaining plaintext values automatically.
+// at runtime instead of being sent upstream literally. The wrapper
+// layer (internal/secret/settings_seal.go) extracts and seals plaintext
+// password, token and header value fields automatically.
 type RegistryUpstreamAuth struct {
 	Type     string `json:"type"` // "basic" | "bearer" | "header"
 	Username string `json:"username,omitempty"`
