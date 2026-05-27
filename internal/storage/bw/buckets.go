@@ -140,8 +140,13 @@ func (s *Storage) registerBuckets() error {
 	//        synthesizeLegacyListeners path runs on first reconcile
 	//        and rewrites every legacy ProxyServer to point at a
 	//        synthesized listener that preserves its Host:Port.
+	//   v4 — added PublicEndpoints []service.PublicEndpoint, the
+	//        operator-defined public-port compatibility/custom
+	//        modifier endpoints. New field; existing rows decode
+	//        with PublicEndpoints == nil so deployments that never
+	//        configured one keep working without migration.
 	if s.settings, err = bw.RegisterBucket[settingsRow](s.db, bucketSettings,
-		bw.WithVersion[settingsRow](3),
+		bw.WithVersion[settingsRow](4),
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketSettings, err)
 	}

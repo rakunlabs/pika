@@ -734,6 +734,11 @@ type settingsRow struct {
 	Auth                *service.AuthSettings                `bw:"auth"`
 	UserSync            *service.UserSyncSettings            `bw:"user_sync"`
 	Vault               *service.VaultSettings               `bw:"vault"`
+	// PublicEndpoints carries the operator-defined public-port
+	// compatibility / custom-modifier endpoints. Sealed token slots
+	// inside the EndpointAuth structs are stripped out by the
+	// secret wrapper before this row is written.
+	PublicEndpoints []service.PublicEndpoint `bw:"public_endpoints"`
 	// SensitivePayload mirrors service.Settings.SensitivePayload —
 	// the encrypted blob holding all secret-bearing values that the
 	// secret.Storage wrapper unpacks during Get. bw stores it as raw

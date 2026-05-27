@@ -2,8 +2,8 @@
 
 Pika has two layers of configuration:
 
-1. **Process-level config** — supplied at startup via environment variables or a YAML file. This covers things that must be known before the HTTP server is up: the listen ports, the storage path, the cluster membership, and the encryption key.
-2. **Runtime settings** — stored in the database and edited from the **Settings** pages of the UI. This covers everything else: authentication strategies, raw mounts, external resources, hooks, the public port, compatibility endpoints, and so on. Changes apply without restarting.
+1. **Process-level config** — supplied at startup via environment variables or a YAML file. This covers things that must be known before the HTTP server is up: the listen port, the storage path, the cluster membership, and the encryption key.
+2. **Runtime settings** — stored in the database and edited from the **Settings** pages of the UI. This covers everything else: authentication strategies, external resources, hooks, public-port compatibility endpoints, and so on. Changes apply without restarting.
 
 This page documents the first layer.
 
@@ -15,7 +15,6 @@ The most common variables. All env vars use the `PIKA_` prefix and `_` for nesti
 | ---------------------------- | ------------------ | ---------------------------------------------------- |
 | `PIKA_SERVER_HOST`           | _(all interfaces)_ | Bind address for the admin server.                   |
 | `PIKA_SERVER_PORT`           | `8080`             | Listen port (admin UI + authenticated `/data/*`).    |
-| `PIKA_SERVER_PUBLIC_PORT`    | _(disabled)_       | Public, unauthenticated `/data/*` and `/raw/*` port. |
 | `PIKA_SERVER_BASE_PATH`      | `/`                | Base URL path — set when running behind a sub-path.  |
 | `PIKA_STORAGE_BW_PATH`       | `data/pika`        | Embedded BadgerDB directory.                         |
 | `PIKA_LOG_LEVEL`             | `info`             | `debug`, `info`, `warn`, or `error`.                 |
@@ -80,11 +79,11 @@ telemetry:
 Most production deployments only set a handful of these. The Docker Compose example in [Installation](./installation) uses just `PIKA_LOG_LEVEL`. The at-rest encryption key is entered through the UI after every start; see [Encryption](./encryption).
 :::
 
-## Public port
+## Endpoints
 
-The **public port** is a second HTTP server that exposes only `/data/*`, `/raw/*`, and `/healthz` — no admin API, no UI, no auth required. It is intended for consumers running inside a trusted network.
+Pika can expose additional HTTP listeners that serve configuration data in operator-chosen wire shapes — either a Consul KV-compatible read API or a custom Go-template response. Each endpoint binds its own `host:port`, owns its own auth setting, can run an optional request-check stage, and is configured at runtime from **Settings → Endpoints**.
 
-Enable it from **Settings → Public Server** in the UI, or set `PIKA_SERVER_PUBLIC_PORT=9090`. You can also enable [Consul KV compatibility](/reference/compat) on it.
+See [Endpoints](/reference/compat) for the wire format, template variables, and authentication options.
 
 ## Sessions and cookies
 

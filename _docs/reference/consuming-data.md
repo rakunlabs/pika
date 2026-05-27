@@ -21,8 +21,8 @@ curl -H "Authorization: Bearer pika_abc123..." \
 
 The token must have a scope that covers the requested path with the `read` operation. See [Tokens & scopes](./tokens-and-scopes).
 
-::: tip Public port
-If you enable the **public port** (default 9090), `/data/*` is reachable there without any token. Use it inside trusted networks where you don't want to ship secrets to consumers.
+::: tip Endpoints
+For client tools that don't speak Bearer auth — or that already speak a different config protocol — open an **Endpoint** (Settings → Endpoints). Each endpoint binds its own `host:port` and serves pika's data in either Consul KV shape or a custom Go-template response, with an optional request-check stage in between. See [Endpoints](./compat).
 :::
 
 ## Query parameters
@@ -83,7 +83,7 @@ By default the response is in the file's stored format. Override with `?format=`
 | Code | Meaning                                                                         |
 | ---- | ------------------------------------------------------------------------------- |
 | 200  | OK — body contains the resolved config.                                         |
-| 401  | No token / invalid token (admin port only — the public port doesn't return 401). |
+| 401  | No token / invalid token. Endpoints with `auth=none` skip this. |
 | 403  | Token doesn't have a scope covering the path with `read`.                       |
 | 404  | Path doesn't exist (or variant/version not found).                              |
 | 502  | An external inheritance source failed.                                          |
@@ -104,6 +104,6 @@ curl -H "Authorization: Bearer $TOKEN" \
 # HTTP/1.1 304 Not Modified
 ```
 
-## Compatibility shims
+## Endpoints
 
-Pika can also expose its data through compatibility endpoints — currently a Consul-KV-shaped reader at `/consul/v1/kv/*`. See [Compat endpoints](./compat).
+Pika can also expose its data through operator-defined endpoints — either a Consul KV-shaped reader or a custom Go-template modifier, with an optional per-request inspection stage. Each endpoint binds its own `host:port`. See [Endpoints](./compat).

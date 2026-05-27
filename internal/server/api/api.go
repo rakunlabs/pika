@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/secret"
 	"github.com/rakunlabs/pika/internal/server/authx"
+	"github.com/rakunlabs/pika/internal/server/publicendpoint"
 	"github.com/rakunlabs/pika/internal/service"
 	"github.com/rakunlabs/pika/internal/usersync"
 )
@@ -31,21 +33,22 @@ type Info struct {
 }
 
 type api struct {
-	svc           *service.Service
-	info          Info
-	encStore      *secret.Storage     // nil if encryption is disabled
-	mgr           *authx.Manager      // auth manager (login/logout/cap resolution)
-	dispatcher    *hook.Dispatcher    // hook event bus; nil only in tests
-	syncScheduler *usersync.Scheduler // nil until set by server.go
-	cluster       *pcluster.Cluster   // nil only in tests or custom embeddings
-	appCtx        context.Context     // root context used for background loops
+	svc             *service.Service
+	info            Info
+	encStore        *secret.Storage         // nil if encryption is disabled
+	mgr             *authx.Manager          // auth manager (login/logout/cap resolution)
+	dispatcher      *hook.Dispatcher        // hook event bus; nil only in tests
+	syncScheduler   *usersync.Scheduler     // nil until set by server.go
+	cluster         *pcluster.Cluster       // nil only in tests or custom embeddings
+	publicEndpoints *publicendpoint.Manager // nil only in tests
+	appCtx          context.Context         // root context used for background loops
 }
 
 type response struct {
 	Message string `json:"message,omitempty"`
 }
 
-func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, mgr *authx.Manager, dispatcher *hook.Dispatcher, cl *pcluster.Cluster) error {
+func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, mgr *authx.Manager, dispatcher *hook.Dispatcher, cl *pcluster.Cluster, peMgr *publicendpoint.Manager) error {
 	// Set hook service identification from config
 	hook.ServiceName = config.ServiceName
 	hook.Version = config.Version
@@ -55,7 +58,7 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// path share one instance. Started below after the routes register.
 	syncSched := usersync.NewScheduler(svc)
 
-	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, dispatcher: dispatcher, syncScheduler: syncSched, cluster: cl, appCtx: context.Background()}
+	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, dispatcher: dispatcher, syncScheduler: syncSched, cluster: cl, publicEndpoints: peMgr, appCtx: context.Background()}
 
 	m.ErrorHandler(api.errorHandler)
 
@@ -224,6 +227,15 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.GET("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.getSettings)))
 	m.POST("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.postSettings)))
 	m.GET("/api/v1/cluster/status", m.Wrap(api.withPerm(service.CapSettingsManage, api.getClusterStatus)))
+
+	// Public endpoints diagnostics. The endpoint configurations
+	// themselves are persisted through the settings round-trip
+	// (POST /api/v1/settings carries the public_endpoints list);
+	// these two routes only surface runtime state and a synthetic
+	// probe so the SPA can show a "running / failed" badge and a
+	// curl-style preview without leaving the page.
+	m.GET("/api/v1/public-endpoints/status", m.Wrap(api.withPerm(service.CapSettingsManage, api.getPublicEndpointStatus)))
+	m.POST("/api/v1/public-endpoints/{id}/test", m.Wrap(api.withPerm(service.CapSettingsManage, api.testPublicEndpoint)))
 
 	// Backup & Restore. CapSettingsManage is the only gate — anyone
 	// authorized to manage settings can already export the entire
@@ -458,7 +470,199 @@ func (a *api) postSettings(c *ada.Context) error {
 		a.syncScheduler.Reload(patchSettings.UserSync)
 	}
 
+	// If public endpoints were updated, reconcile the live listener
+	// set. Bind failures don't fail the save — settings already
+	// persisted, the operator can fix the port and try again. We
+	// surface bind errors through GET /public-endpoints/status so
+	// the UI can show a banner.
+	if patchSettings.PublicEndpoints != nil && a.publicEndpoints != nil {
+		// Re-read the persisted list so we apply the post-service
+		// (validated, IDs filled, timestamps set) shape rather than
+		// the raw client payload.
+		settings, err := a.svc.Settings(c.Request.Context())
+		if err == nil && settings != nil {
+			if rerr := a.publicEndpoints.Reload(c.Request.Context(), settings.PublicEndpoints); rerr != nil {
+				slog.Warn("public endpoints reload reported issues", "error", rerr)
+			}
+		}
+	}
+
 	return c.SetStatus(http.StatusOK).SendJSON(patchSettings)
+}
+
+// getPublicEndpointStatus returns the live diagnostic view of every
+// configured public endpoint (running, disabled, bind-failed).
+func (a *api) getPublicEndpointStatus(c *ada.Context) error {
+	if a.publicEndpoints == nil {
+		return c.SetStatus(http.StatusOK).SendJSON([]publicendpoint.EndpointStatus{})
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(a.publicEndpoints.Status())
+}
+
+// testPublicEndpoint runs a synthetic GET through the endpoint's
+// live handler chain — the same chain the public listener serves —
+// and returns the status, headers and body. Two reasons we do this
+// through the real handler instead of hitting the bound port:
+//   - Operators can probe disabled endpoints (manager refuses to
+//     bind a port for them but the handler is still constructed).
+//   - It works without the admin SPA having direct network access to
+//     the public bind, which is common in proxy-fronted deployments.
+//
+// Request body:
+//
+//	{ "key": "...", "variant": "...", "version": "...",
+//	  "raw": bool, "format": "...",
+//	  "headers": {"X-Tenant": "acme", ...} }
+//
+// The "headers" map is forwarded verbatim onto the synthetic
+// request so an operator can exercise both the auth chain and
+// any request-check rules they configured. Both Authorization-
+// style auth tokens and policy-relevant headers (e.g. X-Tenant
+// matched by a rule) go through this same map.
+//
+// Response:
+//
+//	{ "status": 200, "headers": {...}, "body": "..." }
+func (a *api) testPublicEndpoint(c *ada.Context) error {
+	if a.publicEndpoints == nil {
+		return errors.Join(errors.New("public endpoints manager not wired"), service.ErrInternal)
+	}
+	id := c.Request.PathValue("id")
+	if id == "" {
+		return errors.Join(errors.New("id is required"), service.ErrBadRequest)
+	}
+
+	var req struct {
+		Key     string            `json:"key"`
+		Variant string            `json:"variant,omitempty"`
+		Version string            `json:"version,omitempty"`
+		Raw     bool              `json:"raw,omitempty"`
+		Format  string            `json:"format,omitempty"`
+		Headers map[string]string `json:"headers,omitempty"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+
+	// Resolve the endpoint so we know its mode and base path.
+	settings, err := a.svc.Settings(c.Request.Context())
+	if err != nil {
+		return err
+	}
+	var ep *service.PublicEndpoint
+	for i := range settings.PublicEndpoints {
+		if settings.PublicEndpoints[i].ID == id {
+			ep = &settings.PublicEndpoints[i]
+			break
+		}
+	}
+	if ep == nil {
+		return errors.Join(fmt.Errorf("public endpoint %q not found", id), service.ErrNotFound)
+	}
+
+	handler := a.publicEndpoints.HandlerForID(id)
+	if handler == nil {
+		// Endpoint exists but isn't running (disabled or bind
+		// failure). Build a transient handler for the probe so
+		// operators can still validate their template / shim.
+		built, berr := publicendpoint.BuildHandlerForProbe(*ep, a.svc, slog.Default())
+		if berr != nil {
+			return errors.Join(berr, service.ErrBadRequest)
+		}
+		handler = built
+	}
+
+	// Construct the synthetic URL. For consul mode we emit the
+	// well-known "{basePath}/v1/kv/<key>" shape; for custom mode the
+	// key is appended directly to the base path. The auth chain on
+	// the handler will still apply — operators wanting to bypass
+	// auth for a one-off probe should toggle the auth mode to
+	// "none" first.
+	probePath := buildProbePath(*ep, req.Key)
+	q := buildProbeQuery(req.Variant, req.Version, req.Raw, req.Format)
+	if q != "" {
+		probePath += "?" + q
+	}
+
+	rec := httptest.NewRecorder()
+	probe := httptest.NewRequest(http.MethodGet, probePath, nil)
+	// Custom headers from the probe form. Operators use this to
+	// supply auth tokens, tenant headers checked by request rules,
+	// or anything else the live handler chain inspects.
+	for k, v := range req.Headers {
+		if k == "" {
+			continue
+		}
+		probe.Header.Set(k, v)
+	}
+	// Backward-compat shortcut: a single Authorization header may
+	// also arrive via X-PublicEndpoint-Auth (used by an earlier
+	// UI revision). Honour it only when the operator did not
+	// already set Authorization through the new headers map.
+	if probe.Header.Get("Authorization") == "" {
+		if ah := c.Request.Header.Get("X-PublicEndpoint-Auth"); ah != "" {
+			probe.Header.Set("Authorization", ah)
+		}
+	}
+	handler.ServeHTTP(rec, probe)
+
+	headers := make(map[string]string, len(rec.Result().Header))
+	for k, v := range rec.Result().Header {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(struct {
+		Status  int               `json:"status"`
+		Headers map[string]string `json:"headers"`
+		Body    string            `json:"body"`
+	}{
+		Status:  rec.Result().StatusCode,
+		Headers: headers,
+		Body:    rec.Body.String(),
+	})
+}
+
+// buildProbePath assembles the URL the test handler walks. For
+// consul-mode endpoints we use the well-known /v1/kv/<key> shape
+// so the shim's path parsing matches a real call. For custom- and
+// static-mode endpoints we simply join the base path and the key;
+// static resolves that path tail exactly like /data/<key>.
+func buildProbePath(ep service.PublicEndpoint, key string) string {
+	bp := ep.BasePath
+	if bp == "" || bp == "/" {
+		bp = ""
+	}
+	key = strings.TrimPrefix(key, "/")
+	switch ep.Mode {
+	case "consul":
+		if key == "" {
+			return bp + "/v1/kv/"
+		}
+		return bp + "/v1/kv/" + key
+	default:
+		if bp == "" {
+			return "/" + key
+		}
+		return bp + "/" + key
+	}
+}
+
+func buildProbeQuery(variant, version string, raw bool, format string) string {
+	parts := []string{}
+	if variant != "" {
+		parts = append(parts, "variant="+variant)
+	}
+	if version != "" {
+		parts = append(parts, "version="+version)
+	}
+	if raw {
+		parts = append(parts, "raw")
+	}
+	if format != "" {
+		parts = append(parts, "format="+format)
+	}
+	return strings.Join(parts, "&")
 }
 
 // reloadEventLog applies the built-in event logging toggle without touching
@@ -528,7 +732,6 @@ func BuildHookDispatcher(ctx context.Context, svc *service.Service) *hook.Dispat
 	}
 	return dispatcher
 }
-
 
 func (a *api) listExternalPaths(c *ada.Context) error {
 	resourceName := c.Request.PathValue("name")

@@ -43,6 +43,12 @@ type sensitivePayload struct {
 	// secret back to the right strategy entry.
 	OAuth2ClientSecrets []string `json:"oauth2_client_secrets,omitempty"`
 	LDAPBindPassword    string   `json:"ldap_bind_password,omitempty"`
+
+	// PublicEndpointStaticTokens is the secret slot for
+	// Settings.PublicEndpoints[*].Auth.StaticTokens. Keyed by the
+	// endpoint's ID so re-ordering the list (which the UI does on
+	// every save) doesn't shuffle secrets onto the wrong endpoint.
+	PublicEndpointStaticTokens map[string][]string `json:"public_endpoint_static_tokens,omitempty"`
 }
 
 // sealedHook carries any hook-target secret. We capture secrets
@@ -144,6 +150,28 @@ func extractSecrets(s *service.Settings) *sensitivePayload {
 		if s.Auth.LDAP != nil && s.Auth.LDAP.BindPassword != "" {
 			p.LDAPBindPassword = s.Auth.LDAP.BindPassword
 			s.Auth.LDAP.BindPassword = ""
+		}
+	}
+
+	// Public-endpoint static tokens. Keyed by ID rather than slice
+	// index so the seal survives endpoint reordering on save. Only
+	// pulled out when the auth mode actually carries them; other
+	// modes ("none", "bearer_token") never populate the slot.
+	if len(s.PublicEndpoints) > 0 {
+		for i := range s.PublicEndpoints {
+			ep := &s.PublicEndpoints[i]
+			if ep.Auth.Mode != "static_token" || len(ep.Auth.StaticTokens) == 0 {
+				continue
+			}
+			if p.PublicEndpointStaticTokens == nil {
+				p.PublicEndpointStaticTokens = make(map[string][]string)
+			}
+			// Copy so the row write doesn't share the slice with
+			// the in-memory caller.
+			tokens := make([]string, len(ep.Auth.StaticTokens))
+			copy(tokens, ep.Auth.StaticTokens)
+			p.PublicEndpointStaticTokens[ep.ID] = tokens
+			ep.Auth.StaticTokens = nil
 		}
 	}
 
@@ -251,6 +279,22 @@ func injectSecrets(s *service.Settings, p *sensitivePayload) {
 		}
 		if s.Auth.LDAP != nil && p.LDAPBindPassword != "" {
 			s.Auth.LDAP.BindPassword = p.LDAPBindPassword
+		}
+	}
+
+	// Re-attach public-endpoint static tokens by ID.
+	if len(p.PublicEndpointStaticTokens) > 0 && len(s.PublicEndpoints) > 0 {
+		for i := range s.PublicEndpoints {
+			ep := &s.PublicEndpoints[i]
+			tokens, ok := p.PublicEndpointStaticTokens[ep.ID]
+			if !ok {
+				continue
+			}
+			// Copy so a downstream mutation can't reach back into
+			// the sealed payload.
+			cp := make([]string, len(tokens))
+			copy(cp, tokens)
+			ep.Auth.StaticTokens = cp
 		}
 	}
 }
@@ -407,6 +451,15 @@ func isEmptyPayload(p *sensitivePayload) bool {
 	}
 	if p.LDAPBindPassword != "" {
 		return false
+	}
+	if len(p.PublicEndpointStaticTokens) > 0 {
+		for _, toks := range p.PublicEndpointStaticTokens {
+			for _, t := range toks {
+				if t != "" {
+					return false
+				}
+			}
+		}
 	}
 	return true
 }

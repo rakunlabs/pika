@@ -87,9 +87,15 @@ kubectl apply -k .
 
 The default deploys a 3-replica cluster (see [Clustering](./clustering)). If you change `spec.replicas` on the StatefulSet, also update `cluster.replicas` in the `ConfigMap` — both must match for the quorum math.
 
-## Public port
+## Endpoints
 
-The public port (9090) is exposed on the `pika` Service alongside the admin port. By default it is reachable only inside the cluster at `pika.pika.svc.cluster.local:9090`. Route it externally with your own Ingress / HTTPRoute if you want to expose `/data/*` to consumers outside the cluster.
+Endpoints are operator-defined HTTP listeners configured at runtime (Settings → Endpoints) — each binds its own port and serves pika data in either Consul KV shape or a custom Go-template response. To expose one in Kubernetes:
+
+1. Pick a deterministic port per endpoint (e.g. `9090` for Consul mode).
+2. Add the port to the StatefulSet `containerPort` list and to the `pika` Service.
+3. Add an Ingress / HTTPRoute if you want external access.
+
+The endpoint configuration itself is stored in pika (not Kubernetes), so a single ConfigMap change is not enough — you also need to add the entry from the UI on a running pod.
 
 ## Encryption key
 
@@ -142,7 +148,7 @@ Pika emits metrics, traces, and logs through [tell](https://github.com/rakunlabs
 
 ## Probes
 
-Both `/healthz` endpoints (admin port 8080 and public port 9090) return `200 OK` once the storage is open. Add liveness and readiness probes to the StatefulSet patch:
+The admin `/healthz` (port 8080) returns `200 OK` once the storage is open. Add liveness and readiness probes to the StatefulSet patch:
 
 ```yaml
 livenessProbe:

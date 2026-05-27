@@ -92,6 +92,6 @@ On first launch the UI presents a setup screen to create the initial admin accou
 - (Optional) Enable [external auth](./authentication) — OAuth2/OIDC, LDAP, or forward-auth headers.
 
 - (Optional) Configure [external resources](./inheritance/) for inheritance.
-- (Optional) Enable the public port for unauthenticated `/data/*` access inside trusted networks.
+- (Optional) Add an [Endpoint](/reference/compat) — direct config data, External resource, Consul KV, or custom Go-template — for clients that don't speak pika's Bearer-auth `/data/*` API.
 
 Once you're happy with the layout, the [Concepts](./concepts) page is the best next read.

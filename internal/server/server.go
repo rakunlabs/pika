@@ -21,6 +21,7 @@ import (
 	"github.com/rakunlabs/pika/internal/server/api"
 	"github.com/rakunlabs/pika/internal/server/authx"
 	"github.com/rakunlabs/pika/internal/server/lockgate"
+	"github.com/rakunlabs/pika/internal/server/publicendpoint"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -130,9 +131,37 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	// Protected group: require auth + resolve capabilities.
 	m.Use(mgr.Require(), mgr.CapMiddleware())
 
-	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, dispatcher, cl); err != nil {
+	// Public endpoints manager: owns the lifecycle of every
+	// operator-defined compatibility / custom-modifier listener.
+	// Constructed before the API routes register so postSettings'
+	// reload hook can reach into it; the initial Reload happens
+	// once the API is in place, mirroring the user-sync scheduler
+	// boot sequence.
+	peMgr := publicendpoint.New(ctx, svc, slog.Default())
+
+	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, dispatcher, cl, peMgr); err != nil {
 		return err
 	}
+
+	// Boot the public-endpoint manager with the persisted list. We
+	// log a warning on bind failures rather than failing the whole
+	// process — a single misconfigured port shouldn't keep pika
+	// from coming up.
+	if curSettings, err := svc.Settings(ctx); err == nil && curSettings != nil {
+		if rerr := peMgr.Reload(ctx, curSettings.PublicEndpoints); rerr != nil {
+			slog.Warn("initial public endpoints reload reported issues", "error", rerr)
+		}
+	}
+
+	// Shut listeners down when the root context cancels. Runs in a
+	// goroutine so server.StartWithContext below stays the
+	// canonical termination point; the manager's Shutdown is
+	// idempotent so a double-call from server-level cleanup paths
+	// is safe.
+	go func() {
+		<-ctx.Done()
+		_ = peMgr.Shutdown(context.Background())
+	}()
 
 	if err := folderHandler(mAuth); err != nil {
 		return err

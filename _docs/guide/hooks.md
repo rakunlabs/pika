@@ -42,8 +42,8 @@ All sinks receive a JSON-encoded `Event`:
 
 Field meanings:
 
-- `protocol` — how the change was made: `http`, `ftp`, `sftp`, `webdav`, `tftp`, or `internal` (cluster sync, hooks, etc.).
-- `user` — pika username, or empty for anonymous public-port writes.
+- `protocol` — how the change was made: `http` (admin API) or `internal` (cluster sync, hooks, etc.). Public-port endpoints are read-only and never produce write events.
+- `user` — pika username, or empty for internal/system actions.
 - `old_path`, `dst_*` — populated for `file.renamed` and `file.copied` events.
 - `config_key`, `config_version`, `variant` — populated for `config.*` events.
 

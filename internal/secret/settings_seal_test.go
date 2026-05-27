@@ -128,6 +128,69 @@ func buildFixture() *service.Settings {
 	}
 }
 
+// TestPublicEndpointTokenRoundTrip — static auth tokens on a
+// PublicEndpoint must be stripped on extract and re-attached on
+// inject, keyed by endpoint ID so reordering the list is safe.
+func TestPublicEndpointTokenRoundTrip(t *testing.T) {
+	working := &service.Settings{
+		PublicEndpoints: []service.PublicEndpoint{
+			{
+				ID: "a", Name: "alpha", Enabled: true,
+				ListenHost: "127.0.0.1", ListenPort: 9090, BasePath: "/a",
+				Mode: "consul", Consul: &service.ConsulCompat{},
+				Auth: service.EndpointAuth{
+					Mode:         "static_token",
+					StaticTokens: []string{"alpha-1", "alpha-2"},
+				},
+			},
+			{
+				ID: "b", Name: "beta", Enabled: true,
+				ListenHost: "0.0.0.0", ListenPort: 9091, BasePath: "/b",
+				Mode: "consul", Consul: &service.ConsulCompat{},
+				Auth: service.EndpointAuth{Mode: "none"},
+			},
+		},
+	}
+
+	payload := extractSecrets(working)
+
+	if working.PublicEndpoints[0].Auth.StaticTokens != nil {
+		t.Errorf("static tokens not cleared after extract")
+	}
+	if got := payload.PublicEndpointStaticTokens["a"]; len(got) != 2 ||
+		got[0] != "alpha-1" || got[1] != "alpha-2" {
+		t.Errorf("payload tokens for a wrong: %v", got)
+	}
+	if _, ok := payload.PublicEndpointStaticTokens["b"]; ok {
+		t.Errorf("non-static-mode endpoint should not appear in payload")
+	}
+
+	// Simulate the operator reordering the list between extract and
+	// inject — the ID-keyed map must still steer tokens to the
+	// right entry.
+	working.PublicEndpoints[0], working.PublicEndpoints[1] = working.PublicEndpoints[1], working.PublicEndpoints[0]
+
+	injectSecrets(working, payload)
+
+	var alpha *service.PublicEndpoint
+	for i := range working.PublicEndpoints {
+		if working.PublicEndpoints[i].ID == "a" {
+			alpha = &working.PublicEndpoints[i]
+		}
+	}
+	if alpha == nil {
+		t.Fatalf("missing endpoint a after inject")
+	}
+	if len(alpha.Auth.StaticTokens) != 2 ||
+		alpha.Auth.StaticTokens[0] != "alpha-1" ||
+		alpha.Auth.StaticTokens[1] != "alpha-2" {
+		t.Errorf("tokens lost after reorder + inject: %v", alpha.Auth.StaticTokens)
+	}
+	if isEmptyPayload(payload) {
+		t.Errorf("isEmptyPayload returned true for payload with tokens")
+	}
+}
+
 // TestAuthSecretRoundTrip — OAuth2 ClientSecret and LDAP BindPassword
 // must survive an extract→inject pass identically.
 func TestAuthSecretRoundTrip(t *testing.T) {

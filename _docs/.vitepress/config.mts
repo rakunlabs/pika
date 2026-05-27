@@ -4,6 +4,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'pika',
   description: 'General configuration server, secrets manager, and personal vault',
+  base: '/pika/',
   cleanUrls: true,
   lastUpdated: true,
   ignoreDeadLinks: 'localhostLinks',
@@ -86,7 +87,7 @@ export default defineConfig({
             { text: 'Consuming data', link: '/reference/consuming-data' },
             { text: 'Admin API', link: '/reference/api' },
             { text: 'Tokens & scopes', link: '/reference/tokens-and-scopes' },
-            { text: 'Compat endpoints', link: '/reference/compat' },
+            { text: 'Endpoints', link: '/reference/compat' },
           ],
         },
       ],

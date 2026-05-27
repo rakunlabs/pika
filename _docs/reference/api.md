@@ -57,15 +57,14 @@ Token capabilities for admin operations are different from path scopes used on `
 | `POST`                  | `/api/v1/user-sync/run/{id}`          | `settings.manage`      | Trigger a one-shot user-sync run.                                    |
 | `POST`                  | `/api/v1/user-sync/test/{id}`         | `settings.manage`      | Dry-run a user-sync source — no writes performed.                    |
 
-## Public consumer endpoints
+## Consumer endpoints (admin port)
 
-These are reachable on both the admin port (with token) and the public port (without):
+These are reachable on the admin port with a token. To expose configuration data without a Bearer token, configure an [Endpoint](./compat) — each one binds its own dedicated port.
 
-| Method         | Path                  | Notes                                     |
-| -------------- | --------------------- | ----------------------------------------- |
-| `GET`          | `/data/{path}`        | Resolved config — see [Consuming data](./consuming-data). |
-
-| `GET`          | `/healthz`            | Health probe.                             |
+| Method         | Path                  | Notes                                                       |
+| -------------- | --------------------- | ----------------------------------------------------------- |
+| `GET`          | `/data/{path}`        | Resolved config — see [Consuming data](./consuming-data).   |
+| `GET`          | `/healthz`            | Health probe.                                               |
 
 These data-plane endpoints are reachable on the admin port and require a token or UI session unless you publish them through a proxy graph:
 

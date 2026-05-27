@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
+	"time"
 
 	"github.com/rakunlabs/pika/internal/external"
 	"github.com/rakunlabs/pika/internal/hook"
@@ -83,6 +86,14 @@ type Settings struct {
 	Auth                *AuthSettings                `json:"auth,omitempty"`
 	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
+	// PublicEndpoints is the list of operator-defined public HTTP
+	// endpoints that expose pika's configuration data directly,
+	// through a compatibility shim (Consul KV), from an External
+	// resource, or through a user-authored response modifier (custom
+	// Go template). Each entry owns its own TCP listener;
+	// reconciliation is performed by
+	// internal/server/publicendpoint.Manager after every save.
+	PublicEndpoints []PublicEndpoint `json:"public_endpoints,omitempty"`
 
 	// SensitivePayload is the at-rest encrypted blob carrying the
 	// user-supplied secret values for fields above (S3 access keys,
@@ -145,6 +156,10 @@ type PatchSettings struct {
 	Auth                *AuthSettings                `json:"auth,omitempty"`
 	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
+	// PublicEndpoints is a full-replace patch — pointer-to-slice so
+	// nil ("don't touch") is distinguishable from empty ("clear the
+	// list"). Matches the Hooks shape exactly.
+	PublicEndpoints *[]PublicEndpoint `json:"public_endpoints,omitempty"`
 }
 
 type ActionKey string
@@ -244,7 +259,69 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 		settings.Vault = patch.Vault
 	}
 
+	// Handle public-endpoints update (if provided). Full-replace
+	// semantics: caller submits the desired final list. We:
+	//   1. validate the whole list (per-entry + cross-entry
+	//      conflicts) before touching state,
+	//   2. fill in missing IDs and timestamps so the UI never has
+	//      to mint them client-side,
+	//   3. preserve CreatedAt for endpoints that already existed.
+	if patch.PublicEndpoints != nil {
+		incoming := *patch.PublicEndpoints
+		if err := ValidatePublicEndpoints(incoming); err != nil {
+			return err
+		}
+		for _, ep := range incoming {
+			if ep.Mode != "external" || ep.External == nil {
+				continue
+			}
+			if _, ok := settings.External[ep.External.Resource]; !ok {
+				return fmt.Errorf("public endpoint %q: external resource %q not found: %w",
+					ep.Name, ep.External.Resource, ErrBadRequest)
+			}
+		}
+		// Build a lookup from the existing list so we can preserve
+		// CreatedAt for endpoints the operator is editing rather
+		// than creating.
+		existing := make(map[string]PublicEndpoint, len(settings.PublicEndpoints))
+		for _, ep := range settings.PublicEndpoints {
+			if ep.ID != "" {
+				existing[ep.ID] = ep
+			}
+		}
+		now := time.Now().UTC()
+		out := make([]PublicEndpoint, len(incoming))
+		for i, ep := range incoming {
+			if ep.ID == "" {
+				id, err := newPublicEndpointID()
+				if err != nil {
+					return fmt.Errorf("public endpoint %q: %w", ep.Name, err)
+				}
+				ep.ID = id
+			}
+			if prev, ok := existing[ep.ID]; ok && !prev.CreatedAt.IsZero() {
+				ep.CreatedAt = prev.CreatedAt
+			} else {
+				ep.CreatedAt = now
+			}
+			ep.UpdatedAt = now
+			out[i] = ep
+		}
+		settings.PublicEndpoints = out
+	}
+
 	return s.UpdateSettings(ctx, settings)
+}
+
+// newPublicEndpointID mints a 16-byte hex identifier for a fresh
+// public endpoint. Kept private to the service package so the bw and
+// API layers can't accidentally invent their own scheme.
+func newPublicEndpointID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate public endpoint id: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 // GetExternalPermissionsSettings returns the current external-permissions

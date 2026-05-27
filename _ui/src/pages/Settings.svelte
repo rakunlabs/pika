@@ -13,6 +13,7 @@
         KeyRound,
         Vault,
         Network,
+        Plug,
     } from "lucide-svelte";
     import { appStore } from "@/lib/store/store.svelte";
 
@@ -27,6 +28,7 @@
     import KeyRotationSection from "@/pages/settings/KeyRotationSection.svelte";
     import FeaturesSection from "@/pages/settings/FeaturesSection.svelte";
     import ClusterSection from "@/pages/settings/ClusterSection.svelte";
+    import PublicEndpointsSection from "@/pages/settings/PublicEndpointsSection.svelte";
     import BackupSection from "@/pages/settings/BackupSection.svelte";
     import AboutSection from "@/pages/settings/AboutSection.svelte";
 
@@ -42,6 +44,7 @@
         | "rotation"
         | "features"
         | "cluster"
+        | "public_endpoints"
         | "backup"
         | "about";
 
@@ -61,6 +64,7 @@
         rotation: "settings.manage",
         features: "settings.manage",
         cluster: "settings.manage",
+        public_endpoints: "settings.manage",
         backup: "settings.manage",
         about: null,
     };
@@ -77,6 +81,7 @@
         { key: "rotation", label: "Key Rotation", icon: RotateCw },
         { key: "features", label: "Features", icon: ToggleLeft },
         { key: "cluster", label: "Cluster", icon: Network },
+        { key: "public_endpoints", label: "Endpoints", icon: Plug },
         { key: "backup", label: "Backup", icon: HardDrive },
         { key: "about", label: "About", icon: Info },
     ];
@@ -154,6 +159,8 @@
                 <FeaturesSection />
             {:else if activeSection === "cluster"}
                 <ClusterSection />
+            {:else if activeSection === "public_endpoints"}
+                <PublicEndpointsSection />
             {:else if activeSection === "backup"}
                 <BackupSection />
             {:else if activeSection === "about"}

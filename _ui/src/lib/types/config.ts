@@ -20,6 +20,9 @@ export interface FileVersion {
 
 // A single inheritance entry
 export interface InheritEntry {
+  // Legacy raw-mount inheritance entries can still appear in saved tabs and
+  // preview state; the backend no longer creates new ones after the kutu split.
+  mount?: string;
   source?: string;    // Internal file path (for internal inheritance)
   resource?: string;  // External resource name from settings (for external inheritance)
   path?: string;      // Resource-specific path (e.g., Vault secret path, HTTP endpoint path)
@@ -389,6 +392,145 @@ export interface Settings {
   forward_auth?: ForwardAuthSettings;
   user_sync?: UserSyncSettings;
   vault?: VaultSettings;
+  public_endpoints?: PublicEndpoint[];
+}
+
+// PublicEndpoint mirrors service.PublicEndpoint on the backend.
+// One entry = one TCP listener on the operator's chosen host:port
+// that exposes pika config data directly, through Consul KV compatibility,
+// from an External resource, or through a user-authored Go-template modifier.
+export interface PublicEndpoint {
+  id: string;
+  name: string;
+  enabled: boolean;
+  listen_host: string;
+  listen_port: number;
+  base_path: string;
+  mode: 'static' | 'consul' | 'external' | 'custom';
+  static?: StaticCompat;
+  consul?: ConsulCompat;
+  external?: ExternalCompat;
+  custom?: CustomCompat;
+  auth: EndpointAuth;
+  request_check?: RequestCheck;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// RequestCheck is the optional per-endpoint request inspector /
+// modifier stage that runs after auth and before the shim. It is
+// an ordered list of declarative rules — no templates, just point
+// and click. See _docs/reference/compat.md for the full semantics.
+export interface RequestCheck {
+  rules?: RequestRule[];
+}
+
+// RequestRule is one row in the operator's rule list. Each rule
+// has a When matcher (AND-combined predicates) and a Then action.
+// Rules are evaluated top-to-bottom; allow/block short-circuit,
+// set_*/del_* modify the request and let evaluation continue.
+export interface RequestRule {
+  name?: string;
+  enabled: boolean;
+  when: RequestMatch;
+  then: RequestAction;
+}
+
+// RequestMatch — AND-combined predicates. All non-empty fields
+// must match. An empty match block matches every request.
+export interface RequestMatch {
+  method?: string;
+  path_equals?: string;
+  path_prefix?: string;
+  header_equals?: { name: string; value: string };
+  header_present?: string;
+  header_absent?: string;
+  query_equals?: { name: string; value: string };
+  query_present?: string;
+  query_absent?: string;
+}
+
+// RequestAction — what to do when a rule matches.
+export type RequestActionType =
+  | "allow"
+  | "block"
+  | "set_header"
+  | "del_header"
+  | "set_query"
+  | "del_query"
+  | "set_path"
+  | "replace_path";
+
+export interface RequestAction {
+  type: RequestActionType;
+  status?: number;        // block: defaults to 403
+  body?: string;          // block
+  content_type?: string;  // block: defaults to application/json
+  name?: string;          // set_/del_ header/query
+  pattern?: string;       // replace_path regex
+  value?: string;         // set_header/set_query/set_path/replace_path replacement
+}
+
+// StaticCompat — the plain /data-style shim has no configurable knobs today
+// (base path lives on the parent); this empty marker tells the UI
+// "static mode is selected".
+export type StaticCompat = Record<string, never>;
+
+// ConsulCompat — the Consul KV shim has no configurable knobs today
+// (base path lives on the parent); this empty marker tells the UI
+// "consul mode is selected".
+export type ConsulCompat = Record<string, never>;
+
+// ExternalCompat points an endpoint at one configured External resource.
+// The endpoint path tail becomes the provider-specific external path.
+export interface ExternalCompat {
+  resource: string;
+}
+
+// CustomCompat is the user-authored Go-template modifier
+// configuration. body_template is a text/template source with a
+// curated FuncMap (see internal/server/publicendpoint/custom.go).
+export interface CustomCompat {
+  body_template: string;
+  content_type?: string;
+  status_on_missing?: number;
+  allow_format_override?: boolean;
+}
+
+// EndpointAuth picks how the public listener authenticates incoming
+// requests. The three modes are mutually exclusive.
+export interface EndpointAuth {
+  mode: 'none' | 'bearer_token' | 'static_token';
+  // static_tokens is a sealed-at-rest list of accepted tokens. The
+  // backend never sends already-stored values back through GET, so
+  // the UI treats an empty list on read as "tokens preserved".
+  static_tokens?: string[];
+  header_name?: string;
+}
+
+// EndpointStatus is the diagnostic row returned by
+// GET /api/v1/public-endpoints/status. Reflects what the manager
+// has currently bound (or failed to bind) against the persisted
+// configuration.
+export interface PublicEndpointStatus {
+  id: string;
+  name: string;
+  enabled: boolean;
+  listen_host: string;
+  listen_port: number;
+  base_path: string;
+  mode: 'static' | 'consul' | 'external' | 'custom';
+  running: boolean;
+  bound_addr?: string;
+  last_error?: string;
+  started_at?: string;
+}
+
+// PublicEndpointTestResult is the body of POST /api/v1/public-endpoints/{id}/test.
+export interface PublicEndpointTestResult {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
 }
 
 // Runtime cluster connection status from /api/v1/cluster/status.
@@ -559,5 +701,3 @@ export interface PatchTokenRequest {
   active?: boolean;
   expires_at?: string;
 }
-
-

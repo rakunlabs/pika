@@ -5,12 +5,11 @@
 // Scope: what the gate touches and what it leaves alone
 //
 // The middleware deliberately ONLY intercepts request paths that
-// could reach encrypted at-rest data. In practice that's three
+// could reach encrypted at-rest data. In practice that's two
 // prefixes:
 //
 //   - /api/v1/   — admin + data API
 //   - /data/     — config resolution endpoint
-//   - /raw/      — raw filesystem endpoint
 //
 // Everything else (the SPA's index.html, JS/CSS/font assets, the
 // folder/file delivery handler that backs the static UI, and the
@@ -20,6 +19,14 @@
 // and only THEN gets the unlock takeover from App.svelte. The
 // earlier design served raw JSON for the index request when
 // locked, which was unusable from a browser.
+//
+// Note: public-endpoint listeners (the operator-defined compat
+// shims) run on their OWN sockets bound by
+// internal/server/publicendpoint.Manager and do not flow through
+// this middleware. They source data via service.GetData which goes
+// through the encrypted storage layer, so a locked server already
+// fails their requests with a service-level error — they don't need
+// a separate gate here.
 //
 // # Fresh-install behaviour
 //
@@ -176,7 +183,6 @@ func buildRules(basePath string) *pathRules {
 	gated := []string{
 		"/api/v1/", // admin + data API surface
 		"/data/",   // resolved-config consumer endpoint
-		"/raw/",    // raw filesystem endpoint
 	}
 
 	// Allowlisted exact paths — pass through even when gated.

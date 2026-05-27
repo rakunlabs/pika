@@ -817,6 +817,62 @@ function createConfigStore() {
     }
   }
 
+  // savePublicEndpoints persists the desired list of public-port
+  // compatibility / custom-modifier endpoints. Full-replace
+  // semantics: the backend takes the submitted array verbatim and
+  // reconciles its live listeners against it (Hooks-style).
+  async function savePublicEndpoints(
+    endpoints: import('@/lib/types/config').PublicEndpoint[],
+  ): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', {
+        action: 'set',
+        public_endpoints: endpoints,
+      });
+      if (settings) {
+        settings = { ...settings, public_endpoints: endpoints };
+      } else {
+        settings = { public_endpoints: endpoints };
+      }
+      addToast('Public endpoints saved', 'success');
+    } catch (error: any) {
+      const msg = error.response?.data?.message || 'Failed to save public endpoints';
+      addToast(msg, 'alert');
+      throw error;
+    }
+  }
+
+  // listPublicEndpointStatus polls the diagnostic surface so the UI
+  // can show "running / disabled / bind-failed" badges next to each
+  // entry. Returns [] on any error so the UI keeps rendering.
+  async function listPublicEndpointStatus(): Promise<import('@/lib/types/config').PublicEndpointStatus[]> {
+    try {
+      const response = await axios.get('/api/v1/public-endpoints/status');
+      return response.data || [];
+    } catch {
+      return [];
+    }
+  }
+
+  // testPublicEndpoint runs a synthetic probe against an endpoint
+  // through the live handler chain. The optional `headers` map is
+  // forwarded onto the synthetic request so operators can exercise
+  // both the auth chain and any request-check rules in one shot.
+  async function testPublicEndpoint(
+    id: string,
+    req: {
+      key: string;
+      variant?: string;
+      version?: string;
+      raw?: boolean;
+      format?: string;
+      headers?: Record<string, string>;
+    },
+  ): Promise<import('@/lib/types/config').PublicEndpointTestResult> {
+    const response = await axios.post(`/api/v1/public-endpoints/${id}/test`, req);
+    return response.data;
+  }
+
   async function listUserSyncStatus(): Promise<import('@/lib/types/config').SyncSourceStatus[]> {
     try {
       const response = await axios.get('/api/v1/user-sync/status');
@@ -1325,6 +1381,9 @@ function createConfigStore() {
     listUserSyncStatus,
     runUserSync,
     testUserSync,
+    savePublicEndpoints,
+    listPublicEndpointStatus,
+    testPublicEndpoint,
     listExternalPaths,
     searchExternal,
     testExternal,

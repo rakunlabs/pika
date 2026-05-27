@@ -199,7 +199,6 @@ func TestLockedGatedPathsBlocked(t *testing.T) {
 		"/api/v1/key/rotate",
 		"/api/v1/key/lock",
 		"/data/some/config",
-		"/raw/mount/file.txt",
 	}
 	for _, path := range blocked {
 		h.called = false
