@@ -90,7 +90,7 @@ On first launch the UI presents a setup screen to create the initial admin accou
 
 - Mint your first [API token](/reference/tokens-and-scopes).
 - (Optional) Enable [external auth](./authentication) — OAuth2/OIDC, LDAP, or forward-auth headers.
-- (Optional) Configure [raw mounts](./raw-files) — local disks, S3, FTP, etc.
+
 - (Optional) Configure [external resources](./inheritance/) for inheritance.
 - (Optional) Enable the public port for unauthenticated `/data/*` access inside trusted networks.
 

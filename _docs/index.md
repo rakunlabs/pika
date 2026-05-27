@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: pika
-  text: Config & file server
-  tagline: General configuration server, secrets manager, and raw file server with a beautiful web UI and a powerful API.
+  text: Config & secrets server
+  tagline: General configuration server, secrets manager, and personal vault with a beautiful web UI and a powerful API.
   image:
     src: /favicon-192x192.png
     alt: pika
@@ -29,12 +29,9 @@ features:
   - icon: 🔐
     title: Encryption at rest
     details: Optional XChaCha20-Poly1305 envelope encryption with key rotation. Your secrets stay encrypted on disk.
-  - icon: 🗂️
-    title: Raw file server
-    details: Mount local disks, S3, FTP/SFTP, WebDAV, or Vercel Blob and serve them over HTTP, FTP, SFTP, TFTP, or WebDAV.
-  - icon: 📦
-    title: Package registries & CDN
-    details: Host or proxy NPM packages, then expose browser-ready files through a jsDelivr-style Proxy CDN listener.
+  - icon: 🔒
+    title: Personal vault
+    details: Built-in end-to-end encrypted password and TOTP vault per user, with recovery kits and session locking.
   - icon: 🪝
     title: Event hooks
     details: Push file and config changes to HTTP webhooks, Kafka, Redis Pub/Sub, or NATS — with custom Go templates for the payload.
@@ -55,11 +52,5 @@ docker run -d --name pika -v pika:/data -p 8080:8080 ghcr.io/rakunlabs/pika:late
 Open `http://localhost:8080` and create the initial admin account.
 
 ::: tip Next steps
-Read the [getting-started guide](/guide/getting-started), configure [package registries & CDN](/guide/package-registries), or skip straight to [consuming data](/reference/consuming-data) if you already have a server running.
+Read the [getting-started guide](/guide/getting-started), set up [authentication](/guide/authentication), or skip straight to [consuming data](/reference/consuming-data) if you already have a server running.
 :::
-
-## Registry quick links
-
-- [Package registries & CDN](/guide/package-registries) — Go, NPM, Docker/OCI, Helm, Maven, PyPI, Cargo, plus NPM file CDN.
-- [Tokens & scopes](/reference/tokens-and-scopes) — `registry/...` scopes for package-manager clients.
-- [Admin API](/reference/api) — `/api/v1/registries` endpoints for automation.

@@ -20,9 +20,6 @@
   const externalResources = $derived(
     settings?.external ? Object.keys(settings.external) : []
   );
-  const rawMountPrefixes = $derived(
-    settings?.raw_mounts ? settings.raw_mounts.map(m => m.prefix).filter(Boolean) : []
-  );
 
   // Version list state
   let versionsExpanded = $state(false);
@@ -111,12 +108,10 @@
   // but in a single line. Truncation happens via CSS; we just pick the
   // most identifying field per source type.
   function diagramLabel(entry: InheritEntry): string {
-    if (entry.mount) return entry.path ? `${entry.mount}/${entry.path}` : entry.mount;
     if (entry.resource) return entry.path ? `${entry.resource}:${entry.path}` : entry.resource;
     return entry.source || '(empty)';
   }
-  function diagramKind(entry: InheritEntry): 'source' | 'ext' | 'mount' {
-    if (entry.mount) return 'mount';
+  function diagramKind(entry: InheritEntry): 'source' | 'ext' {
     if (entry.resource) return 'ext';
     return 'source';
   }
@@ -551,11 +546,9 @@
                 {#snippet layer(entry: InheritEntry, depth: number, isBase: boolean)}
                   {@const kind = diagramKind(entry)}
                   {@const kindClass =
-                    kind === 'mount'
-                      ? 'border-amber-300 dark:border-amber-700 bg-amber-50/70 dark:bg-amber-900/20 text-amber-700 dark:text-amber-200'
-                      : kind === 'ext'
-                        ? 'border-purple-300 dark:border-purple-700 bg-purple-50/70 dark:bg-purple-900/20 text-purple-700 dark:text-purple-200'
-                        : 'border-slate-200 dark:border-warm-700 bg-white dark:bg-warm-800 text-slate-600 dark:text-warm-200'}
+                    kind === 'ext'
+                      ? 'border-purple-300 dark:border-purple-700 bg-purple-50/70 dark:bg-purple-900/20 text-purple-700 dark:text-purple-200'
+                      : 'border-slate-200 dark:border-warm-700 bg-white dark:bg-warm-800 text-slate-600 dark:text-warm-200'}
                   <div class="relative -mt-px" style="margin-left: {depth * 8}px">
                     <div class="flex items-center gap-1.5 px-2 py-1 rounded border {kindClass} text-[10px]">
                       <span class="font-mono text-[8px] uppercase tracking-wider opacity-70 w-7 shrink-0">{kind}</span>
@@ -597,17 +590,7 @@
                 <div class="{cardClass} overflow-hidden">
                   <div class="flex items-start justify-between px-2.5 py-2 gap-2">
                     <div class="flex-1 min-w-0">
-                      {#if entry.mount}
-                        <div class="flex items-center gap-1 text-xs">
-                          <span class="px-1 py-0.5 bg-amber-50 dark:bg-amber-900/40 text-amber-600 dark:text-amber-200 rounded text-[10px] font-medium shrink-0">mount</span>
-                          <span class="font-mono text-accent-700 dark:text-accent-300 truncate" title="{entry.mount}/{entry.path || ''}">{entry.mount}</span>
-                        </div>
-                        {#if entry.path}
-                          <div class="text-[10px] text-slate-400 dark:text-warm-400 mt-0.5">
-                            path: <span class="font-mono text-slate-500 dark:text-warm-200">{entry.path}</span>
-                          </div>
-                        {/if}
-                      {:else if entry.resource}
+                      {#if entry.resource}
                         <div class="flex items-center gap-1 text-xs">
                           <span class="px-1 py-0.5 bg-purple-50 dark:bg-purple-900/40 text-purple-600 dark:text-purple-200 rounded text-[10px] font-medium shrink-0">ext</span>
                           <span class="font-mono text-accent-700 dark:text-accent-300 truncate" title="{entry.resource}:{entry.path || ''}">{entry.resource}</span>
@@ -778,7 +761,6 @@
   editIndex={editingInheritIndex}
   initialEntry={editingInheritEntry}
   {externalResources}
-  {rawMountPrefixes}
   onSubmit={handleInheritSubmit}
   onClose={closeInheritDialog}
 />

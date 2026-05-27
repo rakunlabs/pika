@@ -1,5 +1,5 @@
 <script lang="ts">
- import { Key, Globe, FolderOpen, Share2, Server, Webhook, RotateCw, ToggleLeft, HardDrive, ShieldCheck, Info, Users, Palette, KeyRound, Vault, Network } from "lucide-svelte";
+ import { Key, Globe, Webhook, RotateCw, ToggleLeft, HardDrive, ShieldCheck, Info, Users, Palette, KeyRound, Vault, Network } from "lucide-svelte";
  import { appStore } from '@/lib/store/store.svelte';
 
  import AppearanceSection from "@/pages/settings/AppearanceSection.svelte";
@@ -7,9 +7,6 @@
  import VaultSection from "@/pages/settings/VaultSection.svelte";
  import TokensSection from "@/pages/settings/TokensSection.svelte";
  import ExternalResourcesSection from "@/pages/settings/ExternalResourcesSection.svelte";
- import RawMountsSection from "@/pages/settings/RawMountsSection.svelte";
- import FileSharingSection from "@/pages/settings/FileSharingSection.svelte";
- import FileServersSection from "@/pages/settings/FileServersSection.svelte";
  import HooksSection from "@/pages/settings/HooksSection.svelte";
  import AuthSection from "@/pages/settings/AuthSection.svelte";
  import UserSyncSection from "@/pages/settings/UserSyncSection.svelte";
@@ -19,7 +16,7 @@
  import BackupSection from "@/pages/settings/BackupSection.svelte";
  import AboutSection from "@/pages/settings/AboutSection.svelte";
 
- type Section = 'appearance' | 'account_security' | 'vault' | 'tokens' | 'external' | 'raw_mounts' | 'ftp_shares' | 'file_servers' | 'hooks' | 'auth' | 'user_sync' | 'rotation' | 'features' | 'cluster' | 'backup' | 'about';
+ type Section = 'appearance' | 'account_security' | 'vault' | 'tokens' | 'external' | 'hooks' | 'auth' | 'user_sync' | 'rotation' | 'features' | 'cluster' | 'backup' | 'about';
 
  // Section → required capability. `null` means always visible (e.g.
  // About, Appearance, Account Security — these are per-user and
@@ -31,9 +28,6 @@
  vault: null,
  tokens: 'tokens.manage',
  external: 'settings.manage',
- raw_mounts: 'settings.manage',
- ftp_shares: 'settings.manage',
- file_servers: 'settings.manage',
  hooks: 'settings.manage',
  auth: 'settings.manage',
  user_sync: 'settings.manage',
@@ -50,9 +44,6 @@
  { key: 'vault', label: 'Personal Vault', icon: Vault },
  { key: 'tokens', label: 'Access Tokens', icon: Key },
  { key: 'external', label: 'External Resources', icon: Globe },
- { key: 'raw_mounts', label: 'Raw Mounts', icon: FolderOpen },
- { key: 'ftp_shares', label: 'File Sharing', icon: Share2 },
- { key: 'file_servers', label: 'File Servers', icon: Server },
  { key: 'hooks', label: 'Hooks', icon: Webhook },
  { key: 'auth', label: 'Authentication', icon: ShieldCheck },
  { key: 'user_sync', label: 'User Sync', icon: Users },
@@ -122,12 +113,6 @@
  <TokensSection />
  {:else if activeSection === 'external'}
  <ExternalResourcesSection />
- {:else if activeSection === 'raw_mounts'}
- <RawMountsSection />
- {:else if activeSection === 'ftp_shares'}
- <FileSharingSection />
- {:else if activeSection === 'file_servers'}
- <FileServersSection />
  {:else if activeSection === 'hooks'}
  <HooksSection />
  {:else if activeSection === 'auth'}

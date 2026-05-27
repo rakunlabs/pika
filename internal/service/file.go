@@ -16,19 +16,18 @@ import (
 // For external resources: Resource is the settings key (e.g., "my-vault"),
 // and Path is the resource-specific path (e.g., "myapp/database" for Vault secrets
 // or "/api/config" for HTTP endpoints).
-// For raw mounts: Mount is the raw mount prefix (e.g., "configs"),
-// and Path is the file path within the mount (e.g., "base/defaults.json").
+//
+// The "Mount" field used to point at raw filesystem mounts; that feature
+// was extracted out of pika and the field was removed. Legacy rows with
+// a "mount" key in JSON are silently ignored (omitempty unmarshal).
 type InheritEntry struct {
 	// Source is the internal file path. Used for internal inheritance.
 	Source string `json:"source,omitempty"`
 	// Resource is the name of an external resource from settings.
 	Resource string `json:"resource,omitempty"`
-	// Mount is the raw mount prefix. Used for raw mount inheritance.
-	Mount string `json:"mount,omitempty"`
-	// Path is the resource-specific path when using an external resource or raw mount.
+	// Path is the resource-specific path when using an external resource.
 	// For Vault: the secret path under the mount (e.g., "myapp/database").
 	// For HTTP: appended to the base URL (e.g., "/api/config").
-	// For raw mounts: the file path within the mount (e.g., "base/defaults.json").
 	Path string `json:"path,omitempty"`
 	// Paths selectively includes only these fields from the source.
 	// Supports dot-notation (e.g., "database.host") and wildcards ("logging.*").
@@ -38,7 +37,7 @@ type InheritEntry struct {
 	// Supports dot-notation (e.g., "database.auth" injects under config.database.auth).
 	// If empty, data is merged at the root level.
 	Inject string `json:"inject,omitempty"`
-	// Format hints how to decode the raw payload when the external/mount
+	// Format hints how to decode the raw payload when the external
 	// backend returns a plain string (the {"value": "<string>"} wrapper
 	// shape produced by Consul/Etcd/GCP/HTTP for non-JSON values). When
 	// set to "json", "yaml" or "toml", the wrapped string is parsed with
@@ -46,7 +45,7 @@ type InheritEntry struct {
 	// is unchanged: provider-side JSON parsing is trusted, and a
 	// non-JSON payload stays wrapped as {"value": "..."}.
 	//
-	// Only meaningful for Resource/Mount entries; ignored for internal
+	// Only meaningful for Resource entries; ignored for internal
 	// sources (those carry their own meta.format).
 	Format string `json:"format,omitempty"`
 }

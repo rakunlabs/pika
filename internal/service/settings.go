@@ -10,63 +10,6 @@ import (
 	"github.com/rakunlabs/pika/internal/hook"
 )
 
-// RawMountEntry is a single raw mount configured via the UI.
-type RawMountEntry struct {
-	Prefix     string                 `json:"prefix"`
-	Type       string                 `json:"type,omitempty"` // "local" (default), "s3", "ftp", "sftp", "webdav", "vercel-blob"
-	Path       string                 `json:"path,omitempty"` // for type=local
-	S3         *S3ConfigEntry         `json:"s3,omitempty"`
-	FTP        *FTPConfigEntry        `json:"ftp,omitempty"`
-	SFTP       *SFTPConfigEntry       `json:"sftp,omitempty"`
-	WebDAV     *WebDAVConfigEntry     `json:"webdav,omitempty"`
-	VercelBlob *VercelBlobConfigEntry `json:"vercelBlob,omitempty"`
-}
-
-// S3ConfigEntry holds S3 configuration stored in settings.
-type S3ConfigEntry struct {
-	Bucket    string `json:"bucket"`
-	Region    string `json:"region,omitempty"`
-	Endpoint  string `json:"endpoint,omitempty"`
-	AccessKey string `json:"access_key,omitempty"`
-	SecretKey string `json:"secret_key,omitempty"`
-	PathStyle bool   `json:"path_style,omitempty"`
-	Prefix    string `json:"prefix,omitempty"`
-	Secure    *bool  `json:"secure,omitempty"`
-}
-
-// FTPConfigEntry holds FTP configuration stored in settings.
-type FTPConfigEntry struct {
-	Host     string `json:"host"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-	TLS      bool   `json:"tls,omitempty"`
-	BasePath string `json:"base_path,omitempty"`
-}
-
-// SFTPConfigEntry holds SFTP (SSH) configuration stored in settings.
-type SFTPConfigEntry struct {
-	Host       string `json:"host"`
-	Username   string `json:"username,omitempty"`
-	Password   string `json:"password,omitempty"`
-	PrivateKey string `json:"private_key,omitempty"`
-	BasePath   string `json:"base_path,omitempty"`
-}
-
-// WebDAVConfigEntry holds WebDAV configuration stored in settings.
-type WebDAVConfigEntry struct {
-	URL      string `json:"url"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-	BasePath string `json:"base_path,omitempty"`
-}
-
-// VercelBlobConfigEntry holds Vercel Blob configuration stored in settings.
-type VercelBlobConfigEntry struct {
-	Token   string `json:"token"`
-	StoreID string `json:"store_id,omitempty"`
-	Prefix  string `json:"prefix,omitempty"`
-}
-
 // (PublicPortSettings / CompatSettings / ConsulKVSettings were removed
 // when the standalone /data + /raw "public port" + Consul KV compat
 // section was replaced by the user-built Proxy Servers — every
@@ -132,41 +75,14 @@ type Settings struct {
 	// own table so the bootstrap path doesn't grow another schema
 	// dependency. The plaintext format is documented in
 	// service/keyops.go (verifierPlaintext()).
-	EncryptionVerifier []byte               `json:"encryption_verifier,omitempty"`
-	RawMounts          []RawMountEntry      `json:"raw_mounts,omitempty"`
-	FTPShares          []FTPShareEntry      `json:"ftp_shares,omitempty"`
-	FTPUsers           []FTPUserEntry       `json:"ftp_users,omitempty"`
-	FTPServe           *FTPServeSettings    `json:"ftp_serve,omitempty"`
-	SFTPServe          *SFTPServeSettings   `json:"sftp_serve,omitempty"`
-	TFTPServe          *TFTPServeSettings   `json:"tftp_serve,omitempty"`
-	WebDAVServe        *WebDAVServeSettings `json:"webdav_serve,omitempty"`
-	EventLog           *EventLogSettings    `json:"event_log,omitempty"`
-	Hooks              []hook.Hook          `json:"hooks,omitempty"`
-	// ProxyListeners is the operator-built set of bind points. Each
-	// entry owns one socket (HTTP or TCP); graphs in ProxyServers
-	// attach to a listener via ListenerID. Rows persisted before
-	// the listener split have an empty ProxyListeners slice — boot
-	// synthesizes a hidden listener per legacy Host:Port pair so
-	// existing graphs keep running without manual migration.
-	ProxyListeners []ProxyListener `json:"proxy_listeners,omitempty"`
-	// ProxyServers is the operator-built set of HTTP/TCP graphs.
-	// Each entry is a full kaykay graph plus a denormalized pipeline
-	// meta blob the runner uses for change detection. Graphs bind
-	// to listeners via ListenerID; the legacy Host/Port fields are
-	// kept on the struct for one release for backward compatibility.
-	ProxyServers        []ProxyServer                `json:"proxy_servers,omitempty"`
+	EncryptionVerifier  []byte                       `json:"encryption_verifier,omitempty"`
+	EventLog            *EventLogSettings            `json:"event_log,omitempty"`
+	Hooks               []hook.Hook                  `json:"hooks,omitempty"`
 	ExternalPermissions *ExternalPermissionsSettings `json:"external_permissions,omitempty"`
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 	Auth                *AuthSettings                `json:"auth,omitempty"`
 	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
-	Proxy               *ProxySettings               `json:"proxy,omitempty"`
-	// Registry is the artifact-registry feature tree (Go modules,
-	// NPM packages, Docker/OCI images). Optional pointer so
-	// deployments that don't use the feature carry zero bytes for
-	// it. See registry.go for the model and registry_validate.go
-	// for the shape guarantees the runtime relies on.
-	Registry *RegistrySettings `json:"registry,omitempty"`
 
 	// SensitivePayload is the at-rest encrypted blob carrying the
 	// user-supplied secret values for fields above (S3 access keys,
@@ -180,17 +96,6 @@ type Settings struct {
 	// into bw. Empty/nil while the server is locked or for fresh
 	// installs that haven't written a settings row yet.
 	SensitivePayload []byte `json:"sensitive_payload,omitempty"`
-}
-
-// ProxySettings is the deployment-wide feature flag for the
-// user-built Proxy Servers. Same shape and semantics as
-// VaultSettings (Disabled=false-by-default for backward
-// compatibility) — when Disabled=true the SPA hides the /proxy
-// route, the runner refuses to start any listener, and the
-// /api/v1/proxy/* endpoints respond 404. Existing graphs are
-// preserved; flipping the flag back makes them runnable again.
-type ProxySettings struct {
-	Disabled bool `json:"disabled"`
 }
 
 // VaultSettings configures the personal-vault feature at the
@@ -220,51 +125,6 @@ type VaultSettings struct {
 	Disabled bool `json:"disabled"`
 }
 
-// FTPServeSettings configures the built-in FTP server (stored in DB).
-type FTPServeSettings struct {
-	Enabled      bool   `json:"enabled"`
-	Port         int    `json:"port,omitempty"`
-	Host         string `json:"host,omitempty"`
-	PublicIP     string `json:"public_ip,omitempty"`
-	PassivePorts string `json:"passive_ports,omitempty"`
-	// TLSCertFile is the path to a PEM-encoded TLS certificate file (or certificate chain).
-	TLSCertFile string `json:"tls_cert_file,omitempty"`
-	// TLSKeyFile is the path to the PEM-encoded TLS private key file.
-	TLSKeyFile string `json:"tls_key_file,omitempty"`
-	// TLSCertPEM is the PEM-encoded TLS certificate content (used when no file path is given).
-	TLSCertPEM string `json:"tls_cert_pem,omitempty"`
-	// TLSKeyPEM is the PEM-encoded TLS private key content (used when no file path is given).
-	TLSKeyPEM string `json:"tls_key_pem,omitempty"`
-	// TLSRequired controls TLS mode: 0 = disabled/optional, 1 = explicit FTPS (AUTH TLS required),
-	// 2 = implicit FTPS (entire connection is TLS from the start).
-	TLSRequired int `json:"tls_required,omitempty"`
-}
-
-// SFTPServeSettings configures the built-in SFTP server (stored in DB).
-type SFTPServeSettings struct {
-	Enabled     bool   `json:"enabled"`
-	Port        int    `json:"port,omitempty"`
-	Host        string `json:"host,omitempty"`
-	HostKeyPath string `json:"host_key_path,omitempty"`
-	// HostKeyPEM is the PEM-encoded SSH private key content (used when no file path is given).
-	HostKeyPEM string `json:"host_key_pem,omitempty"`
-}
-
-// TFTPServeSettings configures the built-in TFTP server (stored in DB).
-type TFTPServeSettings struct {
-	Enabled bool   `json:"enabled"`
-	Port    int    `json:"port,omitempty"`
-	Host    string `json:"host,omitempty"`
-}
-
-// WebDAVServeSettings configures the built-in WebDAV server (stored in DB).
-type WebDAVServeSettings struct {
-	Enabled bool   `json:"enabled"`
-	Port    int    `json:"port,omitempty"`
-	Host    string `json:"host,omitempty"`
-	Prefix  string `json:"prefix,omitempty"` // URL path prefix, default "/"
-}
-
 // EventLogSettings controls Pika's built-in event log line. Nil settings mean
 // enabled so existing deployments get observability without a migration.
 type EventLogSettings struct {
@@ -275,64 +135,16 @@ func (s *Settings) EventLogEnabled() bool {
 	return s == nil || s.EventLog == nil || !s.EventLog.Disabled
 }
 
-// FTPUserEntry defines an FTP user account stored in settings.
-type FTPUserEntry struct {
-	Username string `json:"username"`
-	Password string `json:"password,omitempty"`
-	// Shares lists the share names this user can access. Empty = all shares.
-	Shares []string `json:"shares,omitempty"`
-	// AuthorizedKeys holds SSH public keys (one per line, OpenSSH authorized_keys format)
-	// that are allowed to authenticate as this user via the SFTP server.
-	AuthorizedKeys string `json:"authorized_keys,omitempty"`
-	ReadOnly       bool   `json:"read_only"`
-}
-
-// FTPShareEntry defines a folder shared via the built-in FTP server.
-// A share can reference one or more mount paths. When multiple paths are
-// specified, their contents are merged into a single virtual directory.
-type FTPShareEntry struct {
-	// Name is the FTP folder name visible to clients.
-	Name string `json:"name"`
-	// Paths lists the mount paths included in this share.
-	// Each path is formatted as "mount_prefix" or "mount_prefix/sub/folder".
-	Paths []string `json:"paths"`
-	// ReadOnly restricts FTP clients to read-only access on this share.
-	ReadOnly bool `json:"read_only"`
-	// Root, when true, mounts this share at the FTP root "/" so clients see its
-	// contents directly instead of a /sharename/ prefix. Only one share may be root.
-	Root bool `json:"root,omitempty"`
-}
-
 type PatchSettings struct {
-	Action      ActionKey                    `json:"action"`
-	External    map[string]external.External `json:"external,omitempty"`
-	RawMounts   *[]RawMountEntry             `json:"raw_mounts,omitempty"` // pointer to distinguish nil (not provided) from empty
-	FTPShares   *[]FTPShareEntry             `json:"ftp_shares,omitempty"` // pointer to distinguish nil from empty
-	FTPUsers    *[]FTPUserEntry              `json:"ftp_users,omitempty"`
-	FTPServe    *FTPServeSettings            `json:"ftp_serve,omitempty"`
-	SFTPServe   *SFTPServeSettings           `json:"sftp_serve,omitempty"`
-	TFTPServe   *TFTPServeSettings           `json:"tftp_serve,omitempty"`
-	WebDAVServe *WebDAVServeSettings         `json:"webdav_serve,omitempty"`
-	EventLog    *EventLogSettings            `json:"event_log,omitempty"`
-	Hooks       *[]hook.Hook                 `json:"hooks,omitempty"` // pointer to distinguish nil from empty
-	// ProxyListeners is patched as a whole list (nil = no change,
-	// empty slice = clear all). Same pointer-to-slice idiom as
-	// ProxyServers.
-	ProxyListeners *[]ProxyListener `json:"proxy_listeners,omitempty"`
-	// ProxyServers is patched as a whole list (nil = no change, empty
-	// slice = clear all). Pointer-to-slice mirrors how Hooks / RawMounts
-	// distinguish "not provided" from "deliberately empty".
-	ProxyServers        *[]ProxyServer               `json:"proxy_servers,omitempty"`
+	Action              ActionKey                    `json:"action"`
+	External            map[string]external.External `json:"external,omitempty"`
+	EventLog            *EventLogSettings            `json:"event_log,omitempty"`
+	Hooks               *[]hook.Hook                 `json:"hooks,omitempty"` // pointer to distinguish nil from empty
 	ExternalPermissions *ExternalPermissionsSettings `json:"external_permissions,omitempty"`
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 	Auth                *AuthSettings                `json:"auth,omitempty"`
 	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
-	Proxy               *ProxySettings               `json:"proxy,omitempty"`
-	// Registry is patched as a whole tree (nil = no change, non-nil
-	// = replace). The Validate() call in PatchSettings rejects
-	// mis-shaped trees before any write.
-	Registry *RegistrySettings `json:"registry,omitempty"`
 }
 
 type ActionKey string
@@ -395,44 +207,6 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 		return ErrBadRequest
 	}
 
-	// Handle raw mounts update (if provided)
-	if patch.RawMounts != nil {
-		settings.RawMounts = *patch.RawMounts
-	}
-
-	// Handle FTP shares update (if provided)
-	if patch.FTPShares != nil {
-		// Validate: at most one share can be root
-		rootCount := 0
-		for _, s := range *patch.FTPShares {
-			if s.Root {
-				rootCount++
-			}
-		}
-		if rootCount > 1 {
-			return fmt.Errorf("only one FTP share can be mounted at root: %w", ErrBadRequest)
-		}
-		settings.FTPShares = *patch.FTPShares
-	}
-
-	// Handle FTP users update (if provided)
-	if patch.FTPUsers != nil {
-		settings.FTPUsers = *patch.FTPUsers
-	}
-
-	// Handle server config updates (if provided)
-	if patch.FTPServe != nil {
-		settings.FTPServe = patch.FTPServe
-	}
-	if patch.SFTPServe != nil {
-		settings.SFTPServe = patch.SFTPServe
-	}
-	if patch.TFTPServe != nil {
-		settings.TFTPServe = patch.TFTPServe
-	}
-	if patch.WebDAVServe != nil {
-		settings.WebDAVServe = patch.WebDAVServe
-	}
 	if patch.EventLog != nil {
 		settings.EventLog = patch.EventLog
 	}
@@ -440,16 +214,6 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 	// Handle hooks update (if provided)
 	if patch.Hooks != nil {
 		settings.Hooks = *patch.Hooks
-	}
-
-	// Handle proxy listeners update (if provided)
-	if patch.ProxyListeners != nil {
-		settings.ProxyListeners = *patch.ProxyListeners
-	}
-
-	// Handle proxy servers update (if provided)
-	if patch.ProxyServers != nil {
-		settings.ProxyServers = *patch.ProxyServers
 	}
 
 	// Handle external-permissions update (if provided)
@@ -480,96 +244,7 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 		settings.Vault = patch.Vault
 	}
 
-	// Handle proxy feature flag update (deployment-wide toggle).
-	if patch.Proxy != nil {
-		settings.Proxy = patch.Proxy
-	}
-
-	// Handle registry tree update. Validate before persistence so a
-	// mis-shaped tree never reaches storage and the runtime can
-	// trust the structure on reload.
-	if patch.Registry != nil {
-		if err := patch.Registry.Validate(); err != nil {
-			return err
-		}
-		settings.Registry = patch.Registry
-	}
-
 	return s.UpdateSettings(ctx, settings)
-}
-
-// EnsureDefaultRegistryNamespace creates the "default" namespace
-// when no registry config exists yet. Called once at boot from
-// internal/server. Non-destructive: if any namespace is already
-// present (including a user-deleted-then-recreated "default"),
-// the function is a no-op.
-//
-// The default namespace is empty (no repositories). The intent is to
-// give the UI a non-empty starting point so the "create repository"
-// flow doesn't have to wedge in a "create namespace first" step for
-// fresh installs.
-func (s *Service) EnsureDefaultRegistryNamespace(ctx context.Context) error {
-	settings, err := s.Settings(ctx)
-	if err != nil {
-		return fmt.Errorf("read settings for registry bootstrap: %w", err)
-	}
-	if settings.Registry != nil && len(settings.Registry.Namespaces) > 0 {
-		return nil // already bootstrapped (or operator has configured)
-	}
-	if settings.Registry == nil {
-		settings.Registry = &RegistrySettings{}
-	}
-	settings.Registry.Namespaces = append(settings.Registry.Namespaces, RegistryNamespace{
-		Name:        DefaultRegistryNamespace,
-		Description: "Default namespace, auto-created at first boot.",
-	})
-	return s.UpdateSettings(ctx, settings)
-}
-
-// GetRegistrySettings returns the current registry tree or nil. Used
-// by the registry runtime to (re)build its in-memory routing table on
-// boot and after every settings save.
-func (s *Service) GetRegistrySettings(ctx context.Context) *RegistrySettings {
-	settings, err := s.Settings(ctx)
-	if err != nil {
-		return nil
-	}
-	return settings.Registry
-}
-
-// ProxyEnabled returns true when the deployment-level proxy feature
-// flag is on. Default is enabled (matches every previous build that
-// did not yet have the toggle) so flipping in to existing rows that
-// never wrote a Proxy entry preserves behaviour.
-func (s *Service) ProxyEnabled(ctx context.Context) bool {
-	settings, err := s.Settings(ctx)
-	if err != nil || settings == nil || settings.Proxy == nil {
-		return true
-	}
-	return !settings.Proxy.Disabled
-}
-
-// RegistryEnabled returns true when the deployment-level artifact
-// registry feature flag is on. Mirrors ProxyEnabled / VaultEnabled:
-// nil settings or nil Registry pointer => enabled (backward compat
-// with any row written before the feature flag existed). Consumed
-// by:
-//
-//   - The /api/v1/info endpoint so the SPA can hide the Registries
-//     navigation link when off.
-//   - The /registries/* data router and /api/v1/registries/* admin
-//     router so requests short-circuit to 404 when the operator has
-//     turned the feature off.
-//
-// Note: this checks ONLY the feature flag. The registry runtime can
-// still be unconfigured (no namespaces yet) while the feature is
-// "enabled"; that's a UI/empty-state concern, not a 404 condition.
-func (s *Service) RegistryEnabled(ctx context.Context) bool {
-	settings, err := s.Settings(ctx)
-	if err != nil || settings == nil || settings.Registry == nil {
-		return true
-	}
-	return !settings.Registry.Disabled
 }
 
 // GetExternalPermissionsSettings returns the current external-permissions

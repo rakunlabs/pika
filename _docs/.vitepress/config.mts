@@ -3,7 +3,7 @@ import { defineConfig } from 'vitepress'
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
   title: 'pika',
-  description: 'General configuration server, secrets manager, and raw file server',
+  description: 'General configuration server, secrets manager, and personal vault',
   cleanUrls: true,
   lastUpdated: true,
   ignoreDeadLinks: 'localhostLinks',
@@ -13,7 +13,6 @@ export default defineConfig({
 
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
-      { text: 'Registries', link: '/guide/package-registries' },
       { text: 'Reference', link: '/reference/consuming-data' },
       {
         text: 'Links',
@@ -57,16 +56,9 @@ export default defineConfig({
           ],
         },
         {
-          text: 'Files & events',
+          text: 'Events',
           items: [
-            { text: 'Raw file serving', link: '/guide/raw-files' },
             { text: 'Hooks', link: '/guide/hooks' },
-          ],
-        },
-        {
-          text: 'Registries',
-          items: [
-            { text: 'Package registries & CDN', link: '/guide/package-registries' },
           ],
         },
         {

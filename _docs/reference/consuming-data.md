@@ -104,10 +104,6 @@ curl -H "Authorization: Bearer $TOKEN" \
 # HTTP/1.1 304 Not Modified
 ```
 
-## Raw files
-
-The same authorization and scoping apply to `/raw/{prefix}/{path}` — see [Raw file serving](/guide/raw-files) for the request shape.
-
 ## Compatibility shims
 
 Pika can also expose its data through compatibility endpoints — currently a Consul-KV-shaped reader at `/consul/v1/kv/*`. See [Compat endpoints](./compat).

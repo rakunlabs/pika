@@ -243,8 +243,6 @@ func TestKnownCapabilityKeysCount(t *testing.T) {
 	expected := []string{
 		service.CapFilesRead,
 		service.CapFilesWrite,
-		service.CapRawRead,
-		service.CapRawWrite,
 		service.CapSettingsManage,
 		service.CapTokensManage,
 		service.CapUsersManage,

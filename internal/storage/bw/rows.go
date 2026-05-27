@@ -727,35 +727,13 @@ type settingsRow struct {
 	// bw handles []byte natively. Empty/nil means the server has not
 	// been initialized yet — the first POST /api/v1/key/initialize
 	// fills it.
-	EncryptionVerifier []byte                       `bw:"encryption_verifier"`
-	RawMounts          []service.RawMountEntry      `bw:"raw_mounts"`
-	FTPShares          []service.FTPShareEntry      `bw:"ftp_shares"`
-	FTPUsers           []service.FTPUserEntry       `bw:"ftp_users"`
-	FTPServe           *service.FTPServeSettings    `bw:"ftp_serve"`
-	SFTPServe          *service.SFTPServeSettings   `bw:"sftp_serve"`
-	TFTPServe          *service.TFTPServeSettings   `bw:"tftp_serve"`
-	WebDAVServe        *service.WebDAVServeSettings `bw:"webdav_serve"`
-	Hooks              []hook.Hook                  `bw:"hooks"`
-	// ProxyListeners holds the operator-built socket bind points.
-	// Graphs in ProxyServers reference these via ListenerID. Rows
-	// persisted before the listener split decode to nil; boot
-	// synthesizes legacy listeners on first reconcile.
-	ProxyListeners []service.ProxyListener `bw:"proxy_listeners"`
-	// ProxyServers replaces the legacy PublicPort + Compat fields.
-	// Each entry is a full kaykay graph plus pipeline metadata.
-	ProxyServers        []service.ProxyServer                `bw:"proxy_servers"`
+	EncryptionVerifier  []byte                               `bw:"encryption_verifier"`
+	Hooks               []hook.Hook                          `bw:"hooks"`
 	ExternalPermissions *service.ExternalPermissionsSettings `bw:"external_permissions"`
 	ForwardAuth         *service.ForwardAuthSettings         `bw:"forward_auth"`
 	Auth                *service.AuthSettings                `bw:"auth"`
 	UserSync            *service.UserSyncSettings            `bw:"user_sync"`
 	Vault               *service.VaultSettings               `bw:"vault"`
-	Proxy               *service.ProxySettings               `bw:"proxy"`
-	// Registry carries the artifact-registry namespace + repository
-	// tree plus the deployment-wide feature flag. Optional pointer so
-	// rows written before the registry feature shipped decode to nil
-	// (treated as "feature enabled, no namespaces configured" by the
-	// service layer).
-	Registry *service.RegistrySettings `bw:"registry"`
 	// SensitivePayload mirrors service.Settings.SensitivePayload —
 	// the encrypted blob holding all secret-bearing values that the
 	// secret.Storage wrapper unpacks during Get. bw stores it as raw

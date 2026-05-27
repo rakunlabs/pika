@@ -25,131 +25,35 @@ var ErrSealedCorrupt = errors.New("settings: sealed payload corrupt or unreadabl
 // Sealed Settings — at-rest encryption for the user-managed secret
 // values that the Settings table carries.
 //
-// Design rationale (vs. per-field encryption)
-//
-// Settings is a singleton row whose schema mixes operator-visible
-// configuration (port numbers, share names, mount prefixes) with
-// secret values (S3 access keys, FTP passwords, hook webhook signing
-// secrets, external-resource credentials, SFTP host private keys).
-// Per-field encryption would require splitting every secret-bearing
-// struct into a public+sealed pair, plumbing the encrypt/decrypt
-// through every UI panel, and migrating each field independently.
-//
-// We use envelope-of-secrets instead: a single sensitivePayload blob
-// holds JSON of every secret slot. The wrapper extracts those values
-// on Set (clearing them from the persisted plaintext row) and
-// re-injects them on Get. From the consumer's point of view nothing
-// changes — `settings.RawMounts[0].S3.SecretKey` reads the same as
-// before — but the plaintext is never written to disk.
-//
-// Failure modes
-//
-// - Locked: Set returns ErrLocked (write fails closed). Get returns
-//   the row with secret slots blank and a sentinel error so callers
-//   can distinguish "no secrets configured" from "we couldn't read
-//   them". The auth/bootstrap paths that read settings before unlock
-//   currently never need the sealed slots, so this is non-fatal in
-//   practice.
-//
-// - Wrong key: Get returns the row with secret slots blank + error.
-//   The lock gate normally prevents this, but a corrupted verifier
-//   is the residual case.
+// After the raw-mount/registry/proxy/serve extraction, the sealed
+// payload covers only the secrets that remain in the configuration
+// server: hook delivery target credentials, external-resource auth
+// (Vault tokens, AWS secret keys, etc.), and auth-strategy secrets
+// (OAuth2 client secret, LDAP bind password).
 
 // sensitivePayload is the in-memory, JSON-serializable container
 // for every secret value pulled out of *service.Settings before
-// persistence. Field names match the Settings struct so the
-// encrypt/decrypt helpers below can copy back and forth without
-// indirection. Every field is omitempty so an installation that
-// doesn't use a given backend doesn't pay JSON overhead for empty
-// strings.
-//
-// Adding a new secret slot:
-//  1. Add the field here.
-//  2. Move it from Settings → here in extractSecrets().
-//  3. Move it back in injectSecrets().
-//  4. Bump the version in the envelope payload? No — the envelope
-//     already carries a magic byte (envelope.formatV1). JSON's
-//     structural tolerance means new fields read as zero on old
-//     payloads and old fields are silently ignored on new
-//     readers. No version field needed inside the JSON.
+// persistence.
 type sensitivePayload struct {
-	// Per-mount creds. We index parallel arrays to RawMounts so we
-	// don't depend on prefix uniqueness; an operator may rename a
-	// prefix without losing the credential. Same approach for
-	// FTPUsers / Hooks / External.
-	Mounts        []sealedMount        `json:"mounts,omitempty"`
-	FTPUserPasswd []string             `json:"ftp_user_passwd,omitempty"`
-	HookSecrets   []sealedHook         `json:"hook_secrets,omitempty"`
-	External      map[string]sealedExt `json:"external,omitempty"`
-
-	// Server-host private keys. SFTPServe.HostKeyPEM is the obvious
-	// one; the FTPServe TLS key PEM is included by the same
-	// reasoning (a TLS private key is a credential).
-	SFTPHostKeyPEM string `json:"sftp_host_key_pem,omitempty"`
-	FTPTLSKeyPEM   string `json:"ftp_tls_key_pem,omitempty"`
+	HookSecrets []sealedHook         `json:"hook_secrets,omitempty"`
+	External    map[string]sealedExt `json:"external,omitempty"`
 
 	// Auth-strategy secrets. OAuth2ClientSecrets is a parallel slice
 	// to Settings.Auth.OAuth2 so index ordering carries the matching
-	// secret back to the right strategy entry (same pattern as
-	// FTPUserPasswd / Mounts).
+	// secret back to the right strategy entry.
 	OAuth2ClientSecrets []string `json:"oauth2_client_secrets,omitempty"`
 	LDAPBindPassword    string   `json:"ldap_bind_password,omitempty"`
-
-	// Registry upstream credentials. Each entry mirrors one
-	// Settings.Registry.Namespaces[i].Repositories[j].Auth, keyed
-	// by (namespace, repo) so a rename in either dimension carries
-	// the secret along — index-position parallelism wouldn't
-	// survive an operator reordering the namespace list.
-	//
-	// Values that started life as "raw://..." or "config://..." references are
-	// left in place on the public side (extract skips them); only
-	// raw plaintext passwords / tokens / header values cross over
-	// here.
-	RegistryUpstream []sealedRegistryRepo `json:"registry_upstream,omitempty"`
-}
-
-// sealedRegistryRepo is the secret subset of one
-// RegistryRepository.Auth, plus the (namespace, name) coordinate
-// the inject side needs to find the right repo. We carry the
-// coordinate inside the sealed slot so renames in Settings don't
-// orphan the secret — a parallel-index approach would lose the
-// password the moment the operator dragged a namespace up the list.
-type sealedRegistryRepo struct {
-	Namespace       string `json:"namespace"`
-	Name            string `json:"name"`
-	AuthPassword    string `json:"auth_password,omitempty"`
-	AuthToken       string `json:"auth_token,omitempty"`
-	AuthHeaderValue string `json:"auth_header_value,omitempty"`
-}
-
-// sealedMount carries the secret subset of a single RawMountEntry.
-// Public fields (Prefix, Type, Path, etc.) stay on the plaintext
-// row; only the per-backend secret values are extracted here.
-type sealedMount struct {
-	S3SecretKey     string `json:"s3_secret_key,omitempty"`
-	FTPPassword     string `json:"ftp_password,omitempty"`
-	SFTPPassword    string `json:"sftp_password,omitempty"`
-	SFTPPrivateKey  string `json:"sftp_private_key,omitempty"`
-	WebDAVPassword  string `json:"webdav_password,omitempty"`
-	VercelBlobToken string `json:"vercel_blob_token,omitempty"`
 }
 
 // sealedHook carries any hook-target secret. We capture secrets
 // per-target index because a Hook can have multiple Targets and
-// each may carry distinct credentials. The per-target sub-struct
-// uses a discriminated layout so adding a new target type doesn't
-// require renaming existing fields.
+// each may carry distinct credentials.
 type sealedHook struct {
 	Targets []sealedHookTarget `json:"targets,omitempty"`
 }
 
-// sealedHookTarget is the per-Target secret slot. Like
-// sealedMount, fields are named after the target type so the
-// extract/inject pair stays mechanically obvious.
+// sealedHookTarget is the per-Target secret slot.
 type sealedHookTarget struct {
-	// Kafka SASL passwords. KafkaSecurity.SASL is a slice; we
-	// preserve order so injection puts each password back on the
-	// right entry.
 	KafkaSASLPlainPass []string `json:"kafka_sasl_plain_pass,omitempty"`
 	KafkaSASLSCRAMPass []string `json:"kafka_sasl_scram_pass,omitempty"`
 	RedisPassword      string   `json:"redis_password,omitempty"`
@@ -174,63 +78,12 @@ type sealedExt struct {
 
 // extractSecrets walks the settings struct, copies every secret
 // field into a sensitivePayload, and zeroes the source so the
-// caller can persist a "secrets-stripped" row safely. The original
-// pointer is mutated in place — callers that need the original
-// values back must call injectSecrets().
-//
-// Two arrays at the same length (Mounts vs. RawMounts, etc.) is the
-// invariant; downstream injectSecrets() validates length-match
-// before re-attaching. A length mismatch on the read path means
-// either a partial write or a hand-edited row — we log and skip the
-// secret slot rather than crashing.
+// caller can persist a "secrets-stripped" row safely.
 func extractSecrets(s *service.Settings) *sensitivePayload {
 	if s == nil {
 		return &sensitivePayload{}
 	}
 	p := &sensitivePayload{}
-
-	// Raw mounts — per-mount slot.
-	if len(s.RawMounts) > 0 {
-		p.Mounts = make([]sealedMount, len(s.RawMounts))
-		for i := range s.RawMounts {
-			m := &s.RawMounts[i]
-			sm := sealedMount{}
-			if m.S3 != nil {
-				sm.S3SecretKey = m.S3.SecretKey
-				m.S3.SecretKey = ""
-			}
-			if m.FTP != nil {
-				sm.FTPPassword = m.FTP.Password
-				m.FTP.Password = ""
-			}
-			if m.SFTP != nil {
-				sm.SFTPPassword = m.SFTP.Password
-				sm.SFTPPrivateKey = m.SFTP.PrivateKey
-				m.SFTP.Password = ""
-				m.SFTP.PrivateKey = ""
-			}
-			if m.WebDAV != nil {
-				sm.WebDAVPassword = m.WebDAV.Password
-				m.WebDAV.Password = ""
-			}
-			if m.VercelBlob != nil {
-				sm.VercelBlobToken = m.VercelBlob.Token
-				m.VercelBlob.Token = ""
-			}
-			p.Mounts[i] = sm
-		}
-	}
-
-	// FTP user passwords. The bcrypt-style verification that the FTP
-	// server uses still wants the cleartext (it forwards to the
-	// user's chosen auth backend), so we encrypt rather than hash.
-	if len(s.FTPUsers) > 0 {
-		p.FTPUserPasswd = make([]string, len(s.FTPUsers))
-		for i := range s.FTPUsers {
-			p.FTPUserPasswd[i] = s.FTPUsers[i].Password
-			s.FTPUsers[i].Password = ""
-		}
-	}
 
 	// Hook target secrets — per-hook slot. Each hook may have
 	// multiple targets, each with different credential shapes.
@@ -241,8 +94,7 @@ func extractSecrets(s *service.Settings) *sensitivePayload {
 		}
 	}
 
-	// External resources. Map keys (resource names) are
-	// operator-visible, so we keep them as the index.
+	// External resources.
 	if len(s.External) > 0 {
 		p.External = make(map[string]sealedExt, len(s.External))
 		for name, ext := range s.External {
@@ -280,16 +132,6 @@ func extractSecrets(s *service.Settings) *sensitivePayload {
 		}
 	}
 
-	// Server-host TLS / SSH keys.
-	if s.SFTPServe != nil && s.SFTPServe.HostKeyPEM != "" {
-		p.SFTPHostKeyPEM = s.SFTPServe.HostKeyPEM
-		s.SFTPServe.HostKeyPEM = ""
-	}
-	if s.FTPServe != nil && s.FTPServe.TLSKeyPEM != "" {
-		p.FTPTLSKeyPEM = s.FTPServe.TLSKeyPEM
-		s.FTPServe.TLSKeyPEM = ""
-	}
-
 	// Auth-strategy secrets.
 	if s.Auth != nil {
 		if len(s.Auth.OAuth2) > 0 {
@@ -305,61 +147,11 @@ func extractSecrets(s *service.Settings) *sensitivePayload {
 		}
 	}
 
-	// Registry upstream creds. We walk every repository and pull
-	// each Auth.Password / .Token / .HeaderValue that is NOT a
-	// raw:// or config:// reference into the sealed payload.
-	// References stay in place — they're resolved at runtime against
-	// their source store and don't need a second layer of envelope
-	// encryption around them.
-	extractRegistryUpstream(s, p)
-
 	return p
 }
 
-// extractRegistryUpstream moves plaintext upstream credentials from
-// the public Registry tree into the sealed payload. Empty / ref-
-// scheme values are skipped so we don't waste a sealed slot on
-// values that aren't secrets.
-func extractRegistryUpstream(s *service.Settings, p *sensitivePayload) {
-	if s.Registry == nil || len(s.Registry.Namespaces) == 0 {
-		return
-	}
-	for ni := range s.Registry.Namespaces {
-		ns := &s.Registry.Namespaces[ni]
-		for ri := range ns.Repositories {
-			r := &ns.Repositories[ri]
-			if r.Auth == nil {
-				continue
-			}
-			row := sealedRegistryRepo{Namespace: ns.Name, Name: r.Name}
-			any := false
-			if isPlaintextSecret(r.Auth.Password) {
-				row.AuthPassword = r.Auth.Password
-				r.Auth.Password = ""
-				any = true
-			}
-			if isPlaintextSecret(r.Auth.Token) {
-				row.AuthToken = r.Auth.Token
-				r.Auth.Token = ""
-				any = true
-			}
-			if isPlaintextSecret(r.Auth.Value) {
-				row.AuthHeaderValue = r.Auth.Value
-				r.Auth.Value = ""
-				any = true
-			}
-			if any {
-				p.RegistryUpstream = append(p.RegistryUpstream, row)
-			}
-		}
-	}
-}
-
 // isPlaintextSecret reports whether a value is worth sealing: a
-// non-empty string that is not a direct raw:// or config:// reference.
-// References are resolved at runtime and would survive a clear-text
-// serialisation just fine; sealing them would just reduce readability
-// without adding security.
+// non-empty string that is not a direct config:// reference.
 func isPlaintextSecret(v string) bool {
 	if v == "" {
 		return false
@@ -368,17 +160,11 @@ func isPlaintextSecret(v string) bool {
 }
 
 func isRuntimeRef(v string) bool {
-	return strings.HasPrefix(v, "raw://") || strings.HasPrefix(v, "config://")
+	return strings.HasPrefix(v, "config://")
 }
 
 // extractHookSecrets factors out the hook-type dispatch so the
-// settings-extraction loop above stays readable. Mirrored by
-// injectHookSecrets below.
-//
-// We capture per-target secret bundles into a parallel slice so
-// re-injection just walks both slices in lockstep — losing the
-// order would let an admin's "swap target order" UI action
-// silently re-attach the wrong creds to the wrong target.
+// settings-extraction loop above stays readable.
 func extractHookSecrets(h *hook.Hook) sealedHook {
 	sh := sealedHook{}
 	if len(h.Targets) == 0 {
@@ -389,9 +175,6 @@ func extractHookSecrets(h *hook.Hook) sealedHook {
 		t := &h.Targets[i]
 		st := sealedHookTarget{}
 		if t.Kafka != nil {
-			// SASL is a slice of mechanism configs. Capture each
-			// mechanism's Plain/SCRAM password under a parallel
-			// slot so injection puts them back on the right entry.
 			if len(t.Kafka.Security.SASL) > 0 {
 				st.KafkaSASLPlainPass = make([]string, len(t.Kafka.Security.SASL))
 				st.KafkaSASLSCRAMPass = make([]string, len(t.Kafka.Security.SASL))
@@ -423,44 +206,10 @@ func extractHookSecrets(h *hook.Hook) sealedHook {
 	return sh
 }
 
-// injectSecrets is the inverse of extractSecrets — given a Settings
-// row that came back from storage with secret slots blank and a
-// decrypted sensitivePayload, re-attaches every secret value.
-//
-// Length mismatches between parallel arrays are silently truncated:
-// they imply the operator added a mount in one transaction and the
-// payload was written before that mount. The unaffected mounts
-// still get their secrets back; the new mount appears with empty
-// credentials, exactly the state the operator is about to fix in
-// the UI.
+// injectSecrets is the inverse of extractSecrets.
 func injectSecrets(s *service.Settings, p *sensitivePayload) {
 	if s == nil || p == nil {
 		return
-	}
-
-	for i := 0; i < len(s.RawMounts) && i < len(p.Mounts); i++ {
-		m := &s.RawMounts[i]
-		sm := p.Mounts[i]
-		if m.S3 != nil {
-			m.S3.SecretKey = sm.S3SecretKey
-		}
-		if m.FTP != nil {
-			m.FTP.Password = sm.FTPPassword
-		}
-		if m.SFTP != nil {
-			m.SFTP.Password = sm.SFTPPassword
-			m.SFTP.PrivateKey = sm.SFTPPrivateKey
-		}
-		if m.WebDAV != nil {
-			m.WebDAV.Password = sm.WebDAVPassword
-		}
-		if m.VercelBlob != nil {
-			m.VercelBlob.Token = sm.VercelBlobToken
-		}
-	}
-
-	for i := 0; i < len(s.FTPUsers) && i < len(p.FTPUserPasswd); i++ {
-		s.FTPUsers[i].Password = p.FTPUserPasswd[i]
 	}
 
 	for i := 0; i < len(s.Hooks) && i < len(p.HookSecrets); i++ {
@@ -496,64 +245,12 @@ func injectSecrets(s *service.Settings, p *sensitivePayload) {
 		s.External[name] = ext
 	}
 
-	if s.SFTPServe != nil && p.SFTPHostKeyPEM != "" {
-		s.SFTPServe.HostKeyPEM = p.SFTPHostKeyPEM
-	}
-	if s.FTPServe != nil && p.FTPTLSKeyPEM != "" {
-		s.FTPServe.TLSKeyPEM = p.FTPTLSKeyPEM
-	}
-
 	if s.Auth != nil {
 		for i := 0; i < len(s.Auth.OAuth2) && i < len(p.OAuth2ClientSecrets); i++ {
 			s.Auth.OAuth2[i].ClientSecret = p.OAuth2ClientSecrets[i]
 		}
 		if s.Auth.LDAP != nil && p.LDAPBindPassword != "" {
 			s.Auth.LDAP.BindPassword = p.LDAPBindPassword
-		}
-	}
-
-	injectRegistryUpstream(s, p)
-}
-
-// injectRegistryUpstream restores upstream creds extracted by
-// extractRegistryUpstream. Lookup is by (namespace, name) — an
-// operator-driven rename loses the binding (the secret slot
-// surfaces with no matching repo and we silently drop it). This
-// is the same trade-off the seal layer makes elsewhere: trust the
-// operator's current Settings tree over the on-disk historical
-// payload.
-func injectRegistryUpstream(s *service.Settings, p *sensitivePayload) {
-	if s.Registry == nil || len(p.RegistryUpstream) == 0 {
-		return
-	}
-	// Build a quick lookup index for the sealed slots. (namespace,
-	// repo) tuples are tiny in practice (10s of entries); a flat
-	// scan is fine but a map keeps inject O(N).
-	idx := make(map[string]*sealedRegistryRepo, len(p.RegistryUpstream))
-	for i := range p.RegistryUpstream {
-		row := &p.RegistryUpstream[i]
-		idx[row.Namespace+"\x00"+row.Name] = row
-	}
-	for ni := range s.Registry.Namespaces {
-		ns := &s.Registry.Namespaces[ni]
-		for ri := range ns.Repositories {
-			r := &ns.Repositories[ri]
-			if r.Auth == nil {
-				continue
-			}
-			row, ok := idx[ns.Name+"\x00"+r.Name]
-			if !ok {
-				continue
-			}
-			if row.AuthPassword != "" {
-				r.Auth.Password = row.AuthPassword
-			}
-			if row.AuthToken != "" {
-				r.Auth.Token = row.AuthToken
-			}
-			if row.AuthHeaderValue != "" {
-				r.Auth.Value = row.AuthHeaderValue
-			}
 		}
 	}
 }
@@ -590,6 +287,7 @@ func injectHookSecrets(h *hook.Hook, sh *sealedHook) {
 // configurations (extension typings move around in tests).
 var _ = json.Marshal
 var _ external.External
+var _ = isPlaintextSecret
 
 // settingsStorageWrapper wraps the backend SettingsStorage with the
 // envelope encrypt/decrypt round-trip described above.
@@ -599,11 +297,7 @@ type settingsStorageWrapper struct {
 }
 
 // Get reads the row, opens the sealed payload, and stitches the
-// secret values back into the typed fields. When the manager is
-// locked we still return the row (so callers can read public
-// settings — auth, ports, etc.) but the secret slots stay blank
-// and we don't error: locked-but-readable matches the Phase-1
-// design where bootstrap reads of Settings happen before unlock.
+// secret values back into the typed fields.
 func (w *settingsStorageWrapper) Get(ctx context.Context) (*service.Settings, error) {
 	s, err := w.backend.Get(ctx)
 	if err != nil {
@@ -614,19 +308,10 @@ func (w *settingsStorageWrapper) Get(ctx context.Context) (*service.Settings, er
 	}
 	mgr := w.parent.keymgr
 	if mgr == nil || !mgr.IsUnlocked() {
-		// Server is locked. Return public fields only; secret slots
-		// stay zero. This is intentional — the auth bootstrap path
-		// reads Settings before unlock and would crash if we
-		// errored here.
 		return s, nil
 	}
 	plain, err := envelope.Open(mgr, s.SensitivePayload)
 	if err != nil {
-		// Couldn't decrypt — wrong key, format drift, or on-disk
-		// corruption. Leave SensitivePayload intact on the returned
-		// row (so callers can round-trip an unchanged Set) and
-		// surface the situation: log loudly AND wrap into
-		// ErrSealedCorrupt so callers can branch with errors.Is.
 		slog.Error("settings: sealed payload could not be decrypted",
 			"bytes", len(s.SensitivePayload),
 			"error", err)
@@ -645,44 +330,22 @@ func (w *settingsStorageWrapper) Get(ctx context.Context) (*service.Settings, er
 
 // Set extracts every secret slot from `settings`, encrypts the
 // resulting payload, and writes the sanitized row to the backend.
-// The caller's *Settings is mutated in place — its secret fields
-// are zeroed during the extraction pass. Callers that need to
-// continue using the same struct after Set must re-fetch (or call
-// injectSecrets manually with the payload they retained).
-//
-// Fails closed when locked: a write attempt with no live key
-// returns ErrLocked rather than persisting plaintext.
 func (w *settingsStorageWrapper) Set(ctx context.Context, settings *service.Settings) error {
 	if settings == nil {
 		return w.backend.Set(ctx, settings)
 	}
 	mgr := w.parent.keymgr
-	// Decide encryption strategy:
-	//   - locked: reject (write fails closed)
-	//   - unlocked: extract → seal → write
 	if mgr == nil || !mgr.IsUnlocked() {
-		// Detect "no secrets to write" case so legitimate updates
-		// to public-only fields can still happen while locked
-		// (e.g. enabling a port). We do that by extracting first,
-		// checking if anything came out, and short-circuiting
-		// when not.
 		probe := extractSecrets(settings)
 		if isEmptyPayload(probe) {
-			// Public-only update — preserve the existing sealed
-			// payload byte-for-byte and write through.
 			return w.backend.Set(ctx, settings)
 		}
-		// Restore the secrets we just extracted so the caller's
-		// struct isn't left mutated when we fail.
 		injectSecrets(settings, probe)
 		return errors.New("settings: server is locked; cannot persist secret values")
 	}
 
 	payload := extractSecrets(settings)
 	if isEmptyPayload(payload) {
-		// Settings has no secrets at all — clear any prior payload
-		// rather than re-encrypting an empty struct (saves a few
-		// bytes and produces a deterministic empty state).
 		settings.SensitivePayload = nil
 	} else {
 		raw, err := json.Marshal(payload)
@@ -701,26 +364,10 @@ func (w *settingsStorageWrapper) Set(ctx context.Context, settings *service.Sett
 }
 
 // isEmptyPayload reports whether the sensitive-payload struct
-// carries any data worth encrypting. We use this to skip the seal
-// round-trip on settings rows that don't (yet) have any secrets,
-// keeping bootstrap-time writes cheap.
+// carries any data worth encrypting.
 func isEmptyPayload(p *sensitivePayload) bool {
 	if p == nil {
 		return true
-	}
-	if len(p.Mounts) > 0 {
-		for _, m := range p.Mounts {
-			if m != (sealedMount{}) {
-				return false
-			}
-		}
-	}
-	if len(p.FTPUserPasswd) > 0 {
-		for _, s := range p.FTPUserPasswd {
-			if s != "" {
-				return false
-			}
-		}
 	}
 	if len(p.HookSecrets) > 0 {
 		for _, h := range p.HookSecrets {
@@ -743,7 +390,6 @@ func isEmptyPayload(p *sensitivePayload) bool {
 	}
 	if len(p.External) > 0 {
 		for _, e := range p.External {
-			// Map fields can't use struct equality; check field by field.
 			if e.VaultToken != "" || e.VaultRoleSecret != "" ||
 				e.K8sKubeconfig != "" || e.AWSSecretKey != "" ||
 				e.GCPSAJSON != "" || e.GCPParamSAJSON != "" ||
@@ -752,15 +398,15 @@ func isEmptyPayload(p *sensitivePayload) bool {
 			}
 		}
 	}
-	if p.SFTPHostKeyPEM != "" || p.FTPTLSKeyPEM != "" {
-		return false
-	}
-	if len(p.RegistryUpstream) > 0 {
-		for _, r := range p.RegistryUpstream {
-			if r.AuthPassword != "" || r.AuthToken != "" || r.AuthHeaderValue != "" {
+	if len(p.OAuth2ClientSecrets) > 0 {
+		for _, v := range p.OAuth2ClientSecrets {
+			if v != "" {
 				return false
 			}
 		}
+	}
+	if p.LDAPBindPassword != "" {
+		return false
 	}
 	return true
 }

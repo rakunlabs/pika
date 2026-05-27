@@ -6,7 +6,7 @@ import (
 )
 
 func TestResolver_ConfigSelector(t *testing.T) {
-	r := NewResolver(nil, func(_ context.Context, key string) ([]byte, error) {
+	r := NewResolver(func(_ context.Context, key string) ([]byte, error) {
 		if key != "tls/secrets" {
 			t.Fatalf("config key = %q, want tls/secrets", key)
 		}

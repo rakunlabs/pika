@@ -60,7 +60,6 @@ Each variant has its own version history and can have its own inheritance chain.
 Files can declare **inheritance entries** that pull data from elsewhere and merge it into the resolved output. Sources include:
 
 - another pika file (or one of its variants),
-- a [raw mount](./raw-files) (local disk, S3, FTP, …),
 - an [external resource](./inheritance/) (Vault, Kubernetes, Consul, etcd, AWS, GCP, Azure, plain HTTP).
 
 Merging happens at **read time**, not at save time. The stored file content is always your hand-edited document; pika resolves the inheritance chain when a consumer asks for it.
@@ -78,16 +77,10 @@ API tokens authenticate non-human consumers. Each token has 1+ **scopes**, where
 
 See [Tokens & scopes](/reference/tokens-and-scopes) for the matcher rules.
 
-## Raw mounts
-
-Pika can mount external storage backends and serve them as plain files over HTTP — independent of the config store. A mount has a **prefix** (e.g. `uploads`) and a backend type (`local`, `s3`, `ftp`, `sftp`, `webdav`, `vercelblob`). Files in a mount are reachable at `/raw/{prefix}/{path}`.
-
-See [Raw file serving](./raw-files).
-
 ## Hooks
 
 A **hook** is a subscription to events. When a file or config changes, pika dispatches a JSON event to one or more **targets** (HTTP webhook, Kafka, Redis Pub/Sub, NATS, log). See [Hooks](./hooks).
 
 ## Settings
 
-Almost everything beyond ports and storage paths is stored in the database and edited from the UI under **Settings**. That includes auth strategies, raw mounts, external resources, hooks, the public port, the compat endpoints, and user-sync schedules. The settings document itself is fetched and patched via `GET`/`POST /api/v1/settings`.
+Almost everything beyond ports and storage paths is stored in the database and edited from the UI under **Settings**. That includes auth strategies, external resources, hooks, and user-sync schedules. The settings document itself is fetched and patched via `GET`/`POST /api/v1/settings`.

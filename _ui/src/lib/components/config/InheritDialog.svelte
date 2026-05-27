@@ -27,7 +27,6 @@
     editIndex: number | null;
     initialEntry: InheritEntry | null;
     externalResources: string[];
-    rawMountPrefixes: string[];
     onSubmit: (entry: InheritEntry) => void;
     onClose: () => void;
   }
@@ -37,7 +36,6 @@
     editIndex,
     initialEntry,
     externalResources,
-    rawMountPrefixes,
     onSubmit,
     onClose,
   }: Props = $props();
@@ -46,15 +44,14 @@
   // Mirrors what used to live inline in SettingsPanel; reset whenever
   // the dialog opens so reopening for a fresh add never leaks stale
   // values from a previous edit session.
-  let sourceType = $state<'internal' | 'external' | 'mount'>('internal');
+  let sourceType = $state<'internal' | 'external'>('internal');
   let sourceField = $state('');
   let resourceField = $state('');
-  let mountField = $state('');
   let pathField = $state('');
   let pathsField = $state('');
   let injectField = $state('');
   // '' = auto (omit on submit, backend keeps current behaviour). Only
-  // exposed for external/mount; for internal entries the source file's
+  // exposed for external; for internal entries the source file's
   // own meta.format already governs decoding.
   let formatField = $state<'' | 'json' | 'yaml' | 'toml'>('');
   let externalPathSuggestions = $state<string[]>([]);
@@ -172,16 +169,13 @@
   $effect(() => {
     if (!isOpen) return;
     const e = initialEntry;
-    if (e?.mount) {
-      sourceType = 'mount';
-    } else if (e?.resource) {
+    if (e?.resource) {
       sourceType = 'external';
     } else {
       sourceType = 'internal';
     }
     sourceField = e?.source || '';
     resourceField = e?.resource || '';
-    mountField = e?.mount || '';
     pathField = e?.path || '';
     pathsField = e?.paths ? e.paths.join(', ') : '';
     injectField = e?.inject || '';
@@ -193,13 +187,12 @@
 
   // Switching source type wipes the other type's fields so we don't ship
   // a half-populated entry (e.g. resource set on an internal entry).
-  function switchType(t: 'internal' | 'external' | 'mount') {
+  function switchType(t: 'internal' | 'external') {
     sourceType = t;
     sourceField = '';
     resourceField = '';
-    mountField = '';
     pathField = '';
-    // Format is only meaningful for external/mount. Switching to
+    // Format is only meaningful for external. Switching to
     // internal drops the value rather than carrying it silently.
     if (t === 'internal') formatField = '';
     externalPathSuggestions = [];
@@ -229,13 +222,6 @@
         return null;
       }
       entry.source = sourceField.trim();
-    } else if (sourceType === 'mount') {
-      if (!mountField) {
-        addToast('Mount prefix is required', 'alert');
-        return null;
-      }
-      entry.mount = mountField;
-      if (pathField.trim()) entry.path = pathField.trim();
     } else {
       if (!resourceField) {
         addToast('External resource is required', 'alert');
@@ -340,14 +326,6 @@
                   : 'bg-slate-50 dark:bg-warm-900 text-slate-500 dark:text-warm-300 border border-slate-200 dark:border-warm-700 hover:bg-slate-100 dark:hover:bg-warm-700'}"
                 onclick={() => switchType('external')}
               >External</button>
-              <button
-                type="button"
-                class="flex-1 py-1.5 text-xs font-medium rounded transition-colors cursor-pointer
-                {sourceType === 'mount'
-                  ? 'bg-accent-100 text-accent-700 border border-accent-300 dark:bg-accent-900/40 dark:text-accent-200 dark:border-accent-700'
-                  : 'bg-slate-50 dark:bg-warm-900 text-slate-500 dark:text-warm-300 border border-slate-200 dark:border-warm-700 hover:bg-slate-100 dark:hover:bg-warm-700'}"
-                onclick={() => switchType('mount')}
-              >Mount</button>
             </div>
           </fieldset>
 
@@ -362,31 +340,6 @@
                 class={inputClass}
               />
             </label>
-          {:else if sourceType === 'mount'}
-            <label class="block">
-              <span class="block text-[11px] font-medium text-slate-500 dark:text-warm-300 mb-1.5 uppercase tracking-wide">Mount</span>
-              <select
-                class={selectClass}
-                bind:value={mountField}
-                onchange={() => { pathField = ''; }}
-              >
-                <option value="">Select mount</option>
-                {#each rawMountPrefixes as prefix}
-                  <option value={prefix}>{prefix}</option>
-                {/each}
-              </select>
-            </label>
-            {#if mountField}
-              <label class="block">
-                <span class="block text-[11px] font-medium text-slate-500 dark:text-warm-300 mb-1.5 uppercase tracking-wide">File Path</span>
-                <input
-                  type="text"
-                  bind:value={pathField}
-                  placeholder="configs/base.json"
-                  class={inputClass}
-                />
-              </label>
-            {/if}
           {:else}
             <label class="block">
               <span class="block text-[11px] font-medium text-slate-500 dark:text-warm-300 mb-1.5 uppercase tracking-wide">External Resource</span>
@@ -445,8 +398,7 @@
           <!-- Decoder hint + preview. Only meaningful when the backend
                stores a string blob (Consul/etcd/GCP/HTTP) — internal
                sources carry their own meta.format and won't read this
-               field. Preview is gated to external (where we have a
-               read endpoint); mount lacks one today. -->
+               field. -->`
           {#if sourceType !== 'internal'}
             <div>
               <span class="block text-[11px] font-medium text-slate-500 dark:text-warm-300 mb-1.5 uppercase tracking-wide">

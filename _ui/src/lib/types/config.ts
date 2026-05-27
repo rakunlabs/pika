@@ -22,11 +22,10 @@ export interface FileVersion {
 export interface InheritEntry {
   source?: string;    // Internal file path (for internal inheritance)
   resource?: string;  // External resource name from settings (for external inheritance)
-  mount?: string;     // Raw mount prefix (for raw mount inheritance)
-  path?: string;      // Resource-specific path (e.g., Vault secret path, HTTP endpoint path, or file path within mount)
+  path?: string;      // Resource-specific path (e.g., Vault secret path, HTTP endpoint path)
   paths?: string[];   // Fields to pull from the source (dot-notation, wildcards)
   inject?: string;    // Where to place in the config (dot-notation, empty = root)
-  // Decoder hint for non-JSON external/mount payloads. When the provider
+  // Decoder hint for non-JSON external payloads. When the provider
   // returns {"value": "<raw-string>"} (Consul / etcd / GCP / HTTP fallback
   // for unparseable bodies), this tells the backend to parse that string
   // as the named format before merging. Empty / omitted = current
@@ -228,118 +227,6 @@ export interface ExternalVersion {
   destroyed?: boolean;
 }
 
-// S3 configuration for raw mounts
-export interface S3ConfigEntry {
-  bucket: string;
-  region?: string;
-  endpoint?: string;
-  access_key?: string;
-  secret_key?: string;
-  path_style?: boolean;
-  prefix?: string;
-  secure?: boolean;
-}
-
-// FTP configuration for raw mounts
-export interface FTPConfigEntry {
-  host: string;
-  username?: string;
-  password?: string;
-  tls?: boolean;
-  base_path?: string;
-}
-
-// SFTP configuration for raw mounts
-export interface SFTPConfigEntry {
-  host: string;
-  username?: string;
-  password?: string;
-  private_key?: string;
-  base_path?: string;
-}
-
-// WebDAV configuration for raw mounts
-export interface WebDAVConfigEntry {
-  url: string;
-  username?: string;
-  password?: string;
-  base_path?: string;
-}
-
-// Vercel Blob configuration for raw mounts
-export interface VercelBlobConfigEntry {
-  token: string;
-  store_id?: string;
-  prefix?: string;
-}
-
-// Raw mount entry stored in settings
-export interface RawMountEntry {
-  prefix: string;
-  type?: string;              // "local" (default), "s3", "ftp", "sftp", "webdav", "vercel-blob"
-  path?: string;              // for type=local
-  s3?: S3ConfigEntry;         // for type=s3
-  ftp?: FTPConfigEntry;       // for type=ftp
-  sftp?: SFTPConfigEntry;     // for type=sftp
-  webdav?: WebDAVConfigEntry; // for type=webdav
-  vercelBlob?: VercelBlobConfigEntry; // for type=vercel-blob
-}
-
-// FTP user entry stored in settings
-export interface FTPUserEntry {
-  username: string;
-  password?: string;
-  shares?: string[];          // allowed share names; empty = all
-  authorized_keys?: string;   // SSH public keys (OpenSSH authorized_keys format, one per line)
-  read_only: boolean;
-}
-
-// FTP share entry stored in settings
-export interface FTPShareEntry {
-  name: string;
-  paths: string[];     // e.g., ["configs", "assets/images", "backup/2024"]
-  read_only: boolean;
-  root?: boolean;      // mount at "/" instead of "/name/"
-}
-
-// FTP server settings stored in DB
-export interface FTPServeSettings {
-  enabled: boolean;
-  port?: number;
-  host?: string;
-  public_ip?: string;
-  passive_ports?: string;
-  tls_cert_file?: string;   // path to PEM certificate file
-  tls_key_file?: string;    // path to PEM private key file
-  tls_cert_pem?: string;    // PEM certificate content (paste directly)
-  tls_key_pem?: string;     // PEM private key content (paste directly)
-  tls_required?: number;    // 0=disabled, 1=explicit FTPS (AUTH TLS), 2=implicit FTPS
-}
-
-// SFTP server settings stored in DB
-export interface SFTPServeSettings {
-  enabled: boolean;
-  port?: number;
-  host?: string;
-  host_key_path?: string;
-  host_key_pem?: string;    // PEM host key content (paste directly)
-}
-
-// TFTP server settings stored in DB
-export interface TFTPServeSettings {
-  enabled: boolean;
-  port?: number;
-  host?: string;
-}
-
-// WebDAV server settings stored in DB
-export interface WebDAVServeSettings {
-  enabled: boolean;
-  port?: number;
-  host?: string;
-  prefix?: string;
-}
-
 // HTTP webhook target configuration
 export interface HTTPTarget {
   url: string;
@@ -464,76 +351,6 @@ export interface EventLogSettings {
   disabled?: boolean;
 }
 
-// Proxy server graph entry — one user-built graph attached to a
-// listener (or carrying legacy Host/Port for back-compat).
-export interface ProxyServer {
-  id: string;
-  name: string;
-  enabled: boolean;
-  // listener_id is the new way to bind a graph: it points at a
-  // ProxyListener that owns the socket. Legacy graphs persisted
-  // before the listener split leave this empty and rely on
-  // host/port being set directly.
-  listener_id?: string;
-  // host_match is the list of HTTP Host header patterns this graph
-  // claims on its listener. Empty list = catch-all. Patterns:
-  //   - "example.com"    exact
-  //   - "*.example.com"  suffix glob
-  //   - "*"              explicit catch-all
-  host_match?: string[];
-  protocol?: 'http' | 'tcp';
-  /** @deprecated prefer listener_id; carried for legacy rows only */
-  host?: string;
-  /** @deprecated prefer listener_id; carried for legacy rows only */
-  port?: string;
-  nodes: ProxyNode[];
-  edges: ProxyEdge[];
-  // pipeline is read-only from the UI; the backend regenerates it
-  // on every save. Carried so the live status panel can compare
-  // the row's hash with the runner's hash.
-  pipeline?: { hash?: string; protocol?: 'http' | 'tcp'; listen_host?: string; listen_port?: string };
-}
-
-// ProxyListener is a first-class persisted socket bind. Graphs
-// attach to a listener via ProxyServer.listener_id; one HTTP
-// listener can host multiple graphs routed by Host header, while
-// TCP listeners hold at most one graph.
-export interface ProxyListener {
-  id: string;
-  name: string;
-  enabled: boolean;
-  protocol: 'http' | 'tcp';
-  host?: string;
-  port: string;
-  tls?: { enabled?: boolean; cert_pem?: string; key_pem?: string };
-  notes?: string;
-}
-
-export interface ProxyNode {
-  id: string;
-  // Node types match the backend graph.go constants. 'router' was
-  // retired in favour of 'switch' — the latter supports host/IP/
-  // path/method/header/query rules with a dedicated default branch.
-  type: 'listener' | 'middleware' | 'switch' | 'handler';
-  protocol?: 'http' | 'tcp';
-  subtype?: string;
-  position: { x: number; y: number };
-  // Opaque per-node config matching the backend schema for the
-  // (type, subtype) pair. Catalog endpoint ships the schemas.
-  // For switch nodes this carries the SwitchConfig (see backend
-  // switch.go) — { rules: [{ id, label?, host?, cidrs?, path?,
-  //                          methods?, headers?, query? }, ...] }.
-  config?: Record<string, unknown>;
-}
-
-export interface ProxyEdge {
-  id: string;
-  source: string;
-  source_handle?: string;
-  target: string;
-  target_handle?: string;
-}
-
 // Forward-auth settings — delegates authentication to an external service.
 // The middleware is hot-swapped via an ada.Slot at runtime.
 export interface ForwardAuthSettings {
@@ -566,23 +383,12 @@ export interface ExternalPermissionsSettings {
 // Settings from API
 export interface Settings {
   external?: Record<string, ExternalResource>;
-  raw_mounts?: RawMountEntry[];
-  ftp_shares?: FTPShareEntry[];
-  ftp_users?: FTPUserEntry[];
-  ftp_serve?: FTPServeSettings;
-  sftp_serve?: SFTPServeSettings;
-  tftp_serve?: TFTPServeSettings;
-  webdav_serve?: WebDAVServeSettings;
   event_log?: EventLogSettings;
   hooks?: Hook[];
-  proxy_servers?: ProxyServer[];
-  proxy_listeners?: ProxyListener[];
   external_permissions?: ExternalPermissionsSettings;
   forward_auth?: ForwardAuthSettings;
   user_sync?: UserSyncSettings;
   vault?: VaultSettings;
-  proxy?: ProxySettings;
-  registry?: RegistrySettings;
 }
 
 // Runtime cluster connection status from /api/v1/cluster/status.
@@ -627,94 +433,6 @@ export interface ClusterNode {
   self: boolean;
   leader: boolean;
   connected: boolean;
-}
-
-// ProxySettings is the deployment-wide feature flag for the
-// user-built Proxy Servers. Default disabled=false → enabled.
-export interface ProxySettings {
-  disabled: boolean;
-}
-
-// RegistrySettings is the deployment-wide artifact-registry config:
-// feature flag + namespace/repository tree. Operators edit this from
-// the Registries page (tree) and Settings → Features (flag). When
-// posted with action=set the server replaces the entire registry
-// block, so callers must include the full namespaces array even
-// when only flipping the disabled bit (Registries.svelte does this
-// by re-loading first).
-export interface RegistrySettings {
-  disabled?: boolean;
-  namespaces?: RegistryNamespace[];
-}
-
-// RegistryNamespace = tenant. Name is the URL path segment; must
-// match [a-z0-9_-]+ and be unique across the deployment.
-export interface RegistryNamespace {
-  name: string;
-  description?: string;
-  repositories?: RegistryRepository[];
-}
-
-// RegistryRepository — one repo inside a namespace. The shape is
-// the union of all three kinds (local|remote|virtual); the server
-// validator rejects rows that mix fields across kinds.
-export interface RegistryRepository {
-  name: string;
-  description?: string;
-  type: 'go' | 'npm' | 'docker' | 'helm' | 'maven' | 'pypi' | 'cargo';
-  kind: 'local' | 'remote' | 'virtual';
-  // Local fields; remote repositories also use mount/base_path for
-  // pull-through cache storage.
-  mount?: string;
-  base_path?: string;
-  allow_push?: boolean;
-  // Remote fields
-  url?: string;
-  auth?: RegistryUpstreamAuth;
-  mutable_ttl?: string;
-  // Docker-only: tags treated as mutable (TTL-bounded). Tags not
-  // in this list are cached forever after the first resolve. Empty
-  // ⇒ default list. ["*"] ⇒ every tag is floating.
-  floating_tags?: string[];
-  insecure_skip_verify?: boolean;
-  // Virtual fields
-  members?: string[];
-  default_local?: string;
-  // Common overrides
-  cors_origins?: string[];
-  max_upload_size?: number;
-  policy?: RegistryPolicy;
-}
-
-export interface RegistryPolicy {
-  immutable_tags?: string[];
-  retention?: RegistryRetentionPolicy;
-}
-
-export interface RegistryRetentionPolicy {
-  gc_min_age_seconds?: number;
-  abandoned_upload_max_age_seconds?: number;
-}
-
-// RegistryUpstreamAuth — credentials for a Remote repository's
-// upstream. Username/Password supports HTTP basic; Token supports
-// bearer auth (npm "_authToken", Docker registry token).
-// Credential value fields accept direct "raw://mount/path" and
-// "config://key" references that the server resolves at runtime.
-// Structured JSON/YAML/TOML secrets can select a scalar with a
-// "#/json/pointer" suffix.
-export interface RegistryUpstreamAuth {
-  type?: 'basic' | 'bearer' | 'header';
-  username?: string;
-  password?: string;
-  token?: string;
-  // Custom-header auth: 'header' = header name, 'value' = header
-  // value. Both fields ship to the Go struct of the same name —
-  // the server JSON tags are { header, value } (not header_name /
-  // header_value), so renaming them here would break the wire
-  // contract.
-  header?: string;
-  value?: string;
 }
 
 // VaultSettings is the admin-level feature flag for the personal
@@ -842,51 +560,4 @@ export interface PatchTokenRequest {
   expires_at?: string;
 }
 
-// Raw mount info from /api/v1/info
-export interface RawMount {
-  prefix: string;
-  type: string;    // "local", "s3", "ftp"
-  writable: boolean;
-}
 
-// Directory entry from raw file listing API
-export interface RawDirEntry {
-  name: string;
-  is_dir: boolean;
-  size: number;
-}
-
-// Tree node for raw file tree UI
-export interface RawTreeNode {
-  name: string;
-  path: string;       // e.g., "configs/subdir/file.txt"
-  mount: string;      // mount prefix e.g., "configs"
-  type: 'mount' | 'folder' | 'file';
-  expanded?: boolean;
-  children?: RawTreeNode[];
-  loaded?: boolean;
-  size?: number;
-  writable?: boolean; // mount supports write operations
-  mountType?: string; // "local", "s3", "ftp"
-}
-
-// View state for raw file viewer
-export type RawViewerMode = 'text' | 'image' | 'binary-placeholder' | 'binary-loading' | 'hex' | 'pdf' | 'video' | 'audio';
-
-// Open tab in raw file browser
-export interface RawTab {
-  id: string;          // Unique ID: "mount/path"
-  mount: string;       // Mount prefix
-  path: string;        // Relative path within mount
-  name: string;        // Display name (file name)
-  size: number;        // File size in bytes
-  contentType: string; // MIME type from response
-  viewerMode: RawViewerMode;
-  textContent?: string;    // Text content (for text/code files)
-  rawUrl?: string;         // URL for image/pdf viewing
-  hexData?: string;        // Base64 data for hex viewer
-  loaded: boolean;         // Whether content has been fetched
-  forceHex?: boolean;      // User clicked "Open Anyway" on binary placeholder
-  truncated?: boolean;     // Text content was truncated due to size limit
-  tooLargeForHex?: boolean; // File is too large even for hex viewer
-}

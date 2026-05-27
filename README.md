@@ -2,7 +2,7 @@
 
 # pika
 
-General configuration server, secrets manager, and raw file server with a beautiful web UI and a powerful API.
+General configuration server, secrets manager, and personal vault with a beautiful web UI and a powerful API.
 
 ## Quick Start
 
@@ -23,7 +23,6 @@ Open `http://localhost:8080` to access the web UI.
 - Built-in encryption (XChaCha20-Poly1305) with key rotation
 - Real-time preview of resolved configs
 - Event hooks (HTTP webhooks, Kafka, Redis Pub/Sub, NATS)
-- Raw file serving (local, S3, FTP, SFTP, WebDAV, Vercel Blob)
 - Inline editor with syntax validation (JSON, YAML, TOML)
 - Personal vault (client-side end-to-end encrypted passwords, TOTP, SSH keys, …)
 
@@ -66,20 +65,6 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/data/myapp/config?f
 | `yaml` | `application/x-yaml`       |
 | `toml` | `application/toml`         |
 | other  | `application/octet-stream` |
-
-### Public Port
-
-By default, `/data/*` requires a Bearer token. If you want to serve configs without authentication (e.g., inside a private network), enable the public server via the **Settings > Public Server** page in the UI.
-
-The public port starts a second HTTP server that only exposes `/data/*`, `/raw/*`, and `/healthz` — no admin API, no UI. You can also enable Consul KV compatibility endpoints on it.
-
-```sh
-# No token needed on the public port
-curl http://localhost:9090/data/myapp/config
-
-# With variant and format
-curl "http://localhost:9090/data/myapp/config?variant=prod&format=json"
-```
 
 ## Versions
 
@@ -158,101 +143,18 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/data/myapp/config?
 curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/data/myapp/config?variant=prod&version=0.3.0"
 ```
 
-## Raw Filesystem Serving
-
-Pika can serve files directly from a variety of storage backends (local disk, S3-compatible object stores, FTP, SFTP, WebDAV, Vercel Blob) over HTTP. This is useful for serving static assets, certificates, or any files that don't need versioning or the config management features.
-
-### Configuration
-
-Raw mounts support multiple backend types. Mounts are configured via the **Settings > Raw Mounts** page in the UI.
-
-Supported backend types:
-
-- **Local**: Mount a filesystem directory (also works with FUSE mounts like `s3fs`, `rclone mount`, `sshfs`, `gcsfuse`)
-- **S3**: AWS S3, MinIO, Cloudflare R2, DigitalOcean Spaces, or any S3-compatible storage
-- **FTP/FTPS**: Connect to a remote FTP/FTPS server
-- **SFTP**: Connect to a remote SFTP (SSH) server
-- **WebDAV**: Connect to a WebDAV server
-- **Vercel Blob**: Serve files from Vercel Blob storage
-
-### API
-
-Files are served at `/raw/{prefix}/{path}`:
-
-```sh
-# Read a file (main server — requires Bearer token)
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/raw/configs/app.json
-
-# Read a file (public server — no auth)
-curl http://localhost:9090/raw/configs/app.json
-
-# Directory listing (returns JSON array)
-curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/raw/configs/
-
-# Upload a file (S3 mounts only — requires write scope)
-curl -X PUT -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  --data-binary @app.json \
-  http://localhost:8080/raw/assets/app.json
-
-# Delete a file (S3 mounts only — requires delete scope)
-curl -X DELETE -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/raw/assets/app.json
-```
-
-Directory listings return a JSON array of entries:
-
-```json
-[
-  { "name": "app.json", "is_dir": false, "size": 1234 },
-  { "name": "subdir", "is_dir": true, "size": 0 }
-]
-```
-
-Token scopes match against `raw/{prefix}/{path}` — for example, a token with scope `raw/**` can access all raw mounts, or `raw/configs/**` for a specific mount. Write operations require `write` permission, delete requires `delete`.
-
-### Web UI — File Browser
-
-When raw mounts are configured, a **Files** link appears in the navigation bar. The file browser provides:
-
-- **Tree navigation** — mount points shown as top-level nodes with backend type badges (Local, S3, FTP), directories expand on click
-- **Smart file viewing** — files open with the appropriate viewer based on their extension:
-  - **Text/Code** — syntax-highlighted read-only editor for known text formats (JSON, YAML, Go, Python, Markdown, etc.)
-  - **Images** — inline preview for PNG, JPG, SVG, WebP, etc.
-  - **Video/Audio** — native browser player with controls for MP4, WebM, MP3, WAV, etc.
-  - **PDF** — embedded PDF viewer
-  - **Binary** — a placeholder with an "Open Anyway" button that shows a hex dump viewer
-- **Tabs** — multiple files can be open simultaneously with right-click context menu (Close, Close Others, Close All)
-- **File info panel** — shows file metadata (name, mount, path, size, content type)
-- **Download button** — always available in the toolbar to download any file
-- **Large file protection** — text files over 5 MB are truncated with a warning; hex viewer limited to 10 MB
-- **Write operations** (S3 mounts only):
-  - **Upload** — upload files via the tree (upload button on hover)
-  - **Create folder** — create new directories
-  - **Delete** — delete files (delete button on hover)
-
-### Settings UI
-
-Raw mounts can also be managed from **Settings > Raw Mounts** in the web UI. The form supports all backend types with conditional fields. Changes take effect immediately — no server restart required.
-
 ## Hooks
 
 Pika can push event notifications when files or configs change. Hooks are configured via **Settings > Hooks** in the UI.
 
 ### Event Types
 
-| Event            | Trigger                         |
-| ---------------- | ------------------------------- |
-| `file.created`   | File uploaded to a raw mount    |
-| `file.updated`   | File overwritten on a raw mount |
-| `file.deleted`   | File deleted from a raw mount   |
-| `file.renamed`   | File renamed                    |
-| `file.copied`    | File copied                     |
-| `dir.created`    | Directory created               |
-| `config.created` | Config created                  |
-| `config.updated` | Config updated                  |
-| `config.deleted` | Config deleted                  |
-| `*`              | All events                      |
+| Event            | Trigger          |
+| ---------------- | ---------------- |
+| `config.created` | Config created   |
+| `config.updated` | Config updated   |
+| `config.deleted` | Config deleted   |
+| `*`              | All events       |
 
 ### Targets
 
@@ -266,17 +168,15 @@ Each hook can send events to one or more targets:
 ### Filters
 
 Hooks can be filtered by:
-- **Mounts** — restrict to specific raw mount prefixes
-- **Path pattern** — glob pattern for matching file paths (e.g., `*.pdf`)
+- **Path pattern** — glob pattern for matching config paths (e.g., `apps/*`)
 
 ### Custom Payloads
 
-Targets support a Go `text/template` body template for customizing the event payload. Available fields: `.Type`, `.Mount`, `.Path`, `.Size`, `.Protocol`, `.User`, `.Timestamp`.
+Targets support a Go `text/template` body template for customizing the event payload. Available fields: `.Type`, `.Path`, `.Size`, `.User`, `.Timestamp`.
 
 ### TLS Certificate References
 
 TLS certificate file paths in hook targets (Kafka, Redis) support references to files stored in Pika itself:
-- `raw://mount/path` — read from a raw mount
 - `config://key` — read from the config store
 - Plain file paths are also supported
 
@@ -288,7 +188,6 @@ Pika is configured via environment variables (prefixed with `PIKA_`) or a config
 | ---------------------------- | ------------------ | ------------------------------------------------ |
 | `PIKA_SERVER_HOST`           | _(all interfaces)_ | Bind address                                     |
 | `PIKA_SERVER_PORT`           | `8080`             | Listen port (admin UI + authenticated data)      |
-| `PIKA_SERVER_PUBLIC_PORT`    |                    | Public data port (unauthenticated `/data/*`)     |
 | `PIKA_SERVER_BASE_PATH`      | `/`                | Base URL path                                    |
 | `PIKA_STORAGE_BW_PATH`       | `data/pika`        | BadgerDB data directory                          |
 | `PIKA_LOG_LEVEL`             | `info`             | Log level                                        |
@@ -333,8 +232,8 @@ Under external authentication, pika can translate provider-supplied groups (or O
 | -------------------- | --------------------------------------------------------------------------- |
 | `files.read`         | View configurations, versions, variants, render, search, convert            |
 | `files.write`        | Create, update, delete configurations and variants                          |
-| `raw.read`           | Browse and download raw mount contents                                      |
-| `raw.write`          | Upload, delete, rename, copy, move raw mount contents                       |
+| `external.read`      | Browse, search, read entries from configured external resources             |
+| `external.write`     | Create, update, delete entries on configured external resources             |
 | `settings.manage`    | View and modify server settings, backup/restore, server encryption-key lifecycle |
 | `tokens.manage`      | Create, edit, revoke API access tokens                                      |
 | `users.manage`       | Create, edit, delete, kick users (built-in auth only)                       |
@@ -343,8 +242,8 @@ Under external authentication, pika can translate provider-supplied groups (or O
 Example mapping: if your gateway emits `X-Groups: pika-editor,auditors` for a user, a mapping like
 
 ```
-pika-editor  →  files.read, files.write, raw.read
-auditors     →  files.read, raw.read, tokens.manage
+pika-editor  →  files.read, files.write, external.read
+auditors     →  files.read, tokens.manage
 ```
 
 grants that user the union of both sets. A user in multiple groups gets the union; unknown groups are ignored. Users not in the Superadmins allowlist and without any matching group are **denied** any restricted action (403).

@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-import type { RawMount, Capability } from '@/lib/types/config';
+import type { Capability } from '@/lib/types/config';
 import { prefsStore } from '@/lib/store/prefs.svelte';
 
 export interface AppInfo {
@@ -13,7 +13,6 @@ export interface AppInfo {
   // string the login card shows. Empty/undefined when unset.
   subtitle?: string;
   capabilities?: Capability[];
-  raw_mounts?: RawMount[];
   // Effective capability keys for the current user (e.g. ["files.read", "users.manage"]).
   // Set by the backend's /api/v1/info endpoint. Empty/undefined means no capabilities.
   permissions?: string[];
@@ -25,15 +24,6 @@ export interface AppInfo {
   // false, the SPA hides the /vault link entirely — the routes themselves
   // 503 in that case, so a stray bookmark just fails closed.
   vault_enabled?: boolean;
-  // ProxyEnabled mirrors the deployment-level proxy feature flag.
-  // When false, the SPA hides the /proxy link and the endpoints
-  // 404; saved graphs are preserved on the server.
-  proxy_enabled?: boolean;
-  // RegistryEnabled mirrors the deployment-level artifact-registry
-  // feature flag. When false, the SPA hides the /registries link
-  // and the data-plane + admin endpoints 404; configured namespaces
-  // and repositories are preserved on the server.
-  registry_enabled?: boolean;
   // VaultItemTypes is the server's known item-type vocabulary, used by
   // the new-item picker. Empty when vault is disabled.
   vault_item_types?: string[];
@@ -140,7 +130,7 @@ function createAppStore() {
       const response = await axios.get('/api/v1/info');
       info = response.data;
     } catch {
-      info = { name: 'pika', version: 'unknown', capabilities: [], raw_mounts: [] };
+      info = { name: 'pika', version: 'unknown', capabilities: [] };
     }
   }
 

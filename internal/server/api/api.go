@@ -16,14 +16,7 @@ import (
 	"github.com/rakunlabs/pika/internal/config"
 	"github.com/rakunlabs/pika/internal/external"
 	"github.com/rakunlabs/pika/internal/hook"
-	"github.com/rakunlabs/pika/internal/rawfs"
-	"github.com/rakunlabs/pika/internal/rawfs/localfs"
-	"github.com/rakunlabs/pika/internal/registry"
 	"github.com/rakunlabs/pika/internal/secret"
-	"github.com/rakunlabs/pika/internal/serve/ftpserve"
-	"github.com/rakunlabs/pika/internal/serve/sftpserve"
-	"github.com/rakunlabs/pika/internal/serve/tftpserve"
-	"github.com/rakunlabs/pika/internal/serve/webdavserve"
 	"github.com/rakunlabs/pika/internal/server/authx"
 	"github.com/rakunlabs/pika/internal/service"
 	"github.com/rakunlabs/pika/internal/usersync"
@@ -37,42 +30,22 @@ type Info struct {
 	Date    string `json:"date,omitempty"`
 }
 
-// ProxyReconciler is the narrow surface api needs from the proxy
-// runner. server.go injects an *proxy.Manager value; defining the
-// interface here keeps the api package free of an import on proxy
-// (which would cycle: api -> proxy -> service -> api consumers).
-type ProxyReconciler interface {
-	Reconcile(servers []service.ProxyServer) error
-	ReconcileAll(listeners []service.ProxyListener, graphs []service.ProxyServer) error
-	Validate(s service.ProxyServer) (any, error)
-	ValidateListener(l service.ProxyListener) error
-	Status() any
-	ListenersStatus() any
-}
-
 type api struct {
 	svc           *service.Service
 	info          Info
 	encStore      *secret.Storage     // nil if encryption is disabled
 	mgr           *authx.Manager      // auth manager (login/logout/cap resolution)
-	rawHandler    *RawHandler         // nil if no raw mounts configured
-	proxyMgr      ProxyReconciler     // nil until server.go injects via Handle
+	dispatcher    *hook.Dispatcher    // hook event bus; nil only in tests
 	syncScheduler *usersync.Scheduler // nil until set by server.go
 	cluster       *pcluster.Cluster   // nil only in tests or custom embeddings
-	// registryMgr owns the per-(namespace, repo) routing table for
-	// the artifact registry feature. nil until server.go calls
-	// SetRegistryManager during boot. The data-mux entry handler
-	// serveRegistry returns 404 when this is nil, matching pika's
-	// existing "feature unconfigured" semantics for raw mounts and
-	// proxy servers.
-	registryMgr *registry.Manager
+	appCtx        context.Context     // root context used for background loops
 }
 
 type response struct {
 	Message string `json:"message,omitempty"`
 }
 
-func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, mgr *authx.Manager, rh *RawHandler, proxyMgr ProxyReconciler, registryMgr *registry.Manager, cl *pcluster.Cluster) error {
+func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, mgr *authx.Manager, dispatcher *hook.Dispatcher, cl *pcluster.Cluster) error {
 	// Set hook service identification from config
 	hook.ServiceName = config.ServiceName
 	hook.Version = config.Version
@@ -82,47 +55,13 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// path share one instance. Started below after the routes register.
 	syncSched := usersync.NewScheduler(svc)
 
-	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, rawHandler: rh, proxyMgr: proxyMgr, syncScheduler: syncSched, cluster: cl, registryMgr: registryMgr}
-
-	// Perform the initial registry reload so the routing table is
-	// hot the first time a client hits /registries/*. If the manager
-	// has no factories registered (foundation phase), this is a
-	// no-op aside from logging the empty table.
-	if registryMgr != nil {
-		registryMgr.Reload(context.Background(), svc.GetRegistrySettings(context.Background()))
-	}
+	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, dispatcher: dispatcher, syncScheduler: syncSched, cluster: cl, appCtx: context.Background()}
 
 	m.ErrorHandler(api.errorHandler)
 
 	mData.ErrorHandler(api.errorHandler)
 	// Data endpoint — consumer-facing, returns resolved config (with token auth)
 	mData.GET("/data/*", mData.Wrap(api.getData))
-
-	// Raw file endpoints (with token auth)
-	mData.GET("/raw/*", mData.Wrap(api.getRaw))
-	mData.PUT("/raw/*", mData.Wrap(api.putRaw))
-	mData.DELETE("/raw/*", mData.Wrap(api.deleteRaw))
-
-	// Package CDN endpoints. These expose package files from an
-	// existing NPM registry repo; the direct data-plane route keeps
-	// registry.read auth, while proxy graph "cdn" resources can publish
-	// the same handler under public domains/paths when desired.
-	mData.GET("/cdn/npm/*", mData.Wrap(api.serveNPMCDN))
-	mData.HEAD("/cdn/npm/*", mData.Wrap(api.serveNPMCDN))
-	mData.OPTIONS("/cdn/npm/*", mData.Wrap(api.serveNPMCDN))
-
-	// Artifact registry endpoints. One catch-all per method because
-	// every protocol (Go, NPM, Docker) needs both safe and unsafe
-	// verbs. The serveRegistry handler parses {namespace}/{repo}
-	// out of the path, enforces token+capability, then dispatches
-	// to the per-repo Registry.
-	mData.GET("/registries/*", mData.Wrap(api.serveRegistry))
-	mData.HEAD("/registries/*", mData.Wrap(api.serveRegistry))
-	mData.OPTIONS("/registries/*", mData.Wrap(api.serveRegistry))
-	mData.POST("/registries/*", mData.Wrap(api.serveRegistry))
-	mData.PUT("/registries/*", mData.Wrap(api.serveRegistry))
-	mData.PATCH("/registries/*", mData.Wrap(api.serveRegistry))
-	mData.DELETE("/registries/*", mData.Wrap(api.serveRegistry))
 
 	mAuth.ErrorHandler(api.errorHandler)
 
@@ -286,108 +225,12 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.POST("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.postSettings)))
 	m.GET("/api/v1/cluster/status", m.Wrap(api.withPerm(service.CapSettingsManage, api.getClusterStatus)))
 
-	// Artifact registry admin endpoints. listRegistryNamespaces and
-	// listRegistryRepos are read-only (Registry Read or above);
-	// putRegistrySettings replaces the entire registry tree and
-	// gates on Registry Admin.
-	m.GET("/api/v1/registries", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryNamespaces)))
-	m.GET("/api/v1/registries/repos", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryRepos)))
-	m.PUT("/api/v1/registries", m.Wrap(api.withPerm(service.CapRegistryAdmin, api.putRegistrySettings)))
-	// Per-repo module browser for Go registries. Path params
-	// `{ns}` and `{repo}` are extracted via ada's PathValue.
-	m.GET("/api/v1/registries/go/{ns}/{repo}/modules", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryGoModules)))
-	// Per-repo package browser for NPM registries.
-	m.GET("/api/v1/registries/npm/{ns}/{repo}/packages", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryNPMPackages)))
-	// Per-repo image/tag browser for Docker registries.
-	m.GET("/api/v1/registries/docker/{ns}/{repo}/repos", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryDockerRepos)))
-	// Per-repo chart browser for Helm registries.
-	m.GET("/api/v1/registries/helm/{ns}/{repo}/charts", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryHelmCharts)))
-	// Per-repo artifact browser for Maven registries.
-	m.GET("/api/v1/registries/maven/{ns}/{repo}/artifacts", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryMavenArtifacts)))
-	// Per-repo package browser for PyPI registries.
-	m.GET("/api/v1/registries/pypi/{ns}/{repo}/packages", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryPyPIPackages)))
-	// Per-repo crate browser for Cargo registries.
-	m.GET("/api/v1/registries/cargo/{ns}/{repo}/crates", m.Wrap(api.withPerm(service.CapRegistryRead, api.listRegistryCargoCrates)))
-	// Docker GC trigger (mark-and-sweep). Admin only because it
-	// deletes content from the underlying blob store.
-	m.POST("/api/v1/registries/docker/{ns}/{repo}/gc", m.Wrap(api.withPerm(service.CapRegistryAdmin, api.runDockerGC)))
-	// Docker GC estimate (dry-run). Read-gated because it doesn't
-	// delete anything — just reports how much would be reclaimed.
-	m.GET("/api/v1/registries/docker/{ns}/{repo}/gc/estimate", m.Wrap(api.withPerm(service.CapRegistryRead, api.estimateDockerGC)))
-	// Per-package detail and registry-aware artifact deletion. These are
-	// registered per concrete type instead of under /{type}/ because Ada
-	// prefers static children over params; the protocol-specific list
-	// routes below would otherwise shadow the generic package route. Keep
-	// the admin action routes here for the same reason: /registries/npm/...
-	// must not fall through to the SPA shell just because /npm has static
-	// children for package browsing.
-	for _, regType := range service.KnownRegistryTypes {
-		regType := regType
-		// Cache purge for Remote registries. Admin-gated because it forces an
-		// upstream re-fetch that may be expensive.
-		m.POST(fmt.Sprintf("/api/v1/registries/%s/{ns}/{repo}/purge", regType), m.Wrap(api.withPerm(service.CapRegistryAdmin, api.runRegistryPurgeFor(regType))))
-		// Snapshot statistics for a single registry. Read-only,
-		// CapRegistryRead is enough — the UI uses this for the
-		// "Statistics" card in the repo detail panel.
-		m.GET(fmt.Sprintf("/api/v1/registries/%s/{ns}/{repo}/stats", regType), m.Wrap(api.withPerm(service.CapRegistryRead, api.getRegistryStatsFor(regType))))
-		// Remote-only: connectivity probe against the configured upstream.
-		// Admin-gated because the probe uses the registry's real auth
-		// credentials.
-		m.POST(fmt.Sprintf("/api/v1/registries/%s/{ns}/{repo}/test-upstream", regType), m.Wrap(api.withPerm(service.CapRegistryAdmin, api.runRegistryUpstreamProbeFor(regType))))
-
-		packageRoute := fmt.Sprintf("/api/v1/registries/%s/{ns}/{repo}/packages/*", regType)
-		m.GET(packageRoute, m.Wrap(api.withPerm(service.CapRegistryRead, api.getRegistryPackageDetailFor(regType))))
-		// Query shape is protocol-specific: version= for Go/NPM/Helm/Maven/
-		// PyPI/Cargo, tag= or digest= for Docker.
-		m.DELETE(packageRoute, m.Wrap(api.withPerm(service.CapRegistryDelete, api.deleteRegistryPackageArtifactFor(regType))))
-	}
-	// NPM-only: cached README markdown for the package's latest
-	// version. Falls back to a lazy tarball extract when the
-	// cache is empty.
-	m.GET("/api/v1/registries/npm/{ns}/{repo}/packages/{name}/readme", m.Wrap(api.withPerm(service.CapRegistryRead, api.getNPMPackageReadme)))
-	// Go-only: raw go.mod bytes for one module version. Used by
-	// the detail UI's go.mod viewer.
-	m.GET("/api/v1/registries/go/{ns}/{repo}/modules/*", m.Wrap(api.withPerm(service.CapRegistryRead, api.getGoModuleGoMod)))
-	// Proxy: split into read vs. manage caps. Read covers the
-	// dashboard, status panel, catalog discovery and the in-app
-	// test request console; manage adds CRUD and validate. The
-	// dedicated caps (rather than reusing settings.manage) let an
-	// operator hand a teammate "see proxies, run tests" without
-	// also handing them every other settings knob.
-	m.GET("/api/v1/proxy", m.Wrap(api.withPerm(service.CapProxyRead, api.listProxyServers)))
-	m.GET("/api/v1/proxy/catalog", m.Wrap(api.withPerm(service.CapProxyRead, api.getProxyCatalog)))
-	m.GET("/api/v1/proxy/status", m.Wrap(api.withPerm(service.CapProxyRead, api.getProxyStatus)))
-	m.POST("/api/v1/proxy/test", m.Wrap(api.withPerm(service.CapProxyRead, api.proxyTest)))
-	// Listener endpoints — kept BEFORE the catch-all /api/v1/proxy/{id}
-	// route so "listeners" doesn't get parsed as a graph id by ada's
-	// path-priority rules.
-	m.GET("/api/v1/proxy/listeners", m.Wrap(api.withPerm(service.CapProxyRead, api.listProxyListeners)))
-	m.GET("/api/v1/proxy/listeners/status", m.Wrap(api.withPerm(service.CapProxyRead, api.getProxyListenersStatus)))
-	m.GET("/api/v1/proxy/listeners/{id}", m.Wrap(api.withPerm(service.CapProxyRead, api.getProxyListener)))
-	m.POST("/api/v1/proxy/listeners", m.Wrap(api.withPerm(service.CapProxyManage, api.createProxyListener)))
-	m.PUT("/api/v1/proxy/listeners/{id}", m.Wrap(api.withPerm(service.CapProxyManage, api.updateProxyListener)))
-	m.DELETE("/api/v1/proxy/listeners/{id}", m.Wrap(api.withPerm(service.CapProxyManage, api.deleteProxyListener)))
-	m.GET("/api/v1/proxy/{id}", m.Wrap(api.withPerm(service.CapProxyRead, api.getProxyServer)))
-	m.POST("/api/v1/proxy", m.Wrap(api.withPerm(service.CapProxyManage, api.createProxyServer)))
-	m.PUT("/api/v1/proxy/{id}", m.Wrap(api.withPerm(service.CapProxyManage, api.updateProxyServer)))
-	m.DELETE("/api/v1/proxy/{id}", m.Wrap(api.withPerm(service.CapProxyManage, api.deleteProxyServer)))
-	m.POST("/api/v1/proxy/{id}/validate", m.Wrap(api.withPerm(service.CapProxyManage, api.validateProxyServer)))
-
 	// Backup & Restore. CapSettingsManage is the only gate — anyone
 	// authorized to manage settings can already export the entire
 	// DB, so no additional admin-secret step is required.
 	m.GET("/api/v1/backup", m.Wrap(api.withPerm(service.CapSettingsManage, api.exportBackup)))
 	m.GET("/api/v1/backup/info", m.Wrap(api.withPerm(service.CapSettingsManage, api.getBackupInfo)))
 	m.POST("/api/v1/backup", m.Wrap(api.withPerm(service.CapSettingsManage, api.importBackup)))
-
-	// Raw filesystem browsing and management (for UI, uses session auth)
-	m.GET("/api/v1/raw/*", m.Wrap(api.withPerm(service.CapRawRead, api.rawHandler.serveRaw)))
-	m.PUT("/api/v1/raw/*", m.Wrap(api.withPerm(service.CapRawWrite, api.rawHandler.writeFile)))
-	m.DELETE("/api/v1/raw/*", m.Wrap(api.withPerm(service.CapRawWrite, api.rawHandler.deleteFile)))
-	m.POST("/api/v1/raw-mkdir/*", m.Wrap(api.withPerm(service.CapRawWrite, api.rawHandler.mkDir)))
-	m.POST("/api/v1/raw-rename", m.Wrap(api.withPerm(service.CapRawWrite, api.rawHandler.renameFile)))
-	m.POST("/api/v1/raw-copy", m.Wrap(api.withPerm(service.CapRawWrite, api.rawHandler.copyFile)))
-	m.POST("/api/v1/raw-move", m.Wrap(api.withPerm(service.CapRawWrite, api.rawHandler.moveFile)))
 
 	// External resource browsing — every operation here exposes the
 	// shape of configured secret backends (or the secrets themselves
@@ -423,8 +266,8 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 
 	// Boot the user-sync scheduler with current settings. Reload happens
 	// inside postSettings whenever PatchSettings.UserSync is set.
-	if curSettings, err := svc.Settings(rh.appCtx); err == nil {
-		syncSched.Start(rh.appCtx, curSettings.UserSync)
+	if curSettings, err := svc.Settings(api.appCtx); err == nil {
+		syncSched.Start(api.appCtx, curSettings.UserSync)
 	}
 
 	return nil
@@ -523,38 +366,30 @@ func (a *api) infoHandler(c *ada.Context) error {
 	// toggle in Settings → Security → Personal vault, so the link
 	// disappears the moment an admin flips the toggle.
 	vaultEnabled := a.svc.VaultEnabled(ctx)
-	proxyEnabled := a.svc.ProxyEnabled(ctx)
-	registryEnabled := a.svc.RegistryEnabled(ctx)
 
 	resp := struct {
 		Info
-		Subtitle        string                  `json:"subtitle,omitempty"`
-		User            string                  `json:"user,omitempty"`
-		AuthEnabled     bool                    `json:"auth_enabled"`
-		BuiltinAuth     bool                    `json:"builtin_auth"`
-		IsSuperadmin    bool                    `json:"is_superadmin"`
-		Permissions     []string                `json:"permissions"`
-		Capabilities    []service.Capability    `json:"capabilities"`
-		SetupRequired   bool                    `json:"setup_required,omitempty"`
-		RawMounts       []MountInfo             `json:"raw_mounts,omitempty"`
-		VaultEnabled    bool                    `json:"vault_enabled"`
-		ProxyEnabled    bool                    `json:"proxy_enabled"`
-		RegistryEnabled bool                    `json:"registry_enabled"`
-		VaultItemTypes  []service.VaultItemType `json:"vault_item_types,omitempty"`
+		Subtitle       string                  `json:"subtitle,omitempty"`
+		User           string                  `json:"user,omitempty"`
+		AuthEnabled    bool                    `json:"auth_enabled"`
+		BuiltinAuth    bool                    `json:"builtin_auth"`
+		IsSuperadmin   bool                    `json:"is_superadmin"`
+		Permissions    []string                `json:"permissions"`
+		Capabilities   []service.Capability    `json:"capabilities"`
+		SetupRequired  bool                    `json:"setup_required,omitempty"`
+		VaultEnabled   bool                    `json:"vault_enabled"`
+		VaultItemTypes []service.VaultItemType `json:"vault_item_types,omitempty"`
 	}{
-		Info:            a.info,
-		Subtitle:        subtitle,
-		User:            username,
-		AuthEnabled:     true,
-		BuiltinAuth:     true,
-		IsSuperadmin:    isSuperadmin,
-		Permissions:     caps,
-		Capabilities:    service.KnownCapabilities,
-		RawMounts:       a.rawHandler.MountsInfo(),
-		VaultEnabled:    vaultEnabled,
-		ProxyEnabled:    proxyEnabled,
-		RegistryEnabled: registryEnabled,
-		VaultItemTypes:  service.KnownVaultItemTypes,
+		Info:           a.info,
+		Subtitle:       subtitle,
+		User:           username,
+		AuthEnabled:    true,
+		BuiltinAuth:    true,
+		IsSuperadmin:   isSuperadmin,
+		Permissions:    caps,
+		Capabilities:   service.KnownCapabilities,
+		VaultEnabled:   vaultEnabled,
+		VaultItemTypes: service.KnownVaultItemTypes,
 	}
 
 	// Fresh-install detection: no users exist yet.
@@ -595,28 +430,9 @@ func (a *api) postSettings(c *ada.Context) error {
 	if err := c.Bind(&patchSettings); err != nil {
 		return errors.Join(err, service.ErrBadRequest)
 	}
-	var prevRegistry *service.RegistrySettings
-	if patchSettings.Registry != nil {
-		prevRegistry = a.svc.GetRegistrySettings(c.Request.Context())
-	}
 
 	if err := a.svc.PatchSettings(c.Request.Context(), &patchSettings); err != nil {
 		return err
-	}
-
-	// If raw mounts were updated, reload them into the handler
-	if patchSettings.RawMounts != nil {
-		if err := a.reloadRawMounts(c.Request.Context()); err != nil {
-			return err
-		}
-	}
-
-	// If FTP shares or users were updated, reload them
-	if patchSettings.FTPShares != nil {
-		a.reloadFTPShares(c.Request.Context())
-	}
-	if patchSettings.FTPUsers != nil {
-		a.reloadFTPUsers(c.Request.Context())
 	}
 
 	// If hooks were updated, reload them in the dispatcher
@@ -625,60 +441,6 @@ func (a *api) postSettings(c *ada.Context) error {
 	}
 	if patchSettings.EventLog != nil {
 		a.reloadEventLog(c.Request.Context())
-	}
-
-	// If the registry tree was updated, rebuild the routing table.
-	// Hot reload semantics match raw mounts: the new tree replaces
-	// the old one atomically, in-flight requests against the old
-	// handles drain naturally.
-	if patchSettings.Registry != nil {
-		a.reloadRegistry(c.Request.Context())
-		a.emitRegistryDiff(prevRegistry, a.svc.GetRegistrySettings(c.Request.Context()))
-	}
-
-	// If serve settings were updated, reload the corresponding servers
-	if patchSettings.FTPServe != nil || patchSettings.SFTPServe != nil || patchSettings.TFTPServe != nil || patchSettings.WebDAVServe != nil {
-		settings, err := a.svc.Settings(c.Request.Context())
-		if err != nil {
-			slog.Error("failed to read settings for file server reload", "error", err)
-		} else {
-			if patchSettings.FTPServe != nil {
-				a.reloadFTPServe(settings)
-			}
-			if patchSettings.SFTPServe != nil {
-				a.reloadSFTPServe(settings)
-			}
-			if patchSettings.TFTPServe != nil {
-				a.reloadTFTPServe(settings)
-			}
-			if patchSettings.WebDAVServe != nil {
-				a.reloadWebDAVServe(settings)
-			}
-		}
-	}
-
-	// If proxy servers were updated OR the proxy feature flag was
-	// flipped, reconcile the runner. Reading settings fresh covers
-	// either trigger: the patch may contain only the Proxy toggle,
-	// in which case we need the (unchanged) ProxyServers list, and
-	// vice versa. When the deployment-wide proxy flag is off we
-	// reconcile with an empty list so the manager stops everything
-	// while leaving the graphs persisted for later.
-	if a.proxyMgr != nil && (patchSettings.ProxyServers != nil || patchSettings.ProxyListeners != nil || patchSettings.Proxy != nil) {
-		settings, err := a.svc.Settings(c.Request.Context())
-		if err != nil {
-			slog.Error("read settings for proxy reload", "error", err)
-		} else {
-			desiredGraphs := settings.ProxyServers
-			desiredListeners := settings.ProxyListeners
-			if !a.svc.ProxyEnabled(c.Request.Context()) {
-				desiredGraphs = nil
-				desiredListeners = nil
-			}
-			if err := a.proxyMgr.ReconcileAll(desiredListeners, desiredGraphs); err != nil {
-				slog.Error("proxy reconcile failed", "error", err)
-			}
-		}
 	}
 
 	// If auth settings were updated, reload the auth manager.
@@ -708,9 +470,9 @@ func (a *api) reloadEventLog(ctx context.Context) {
 		return
 	}
 
-	if a.rawHandler != nil && a.rawHandler.dispatcher != nil {
+	if a.dispatcher != nil {
 		enabled := settings.EventLogEnabled()
-		a.rawHandler.dispatcher.SetEventLogEnabled(enabled)
+		a.dispatcher.SetEventLogEnabled(enabled)
 		slog.Info("event log setting reloaded", "enabled", enabled)
 	}
 }
@@ -723,381 +485,36 @@ func (a *api) reloadHooks(ctx context.Context) {
 		return
 	}
 
-	if a.rawHandler != nil && a.rawHandler.dispatcher != nil {
-		a.rawHandler.dispatcher.UpdateHooks(settings.Hooks)
+	if a.dispatcher != nil {
+		a.dispatcher.UpdateHooks(settings.Hooks)
 		slog.Info("hooks reloaded", "count", len(settings.Hooks))
 	}
 }
 
-// reloadRawMounts reads the current settings and rebuilds mount entries.
-func (a *api) reloadRawMounts(ctx context.Context) error {
-	settings, err := a.svc.Settings(ctx)
-	if err != nil {
-		return fmt.Errorf("reading settings for raw mount reload: %w", err)
-	}
-
-	entries, errs := BuildMountEntries(settings.RawMounts)
-	for _, e := range errs {
-		slog.Warn("skipping invalid raw mount from settings", "error", e)
-	}
-
-	a.rawHandler.UpdateMounts(entries)
-	return nil
-}
-
-// reloadFTPShares rebuilds shares and updates FTP, SFTP, and TFTP servers.
-func (a *api) reloadFTPShares(ctx context.Context) {
-	shares := BuildFTPShares(ctx, a.svc, a.rawHandler)
-
-	a.rawHandler.mu.RLock()
-	ftpSrv := a.rawHandler.ftpServer
-	sftpSrv := a.rawHandler.sftpServer
-	tftpSrv := a.rawHandler.tftpServer
-	webdavSrv := a.rawHandler.webdavServer
-	a.rawHandler.mu.RUnlock()
-
-	if ftpSrv != nil {
-		ftpSrv.UpdateShares(shares)
-	}
-	if sftpSrv != nil {
-		sftpSrv.UpdateShares(shares)
-	}
-	if tftpSrv != nil {
-		tftpSrv.UpdateShares(shares)
-	}
-	if webdavSrv != nil {
-		webdavSrv.UpdateShares(shares)
-	}
-	slog.Info("file shares reloaded", "count", len(shares))
-}
-
-// reloadFTPUsers rebuilds users and updates both FTP and SFTP servers.
-func (a *api) reloadFTPUsers(ctx context.Context) {
-	users := BuildFTPUsers(ctx, a.svc)
-
-	a.rawHandler.mu.RLock()
-	ftpSrv := a.rawHandler.ftpServer
-	sftpSrv := a.rawHandler.sftpServer
-	webdavSrv := a.rawHandler.webdavServer
-	a.rawHandler.mu.RUnlock()
-
-	if ftpSrv != nil {
-		ftpSrv.UpdateUsers(users)
-	}
-	if sftpSrv != nil {
-		sftpSrv.UpdateUsers(users)
-	}
-	if webdavSrv != nil {
-		webdavSrv.UpdateUsers(users)
-	}
-	slog.Info("file server users reloaded", "count", len(users))
-}
-
-// reloadFTPServe stops the existing FTP server (if running) and starts a new one if enabled.
-func (a *api) reloadFTPServe(settings *service.Settings) {
-	shares := BuildFTPShares(context.Background(), a.svc, a.rawHandler)
-	users := BuildFTPUsers(context.Background(), a.svc)
-
-	a.rawHandler.mu.Lock()
-	oldServer := a.rawHandler.ftpServer
-	oldCancel := a.rawHandler.ftpCancel
-	a.rawHandler.ftpServer = nil
-	a.rawHandler.ftpCancel = nil
-	a.rawHandler.mu.Unlock()
-
-	// Cancel context first to trigger clean goroutine shutdown, then stop server to free port.
-	if oldCancel != nil {
-		oldCancel()
-	}
-	if oldServer != nil {
-		oldServer.Stop()
-	}
-
-	if settings.FTPServe != nil && settings.FTPServe.Enabled {
-		ftpSrv, err := ftpserve.NewServer(settings.FTPServe, shares, users)
-		if err != nil {
-			slog.Error("failed to start FTP server", "error", err)
-			return
-		}
-		ctx, cancel := context.WithCancel(a.rawHandler.appCtx)
-		ftpSrv.Start(ctx)
-
-		a.rawHandler.mu.Lock()
-		a.rawHandler.ftpServer = ftpSrv
-		a.rawHandler.ftpCancel = cancel
-		a.rawHandler.mu.Unlock()
-
-		slog.Info("FTP server reloaded")
-	} else {
-		slog.Info("FTP server disabled")
-	}
-}
-
-// reloadSFTPServe stops the existing SFTP server (if running) and starts a new one if enabled.
-func (a *api) reloadSFTPServe(settings *service.Settings) {
-	shares := BuildFTPShares(context.Background(), a.svc, a.rawHandler)
-	users := BuildFTPUsers(context.Background(), a.svc)
-
-	a.rawHandler.mu.Lock()
-	oldServer := a.rawHandler.sftpServer
-	oldCancel := a.rawHandler.sftpCancel
-	a.rawHandler.sftpServer = nil
-	a.rawHandler.sftpCancel = nil
-	a.rawHandler.mu.Unlock()
-
-	if oldCancel != nil {
-		oldCancel()
-	}
-	if oldServer != nil {
-		oldServer.Stop()
-	}
-
-	if settings.SFTPServe != nil && settings.SFTPServe.Enabled {
-		sftpSrv, err := sftpserve.NewServer(settings.SFTPServe, shares, users, func(generatedPEM string) {
-			settings.SFTPServe.HostKeyPEM = generatedPEM
-			if err := a.svc.PatchSettings(context.Background(), &service.PatchSettings{
-				Action:    service.ActionKeySet,
-				SFTPServe: settings.SFTPServe,
-			}); err != nil {
-				slog.Error("failed to persist auto-generated SFTP host key", "error", err)
-			} else {
-				slog.Info("auto-generated SFTP host key persisted to database")
-			}
-		})
-		if err != nil {
-			slog.Error("failed to start SFTP server", "error", err)
-			return
-		}
-		ctx, cancel := context.WithCancel(a.rawHandler.appCtx)
-		sftpSrv.Start(ctx)
-
-		a.rawHandler.mu.Lock()
-		a.rawHandler.sftpServer = sftpSrv
-		a.rawHandler.sftpCancel = cancel
-		a.rawHandler.mu.Unlock()
-
-		slog.Info("SFTP server reloaded")
-	} else {
-		slog.Info("SFTP server disabled")
-	}
-}
-
-// reloadTFTPServe stops the existing TFTP server (if running) and starts a new one if enabled.
-func (a *api) reloadTFTPServe(settings *service.Settings) {
-	shares := BuildFTPShares(context.Background(), a.svc, a.rawHandler)
-
-	a.rawHandler.mu.Lock()
-	oldServer := a.rawHandler.tftpServer
-	oldCancel := a.rawHandler.tftpCancel
-	a.rawHandler.tftpServer = nil
-	a.rawHandler.tftpCancel = nil
-	a.rawHandler.mu.Unlock()
-
-	if oldCancel != nil {
-		oldCancel()
-	}
-	if oldServer != nil {
-		oldServer.Stop()
-	}
-
-	if settings.TFTPServe != nil && settings.TFTPServe.Enabled {
-		tftpSrv, err := tftpserve.NewServer(settings.TFTPServe, shares)
-		if err != nil {
-			slog.Error("failed to start TFTP server", "error", err)
-			return
-		}
-		ctx, cancel := context.WithCancel(a.rawHandler.appCtx)
-		tftpSrv.Start(ctx, settings.TFTPServe)
-
-		a.rawHandler.mu.Lock()
-		a.rawHandler.tftpServer = tftpSrv
-		a.rawHandler.tftpCancel = cancel
-		a.rawHandler.mu.Unlock()
-
-		slog.Info("TFTP server reloaded")
-	} else {
-		slog.Info("TFTP server disabled")
-	}
-}
-
-// reloadWebDAVServe stops the existing WebDAV server (if running) and starts a new one if enabled.
-func (a *api) reloadWebDAVServe(settings *service.Settings) {
-	shares := BuildFTPShares(context.Background(), a.svc, a.rawHandler)
-	users := BuildFTPUsers(context.Background(), a.svc)
-
-	a.rawHandler.mu.Lock()
-	oldServer := a.rawHandler.webdavServer
-	oldCancel := a.rawHandler.webdavCancel
-	a.rawHandler.webdavServer = nil
-	a.rawHandler.webdavCancel = nil
-	a.rawHandler.mu.Unlock()
-
-	if oldCancel != nil {
-		oldCancel()
-	}
-	if oldServer != nil {
-		oldServer.Stop()
-	}
-
-	if settings.WebDAVServe != nil && settings.WebDAVServe.Enabled {
-		webdavSrv, err := webdavserve.NewServer(settings.WebDAVServe, shares, users)
-		if err != nil {
-			slog.Error("failed to start WebDAV server", "error", err)
-			return
-		}
-		ctx, cancel := context.WithCancel(a.rawHandler.appCtx)
-		webdavSrv.Start(ctx)
-
-		a.rawHandler.mu.Lock()
-		a.rawHandler.webdavServer = webdavSrv
-		a.rawHandler.webdavCancel = cancel
-		a.rawHandler.mu.Unlock()
-
-		slog.Info("WebDAV server reloaded")
-	} else {
-		slog.Info("WebDAV server disabled")
-	}
-}
-
-// (The standalone "public server" was retired with the introduction
-// of the user-built Proxy Servers. Reloads now flow through the
-// proxy Manager via postSettings; see ProxyReconciler at the top of
-// this file.)
-
-// BuildMountEntries creates mountEntry instances from settings entries.
-// Returns successfully created entries and any errors for failed ones.
-func BuildMountEntries(settingsEntries []service.RawMountEntry) ([]mountEntry, []error) {
-	var entries []mountEntry
-	var errs []error
-	seen := make(map[string]bool)
-
-	for _, m := range settingsEntries {
-		if m.Prefix == "" {
-			errs = append(errs, fmt.Errorf("raw mount prefix must not be empty"))
-			continue
-		}
-		if seen[m.Prefix] {
-			errs = append(errs, fmt.Errorf("duplicate raw mount prefix %q", m.Prefix))
-			continue
-		}
-		seen[m.Prefix] = true
-
-		mountType := m.Type
-		if mountType == "" {
-			mountType = "local"
-		}
-
-		fs, err := newRawFSFromSettings(mountType, m)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("mount %q: %w", m.Prefix, err))
-			continue
-		}
-
-		entries = append(entries, mountEntry{
-			Prefix:   m.Prefix,
-			FS:       fs,
-			Type:     mountType,
-			Writable: rawfs.IsWritable(fs),
-		})
-	}
-
-	return entries, errs
-}
-
-// newRawFSFromSettings creates a RawFS from a settings entry.
-func newRawFSFromSettings(mountType string, m service.RawMountEntry) (rawfs.RawFS, error) {
-	switch mountType {
-	case "local", "":
-		if m.Path == "" {
-			return nil, fmt.Errorf("path is required for local mount")
-		}
-		return localfs.New(m.Path)
-	case "s3":
-		if m.S3 == nil {
-			return nil, fmt.Errorf("s3 config is required")
-		}
-		if rawfs.NewS3FSFunc == nil {
-			return nil, fmt.Errorf("s3 backend not available")
-		}
-		return rawfs.NewS3FSFunc(m.S3.Bucket, m.S3.Region, m.S3.Endpoint, m.S3.AccessKey, m.S3.SecretKey, m.S3.Prefix, m.S3.PathStyle, m.S3.Secure)
-	case "ftp":
-		if m.FTP == nil {
-			return nil, fmt.Errorf("ftp config is required")
-		}
-		if rawfs.NewFTPFSFunc == nil {
-			return nil, fmt.Errorf("ftp backend not available")
-		}
-		return rawfs.NewFTPFSFunc(m.FTP.Host, m.FTP.Username, m.FTP.Password, m.FTP.BasePath, m.FTP.TLS)
-	case "sftp":
-		if m.SFTP == nil {
-			return nil, fmt.Errorf("sftp config is required")
-		}
-		if rawfs.NewSFTPFSFunc == nil {
-			return nil, fmt.Errorf("sftp backend not available")
-		}
-		return rawfs.NewSFTPFSFunc(m.SFTP.Host, m.SFTP.Username, m.SFTP.Password, m.SFTP.PrivateKey, m.SFTP.BasePath)
-	case "webdav":
-		if m.WebDAV == nil {
-			return nil, fmt.Errorf("webdav config is required")
-		}
-		if rawfs.NewWebDAVFSFunc == nil {
-			return nil, fmt.Errorf("webdav backend not available")
-		}
-		return rawfs.NewWebDAVFSFunc(m.WebDAV.URL, m.WebDAV.Username, m.WebDAV.Password, m.WebDAV.BasePath)
-	case "vercel-blob":
-		if m.VercelBlob == nil {
-			return nil, fmt.Errorf("vercelBlob config is required")
-		}
-		if rawfs.NewVercelBlobFSFunc == nil {
-			return nil, fmt.Errorf("vercel-blob backend not available")
-		}
-		return rawfs.NewVercelBlobFSFunc(m.VercelBlob.Token, m.VercelBlob.StoreID, m.VercelBlob.Prefix)
-	default:
-		return nil, fmt.Errorf("unknown mount type %q", mountType)
-	}
-}
-
-// BuildInitialRawHandler creates a rawHandler from DB settings.
-// It also creates the hook dispatcher and loads hooks from the database.
-func BuildInitialRawHandler(ctx context.Context, svc *service.Service) *RawHandler {
-	// Build mount entries from DB settings
-	var entries []mountEntry
+// BuildHookDispatcher creates the hook dispatcher and wires up the
+// config-data resolver. Hooks operate purely on configuration events
+// in this build — the rawfs/raw-mount references that used to feed
+// the resolver were extracted out of pika; PEM references that
+// pointed at raw mounts are no longer supported here.
+func BuildHookDispatcher(ctx context.Context, svc *service.Service) *hook.Dispatcher {
 	settings, err := svc.Settings(ctx)
 	if err != nil {
-		slog.Warn("could not load settings for raw mounts", "error", err)
-	} else if len(settings.RawMounts) > 0 {
-		dbEntries, dbErrs := BuildMountEntries(settings.RawMounts)
-		for _, err := range dbErrs {
-			slog.Warn("skipping invalid raw mount from settings", "error", err)
-		}
-		entries = dbEntries
+		slog.Warn("could not load settings for hook dispatcher", "error", err)
 	}
 
-	// Create and start the hook dispatcher
 	dispatcher := hook.NewDispatcher(256)
 	if settings != nil {
 		dispatcher.SetEventLogEnabled(settings.EventLogEnabled())
 	}
 	dispatcher.Start(ctx)
 
-	rh := NewRawHandler(entries, ctx, dispatcher)
-
-	// Set up the resolver so PEM references (raw://, config://) can be resolved
+	// Resolver: only `config://` references are resolvable now that
+	// raw mounts live in a different repo. Leftover `raw://...`
+	// references in existing hook configs pass through as inline
+	// PEM text and fail naturally if not valid.
 	resolver := hook.NewResolver(
-		// rawMounts provider: returns a map of mount prefix -> RawFS
-		func() map[string]rawfs.RawFS {
-			rh.mu.RLock()
-			defer rh.mu.RUnlock()
-			m := make(map[string]rawfs.RawFS, len(rh.mounts))
-			for _, me := range rh.mounts {
-				// Use the inner FS (unwrap the hook decorator) to avoid recursive events
-				m[me.Prefix] = hook.Inner(me.FS)
-			}
-			return m
-		},
-		// configData provider: reads config file data by key
 		func(ctx context.Context, key string) ([]byte, error) {
-			file, err := svc.File(ctx, key, 0) // version 0 = latest
+			file, err := svc.File(ctx, key, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -1106,182 +523,12 @@ func BuildInitialRawHandler(ctx context.Context, svc *service.Service) *RawHandl
 	)
 	dispatcher.SetResolver(resolver)
 
-	// Load hooks from settings (if any)
 	if settings != nil && len(settings.Hooks) > 0 {
 		dispatcher.UpdateHooks(settings.Hooks)
 	}
-
-	return rh
+	return dispatcher
 }
 
-// BuildFTPShares creates FTP share entries from the current settings, resolving
-// each path's mount prefix to the corresponding RawFS backend via the rawHandler.
-func BuildFTPShares(ctx context.Context, svc *service.Service, rh *RawHandler) []ftpserve.Share {
-	settings, err := svc.Settings(ctx)
-	if err != nil {
-		slog.Warn("could not load settings for FTP shares", "error", err)
-		return nil
-	}
-
-	rh.mu.RLock()
-	defer rh.mu.RUnlock()
-
-	// Build a mount lookup map
-	mountMap := make(map[string]rawfs.RawFS, len(rh.mounts))
-	for _, m := range rh.mounts {
-		mountMap[m.Prefix] = m.FS
-	}
-
-	var shares []ftpserve.Share
-	for _, s := range settings.FTPShares {
-		var sources []ftpserve.ShareSource
-		for _, p := range s.Paths {
-			// Parse "mount_prefix" or "mount_prefix/sub/path"
-			mountPrefix, subPath := parseMountPath(p)
-			fs, ok := mountMap[mountPrefix]
-			if !ok {
-				slog.Warn("FTP share path references unknown mount", "share", s.Name, "path", p, "mount", mountPrefix)
-				continue
-			}
-			sources = append(sources, ftpserve.ShareSource{
-				Mount: mountPrefix,
-				Path:  subPath,
-				FS:    fs,
-			})
-		}
-
-		if len(sources) == 0 {
-			slog.Warn("FTP share has no valid sources, skipping", "share", s.Name)
-			continue
-		}
-
-		shares = append(shares, ftpserve.Share{
-			Name:     s.Name,
-			Sources:  sources,
-			ReadOnly: s.ReadOnly,
-			Root:     s.Root,
-		})
-	}
-
-	return shares
-}
-
-// parseMountPath splits "mount_prefix/sub/path" into ("mount_prefix", "sub/path").
-func parseMountPath(p string) (string, string) {
-	p = strings.TrimPrefix(p, "/")
-	idx := strings.IndexByte(p, '/')
-	if idx < 0 {
-		return p, ""
-	}
-	return p[:idx], p[idx+1:]
-}
-
-// BuildFTPUsers creates FTP user entries from the current settings.
-func BuildFTPUsers(ctx context.Context, svc *service.Service) []ftpserve.User {
-	settings, err := svc.Settings(ctx)
-	if err != nil {
-		slog.Warn("could not load settings for FTP users", "error", err)
-		return nil
-	}
-
-	var users []ftpserve.User
-	for _, u := range settings.FTPUsers {
-		users = append(users, ftpserve.User{
-			Username:       u.Username,
-			Password:       u.Password,
-			Shares:         u.Shares,
-			AuthorizedKeys: u.AuthorizedKeys,
-			ReadOnly:       u.ReadOnly,
-		})
-	}
-
-	return users
-}
-
-// GetDispatcher returns the hook dispatcher from the rawHandler.
-func GetDispatcher(rh *RawHandler) *hook.Dispatcher {
-	return rh.Dispatcher()
-}
-
-// SetFTPServer stores the FTP server reference and its cancel func in the rawHandler.
-func SetFTPServer(rh *RawHandler, ftpSrv *ftpserve.Server, cancel context.CancelFunc) {
-	rh.mu.Lock()
-	rh.ftpServer = ftpSrv
-	rh.ftpCancel = cancel
-	rh.mu.Unlock()
-}
-
-// SetSFTPServer stores the SFTP server reference and its cancel func in the rawHandler.
-func SetSFTPServer(rh *RawHandler, sftpSrv *sftpserve.Server, cancel context.CancelFunc) {
-	rh.mu.Lock()
-	rh.sftpServer = sftpSrv
-	rh.sftpCancel = cancel
-	rh.mu.Unlock()
-}
-
-// SetTFTPServer stores the TFTP server reference and its cancel func in the rawHandler.
-func SetTFTPServer(rh *RawHandler, tftpSrv *tftpserve.Server, cancel context.CancelFunc) {
-	rh.mu.Lock()
-	rh.tftpServer = tftpSrv
-	rh.tftpCancel = cancel
-	rh.mu.Unlock()
-}
-
-// SetWebDAVServer stores the WebDAV server reference and its cancel func in the rawHandler.
-func SetWebDAVServer(rh *RawHandler, webdavSrv *webdavserve.Server, cancel context.CancelFunc) {
-	rh.mu.Lock()
-	rh.webdavServer = webdavSrv
-	rh.webdavCancel = cancel
-	rh.mu.Unlock()
-}
-
-// StopServeServers tears down every FTP/SFTP/TFTP/WebDAV listener
-// owned by the rawHandler in a deterministic order: cancel context
-// first to interrupt accept loops, then call Stop to release the
-// socket. Idempotent — calling Stop on a nil server is a no-op via
-// the nil guard. Intended for shutdown; the per-protocol reload
-// paths handle their own teardown when an operator flips the
-// enabled flag at runtime.
-func StopServeServers(rh *RawHandler) {
-	if rh == nil {
-		return
-	}
-	rh.mu.Lock()
-	ftpSrv, ftpCancel := rh.ftpServer, rh.ftpCancel
-	sftpSrv, sftpCancel := rh.sftpServer, rh.sftpCancel
-	tftpSrv, tftpCancel := rh.tftpServer, rh.tftpCancel
-	webdavSrv, webdavCancel := rh.webdavServer, rh.webdavCancel
-	rh.ftpServer, rh.ftpCancel = nil, nil
-	rh.sftpServer, rh.sftpCancel = nil, nil
-	rh.tftpServer, rh.tftpCancel = nil, nil
-	rh.webdavServer, rh.webdavCancel = nil, nil
-	rh.mu.Unlock()
-
-	if ftpCancel != nil {
-		ftpCancel()
-	}
-	if ftpSrv != nil {
-		ftpSrv.Stop()
-	}
-	if sftpCancel != nil {
-		sftpCancel()
-	}
-	if sftpSrv != nil {
-		sftpSrv.Stop()
-	}
-	if tftpCancel != nil {
-		tftpCancel()
-	}
-	if tftpSrv != nil {
-		tftpSrv.Stop()
-	}
-	if webdavCancel != nil {
-		webdavCancel()
-	}
-	if webdavSrv != nil {
-		webdavSrv.Stop()
-	}
-}
 
 func (a *api) listExternalPaths(c *ada.Context) error {
 	resourceName := c.Request.PathValue("name")

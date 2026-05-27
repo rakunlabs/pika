@@ -2,11 +2,10 @@
 
 A pika config file can pull values from elsewhere and merge them into the resolved output that consumers see. The merging happens at **read time**, so the source is always the live remote value — no caching, no copy-paste.
 
-Sources fall into three categories:
+Sources fall into two categories:
 
 1. **Internal files** — another pika config (or a specific variant of it).
-2. **Raw mounts** — a file from one of your configured [raw mounts](../raw-files).
-3. **External resources** — Vault, Kubernetes Secrets, Consul, etcd, AWS Secrets Manager / SSM, GCP Secret Manager, Azure Key Vault, or plain HTTP.
+2. **External resources** — Vault, Kubernetes Secrets, Consul, etcd, AWS Secrets Manager / SSM, GCP Secret Manager, Azure Key Vault, or plain HTTP.
 
 External resources are configured once under **Settings → External Resources** and then referenced by name from any file's inheritance chain.
 

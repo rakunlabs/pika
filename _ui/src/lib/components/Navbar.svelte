@@ -1,38 +1,23 @@
 <script lang="ts">
  import { link, router } from 'svelte-spa-router';
  import { appStore } from '@/lib/store/store.svelte';
-   import { Blocks, Settings, User, Users, LogOut, HardDrive, FileSliders, Lock, Globe, Network, Package } from 'lucide-svelte';
+    import { Blocks, Settings, User, Users, LogOut, FileSliders, Lock, Globe } from 'lucide-svelte';
  import ThemeSwitcher from '@/lib/components/ThemeSwitcher.svelte';
 
  const info = $derived(appStore.info);
  const identity = $derived(appStore.identity);
 
-   const hasRawMounts = $derived((info?.raw_mounts?.length ?? 0) > 0);
    // VaultEnabled is set by /api/v1/info from the server-side vault
    // coordinator. The /vault page renders an "unavailable" fallback
    // when this is false, but we hide the nav entry entirely so the
    // user isn't tempted to click a dead link.
    const vaultEnabled = $derived(info?.vault_enabled ?? false);
-   // ProxyEnabled mirrors vault_enabled — the deployment-wide
-   // feature flag set under Settings → Features. When off we hide
-   // the nav link so the surface looks like the feature simply
-   // doesn't exist on this build.
-   const proxyEnabled = $derived(info?.proxy_enabled ?? false);
-   // RegistryEnabled — same deployment-wide feature flag pattern.
-   // Hide the Registries nav link entirely when the operator has
-   // turned the artifact registry off; the page would 404 every
-   // API call anyway.
-   const registryEnabled = $derived(info?.registry_enabled ?? true);
 
   const navItems = $derived.by(() => {
   const items: { path: string; label: string; icon: typeof Settings }[] = [];
 
   if (appStore.hasPermission('files.read')) {
   items.push({ path: '/configurations', label: 'Configurations', icon: FileSliders });
-  }
-
-  if (hasRawMounts && appStore.hasPermission('raw.read')) {
-  items.push({ path: '/files', label: 'Files', icon: HardDrive });
   }
 
   // Personal vault is per-user; no capability gate (every logged-in
@@ -51,24 +36,6 @@
    if (appStore.hasPermission('external.read')) {
    items.push({ path: '/external', label: 'External', icon: Globe });
    }
-
-   // Proxy page: build custom HTTP listeners from a kaykay node
-    // graph. Gated on the deployment-wide feature flag + the
-    // dedicated proxy.read capability (proxy.manage is checked
-    // inside the page for write actions). Splitting from
-    // settings.manage means a teammate can be granted view+test
-    // without also unlocking auth, secrets, mounts etc.
-    if (proxyEnabled && appStore.hasPermission('proxy.read')) {
-    items.push({ path: '/proxy', label: 'Proxy', icon: Network });
-    }
-
-    // Registries page: artifact registry overview (Go modules, NPM
-    // packages, Docker / OCI images). Gated on registry.read; per-
-    // namespace edit / publish actions inside the page additionally
-    // require registry.admin / registry.write.
-    if (registryEnabled && appStore.hasPermission('registry.read')) {
-    items.push({ path: '/registries', label: 'Registries', icon: Package });
-    }
 
   // Settings is always visible: even users without settings.manage can
   // reach the About section. Individual sections gate themselves inside

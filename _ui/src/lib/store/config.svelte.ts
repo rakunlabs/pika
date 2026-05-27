@@ -714,85 +714,12 @@ function createConfigStore() {
         action: 'set',
         external: updatedSettings.external || {}
       };
-      // Include raw_mounts if present in the update
-      if (updatedSettings.raw_mounts !== undefined) {
-        body.raw_mounts = updatedSettings.raw_mounts;
-      }
       await axios.post('/api/v1/settings', body);
       settings = updatedSettings;
       addToast('Settings saved', 'success');
     } catch (error: any) {
       console.error('Failed to save settings:', error);
-      // Surface the backend's message instead of a generic toast.
-      // The server sends structured reasons that the user can act on,
-      // e.g. "settings: server is locked; cannot persist secret values"
-      // (encryption key not unlocked) or "external resource X: ..."
-      // (Provider.Validate rejection). Hiding those behind a generic
-      // "Failed to save settings" makes the SPA feel broken when the
-      // server is in fact reporting a precise, recoverable condition.
       const msg = error?.response?.data?.message || 'Failed to save settings';
-      addToast(msg, 'alert');
-      throw error;
-    }
-  }
-
-  async function saveFTPUsers(users: import('@/lib/types/config').FTPUserEntry[]): Promise<void> {
-    try {
-      await axios.post('/api/v1/settings', {
-        action: 'set',
-        ftp_users: users
-      });
-      if (settings) {
-        settings = { ...settings, ftp_users: users };
-      } else {
-        settings = { ftp_users: users };
-      }
-      addToast('Users saved', 'success');
-    } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to save users';
-      addToast(msg, 'alert');
-      throw error;
-    }
-  }
-
-  async function saveFTPShares(shares: import('@/lib/types/config').FTPShareEntry[]): Promise<void> {
-    try {
-      await axios.post('/api/v1/settings', {
-        action: 'set',
-        ftp_shares: shares
-      });
-      if (settings) {
-        settings = { ...settings, ftp_shares: shares };
-      } else {
-        settings = { ftp_shares: shares };
-      }
-      addToast('Shares saved', 'success');
-    } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to save shares';
-      addToast(msg, 'alert');
-      throw error;
-    }
-  }
-
-  async function saveServeSettings(patch: {
-    ftp_serve?: import('@/lib/types/config').FTPServeSettings,
-    sftp_serve?: import('@/lib/types/config').SFTPServeSettings,
-    tftp_serve?: import('@/lib/types/config').TFTPServeSettings,
-    webdav_serve?: import('@/lib/types/config').WebDAVServeSettings,
-  }): Promise<void> {
-    try {
-      await axios.post('/api/v1/settings', {
-        action: 'set',
-        ...patch
-      });
-      if (settings) {
-        settings = { ...settings, ...patch };
-      } else {
-        settings = { ...patch };
-      }
-      addToast('Server settings saved.', 'success');
-    } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to save server settings';
       addToast(msg, 'alert');
       throw error;
     }
@@ -827,86 +754,6 @@ function createConfigStore() {
     } catch (error: any) {
       const msg = error.response?.data?.message || 'Failed to save vault settings';
       addToast(msg, 'alert');
-      throw error;
-    }
-  }
-
-  // saveProxySettings mirrors saveVaultSettings: deployment-wide
-  // feature toggle that re-fetches /api/v1/info so the nav link
-  // appears or disappears immediately.
-  async function saveProxySettings(
-    patch: import('@/lib/types/config').ProxySettings,
-  ): Promise<void> {
-    try {
-      await axios.post('/api/v1/settings', {
-        action: 'set',
-        proxy: patch,
-      });
-      if (settings) {
-        settings = { ...settings, proxy: patch };
-      } else {
-        settings = { proxy: patch };
-      }
-      await appStore.loadInfo();
-      addToast(
-        patch.disabled
-          ? 'Proxy feature disabled for this deployment.'
-          : 'Proxy feature enabled for this deployment.',
-        'success',
-      );
-    } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to save proxy feature flag';
-      addToast(msg, 'alert');
-      throw error;
-    }
-  }
-
-  // saveRegistrySettings replaces the entire registry tree
-  // (namespaces + feature flag). The server validates the full tree
-  // before persisting; callers should fetch+mutate+post the
-  // whole object rather than building partial patches, because
-  // missing namespaces would be interpreted as a delete.
-  //
-  // This is the workhorse for the Registries page (add/edit/delete
-  // namespace + repository) AND the feature toggle in Settings →
-  // Features (which calls it with the existing namespaces array
-  // and only flips disabled).
-  async function saveRegistrySettings(
-    patch: import('@/lib/types/config').RegistrySettings,
-  ): Promise<void> {
-    try {
-      await axios.post('/api/v1/settings', {
-        action: 'set',
-        registry: patch,
-      });
-      if (settings) {
-        settings = { ...settings, registry: patch };
-      } else {
-        settings = { registry: patch };
-      }
-      // Refresh /api/v1/info so the navbar registry_enabled gate
-      // updates immediately when this call flipped the flag.
-      await appStore.loadInfo();
-    } catch (error: any) {
-      // Surface the server-side detail when we can. Axios bundles
-      // the JSON error body at error.response.data; the API uses
-      // {error: "..."} for service errors, sometimes {message: "..."}
-      // for older handlers, and may also stuff the wrapped Go
-      // error chain into the body verbatim.
-      const data = error?.response?.data;
-      const detail =
-        (typeof data === 'string' && data) ||
-        data?.error ||
-        data?.message ||
-        error?.message ||
-        'unknown error';
-      const status = error?.response?.status ? ` (HTTP ${error.response.status})` : '';
-      addToast(`Failed to save registry settings${status}: ${detail}`, 'alert');
-      // Also log the full error to the console so the operator can
-      // grab the stack + response body from devtools when the
-      // toast string is too terse.
-      // eslint-disable-next-line no-console
-      console.error('saveRegistrySettings failed', error);
       throw error;
     }
   }
@@ -989,24 +836,6 @@ function createConfigStore() {
     return response.data;
   }
 
-  async function saveRawMounts(mounts: import('@/lib/types/config').RawMountEntry[]): Promise<void> {
-    try {
-      await axios.post('/api/v1/settings', {
-        action: 'set',
-        raw_mounts: mounts
-      });
-      if (settings) {
-        settings = { ...settings, raw_mounts: mounts };
-      } else {
-        settings = { raw_mounts: mounts };
-      }
-      addToast('Raw mounts saved', 'success');
-    } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to save raw mounts';
-      addToast(msg, 'alert');
-      throw error;
-    }
-  }
 
   async function listExternalPaths(resourceName: string, prefix: string = ''): Promise<string[]> {
     try {
@@ -1489,13 +1318,7 @@ function createConfigStore() {
     // Settings operations
     loadSettings,
     saveSettings,
-    saveRawMounts,
-    saveFTPShares,
-    saveFTPUsers,
-    saveServeSettings,
     saveVaultSettings,
-    saveProxySettings,
-    saveRegistrySettings,
     saveHooks,
     saveEventLogSettings,
     saveUserSync,

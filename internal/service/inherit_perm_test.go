@@ -137,29 +137,3 @@ func TestConsumerDataPathSkipsCapCheck(t *testing.T) {
 		t.Fatalf("consumer-style render must succeed without caps in ctx; got %v", err)
 	}
 }
-
-// TestRenderRequiresRawReadForMountInherit mirrors the external test
-// for the mount branch. raw.read is the matching capability —
-// inherits from a raw mount must surface ErrForbidden when missing.
-func TestRenderRequiresRawReadForMountInherit(t *testing.T) {
-	svc := newInheritTestService(t)
-	// We don't need an actual mount on disk: the cap gate runs BEFORE
-	// fetchRawMountConfig, so the test never reaches the filesystem.
-	ctx := service.WithCapabilities(t.Context(), []string{service.CapFilesRead})
-
-	meta := &service.FileMeta{
-		Format: "json",
-		Inherits: []service.InheritEntry{{
-			Mount: "some-mount",
-			Path:  "any/file.yaml",
-		}},
-	}
-
-	_, err := svc.RenderFile(ctx, "child.json", "", "{}", meta)
-	if err == nil {
-		t.Fatalf("RenderFile must fail without raw.read; got nil error")
-	}
-	if !errors.Is(err, service.ErrForbidden) {
-		t.Fatalf("error must wrap ErrForbidden; got %v", err)
-	}
-}
