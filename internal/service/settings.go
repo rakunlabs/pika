@@ -142,10 +142,18 @@ type Settings struct {
 	WebDAVServe        *WebDAVServeSettings `json:"webdav_serve,omitempty"`
 	EventLog           *EventLogSettings    `json:"event_log,omitempty"`
 	Hooks              []hook.Hook          `json:"hooks,omitempty"`
-	// ProxyServers is the operator-built set of public listeners.
-	// Replaces the previous PublicPort + Compat fields. Each entry
-	// is a full kaykay graph plus a denormalized pipeline meta blob
-	// the runner uses for change detection.
+	// ProxyListeners is the operator-built set of bind points. Each
+	// entry owns one socket (HTTP or TCP); graphs in ProxyServers
+	// attach to a listener via ListenerID. Rows persisted before
+	// the listener split have an empty ProxyListeners slice — boot
+	// synthesizes a hidden listener per legacy Host:Port pair so
+	// existing graphs keep running without manual migration.
+	ProxyListeners []ProxyListener `json:"proxy_listeners,omitempty"`
+	// ProxyServers is the operator-built set of HTTP/TCP graphs.
+	// Each entry is a full kaykay graph plus a denormalized pipeline
+	// meta blob the runner uses for change detection. Graphs bind
+	// to listeners via ListenerID; the legacy Host/Port fields are
+	// kept on the struct for one release for backward compatibility.
 	ProxyServers        []ProxyServer                `json:"proxy_servers,omitempty"`
 	ExternalPermissions *ExternalPermissionsSettings `json:"external_permissions,omitempty"`
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
@@ -307,6 +315,10 @@ type PatchSettings struct {
 	WebDAVServe *WebDAVServeSettings         `json:"webdav_serve,omitempty"`
 	EventLog    *EventLogSettings            `json:"event_log,omitempty"`
 	Hooks       *[]hook.Hook                 `json:"hooks,omitempty"` // pointer to distinguish nil from empty
+	// ProxyListeners is patched as a whole list (nil = no change,
+	// empty slice = clear all). Same pointer-to-slice idiom as
+	// ProxyServers.
+	ProxyListeners *[]ProxyListener `json:"proxy_listeners,omitempty"`
 	// ProxyServers is patched as a whole list (nil = no change, empty
 	// slice = clear all). Pointer-to-slice mirrors how Hooks / RawMounts
 	// distinguish "not provided" from "deliberately empty".
@@ -428,6 +440,11 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 	// Handle hooks update (if provided)
 	if patch.Hooks != nil {
 		settings.Hooks = *patch.Hooks
+	}
+
+	// Handle proxy listeners update (if provided)
+	if patch.ProxyListeners != nil {
+		settings.ProxyListeners = *patch.ProxyListeners
 	}
 
 	// Handle proxy servers update (if provided)

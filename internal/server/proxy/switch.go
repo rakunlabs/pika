@@ -96,6 +96,18 @@ func DefaultSwitches() map[string]NodeSpec {
 			Description: "Route by host, source IP, path, method, header or query parameter. Rules are tried top-down; the first match wins; the mandatory 'default' branch handles everything else.",
 			Build:       buildSwitch,
 		},
+		"js-branch": {
+			Kind:    KindSwitch,
+			Subtype: "js-branch",
+			Label:   "JS branch (goja)",
+			// Note for readers familiar with chore: chore evaluates ifCase
+			// against a stateful input pool and waits for every active
+			// upstream input before firing. Pika proxy is stateless and
+			// per-request: each branch is its own sub-pipeline, the chosen
+			// branch runs in isolation, and there is no fan-in waiting.
+			Description: "Run user JavaScript and pick an output handle with ctx.choose(\"id\"). Each handle is an operator-defined branch wired on the canvas; the mandatory 'default' branch fires when the script chooses nothing or an unknown id. Branches do not fan-in — each one runs as its own sub-pipeline.",
+			Build:       buildJSBranch,
+		},
 	}
 }
 

@@ -322,3 +322,47 @@ func TestClient_SecretSchemeRejected(t *testing.T) {
 		t.Fatalf("expected secret:// rejection, got %v", err)
 	}
 }
+
+func TestProbe_AuthChallengeIsReachable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/" {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		w.Header().Set("WWW-Authenticate", `Bearer realm="registry"`)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("auth required"))
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient(Config{BaseURL: srv.URL})
+	health := Probe(context.Background(), c, "/v2/")
+	if !health.OK {
+		t.Fatalf("expected reachable auth challenge, got %+v", health)
+	}
+	if health.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status %d", health.StatusCode)
+	}
+	if !strings.Contains(health.BodyPreview, "auth required") {
+		t.Fatalf("preview %q", health.BodyPreview)
+	}
+}
+
+func TestProbe_ServerErrorKeepsStatusAndPreview(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("bad gateway from proxy"))
+	}))
+	defer srv.Close()
+
+	c, _ := NewClient(Config{BaseURL: srv.URL})
+	health := Probe(context.Background(), c, "/-/ping")
+	if health.OK {
+		t.Fatalf("expected failed probe, got %+v", health)
+	}
+	if health.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status %d", health.StatusCode)
+	}
+	if !strings.Contains(health.BodyPreview, "bad gateway") {
+		t.Fatalf("preview %q", health.BodyPreview)
+	}
+}

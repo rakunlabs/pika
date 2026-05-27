@@ -139,6 +139,13 @@
     }
   }
 
+  function handleGoTemplateChange(e: Event) {
+    const target = e.target as HTMLInputElement;
+    if (activeTab) {
+      configStore.updateTabMeta(activeTab.id, { go_template: target.checked || undefined });
+    }
+  }
+
   // ── Inheritance handlers ──
   // openInheritDialog with index=null adds a new entry; with a number it
   // edits the existing one. The dialog hydrates from editingInheritEntry,
@@ -292,6 +299,28 @@
             <option value={format}>{format.toUpperCase()}</option>
           {/each}
         </select>
+      </div>
+
+      <!-- Go Template Rendering -->
+      <div class="mb-4">
+        <label class="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 dark:text-warm-300 mb-1.5 uppercase tracking-wide">
+          <span class="flex items-center text-gray-400 dark:text-warm-400"><FileText size={12} /></span>
+          Template
+        </label>
+        <label class="{cardClass} flex items-start gap-2 px-2.5 py-2 cursor-pointer hover:border-slate-300 dark:hover:border-warm-600 transition-colors">
+          <input
+            type="checkbox"
+            class="mt-0.5 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 cursor-pointer"
+            checked={activeTab.meta.go_template === true}
+            onchange={handleGoTemplateChange}
+          />
+          <span class="flex-1 min-w-0">
+            <span class="block text-xs font-medium text-slate-700 dark:text-warm-100">Go template</span>
+            <span class="block mt-0.5 text-[10px] text-slate-400 dark:text-warm-400 leading-relaxed">
+              Runs mugo templates before parsing and inheritance. Default is off; shell, filesystem and env helpers are disabled server-side.
+            </span>
+          </span>
+        </label>
       </div>
 
       <!-- Version History -->

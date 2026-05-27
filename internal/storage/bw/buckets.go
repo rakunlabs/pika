@@ -104,11 +104,15 @@ func (s *Storage) registerBuckets() error {
 		return fmt.Errorf("bw register %s: %w", bucketFolders, err)
 	}
 
+	// Version bumps for the files bucket:
+	//
+	//   v1 — initial schema.
+	//   v2 — added GoTemplate bool field for per-file config template rendering.
 	if s.files, err = bw.RegisterBucket[fileRow](s.db, bucketFiles,
 		bw.WithKeyFn[fileRow](func(r *fileRow) ([]byte, error) {
 			return fileRowKey(r.Path, r.Version), nil
 		}),
-		bw.WithVersion[fileRow](1),
+		bw.WithVersion[fileRow](2),
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketFiles, err)
 	}
@@ -129,8 +133,15 @@ func (s *Storage) registerBuckets() error {
 	//        enabled, no namespaces configured yet". The boot-time
 	//        EnsureDefaultRegistryNamespace path materialises the
 	//        default tree on the next save.
+	//   v3 — added ProxyListeners []service.ProxyListener field
+	//        and ProxyServer.ListenerID / HostMatch (listener split).
+	//        Untagged new field; existing rows decode with
+	//        ProxyListeners == nil. The proxy manager's
+	//        synthesizeLegacyListeners path runs on first reconcile
+	//        and rewrites every legacy ProxyServer to point at a
+	//        synthesized listener that preserves its Host:Port.
 	if s.settings, err = bw.RegisterBucket[settingsRow](s.db, bucketSettings,
-		bw.WithVersion[settingsRow](2),
+		bw.WithVersion[settingsRow](3),
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketSettings, err)
 	}

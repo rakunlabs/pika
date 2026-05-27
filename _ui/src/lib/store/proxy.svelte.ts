@@ -9,7 +9,7 @@
 
 import axios from 'axios';
 import { addToast } from './toast.svelte';
-import type { ProxyServer } from '@/lib/types/config';
+import type { ProxyServer, ProxyListener } from '@/lib/types/config';
 
 // CatalogSpec mirrors proxy.NodeSpec on the backend. Loose typing
 // because the schema field is opaque JSON the UI feeds into a
@@ -41,11 +41,22 @@ export interface ProxyCatalog {
 
 export interface ProxyInstanceStatus {
   id: string;
+  listener_id?: string;
   running: boolean;
   addr?: string;
   hash?: string;
   started?: string;
   last_err?: string;
+}
+
+export interface ProxyListenerStatus {
+  id: string;
+  running: boolean;
+  addr?: string;
+  protocol?: 'http' | 'tcp';
+  started?: string;
+  last_err?: string;
+  graph_ids?: string[];
 }
 
 export interface ProxyCompileError {
@@ -74,8 +85,10 @@ export interface ProxyTestResponse {
 }
 
 let servers = $state<ProxyServer[]>([]);
+let listeners = $state<ProxyListener[]>([]);
 let catalog = $state<ProxyCatalog | null>(null);
 let status = $state<ProxyInstanceStatus[]>([]);
+let listenersStatus = $state<ProxyListenerStatus[]>([]);
 let loaded = $state(false);
 
 async function load(): Promise<void> {
@@ -84,13 +97,21 @@ async function load(): Promise<void> {
   // a permanently-spinning "Loading…" palette when one of the
   // three calls 404'd or 403'd. Each slot falls back to a sane
   // default and the next interaction can retry.
-  const [listRes, catRes, statusRes] = await Promise.allSettled([
+  const [listRes, catRes, statusRes, lnRes, lnStatusRes] = await Promise.allSettled([
     axios.get<ProxyServer[]>('/api/v1/proxy'),
     axios.get<ProxyCatalog>('/api/v1/proxy/catalog'),
     axios.get<ProxyInstanceStatus[]>('/api/v1/proxy/status'),
+    axios.get<ProxyListener[]>('/api/v1/proxy/listeners'),
+    axios.get<ProxyListenerStatus[]>('/api/v1/proxy/listeners/status'),
   ]);
   if (listRes.status === 'fulfilled') {
     servers = listRes.value.data ?? [];
+  }
+  if (lnRes.status === 'fulfilled') {
+    listeners = lnRes.value.data ?? [];
+  }
+  if (lnStatusRes.status === 'fulfilled') {
+    listenersStatus = lnStatusRes.value.data ?? [];
   }
   if (catRes.status === 'fulfilled') {
     // Defensive normalize: a JSON body of `null` would otherwise
@@ -122,11 +143,50 @@ async function load(): Promise<void> {
 
 async function refreshStatus(): Promise<void> {
   try {
-    const res = await axios.get<ProxyInstanceStatus[]>('/api/v1/proxy/status');
-    status = res.data ?? [];
+    const [s, ls] = await Promise.allSettled([
+      axios.get<ProxyInstanceStatus[]>('/api/v1/proxy/status'),
+      axios.get<ProxyListenerStatus[]>('/api/v1/proxy/listeners/status'),
+    ]);
+    if (s.status === 'fulfilled') status = s.value.data ?? [];
+    if (ls.status === 'fulfilled') listenersStatus = ls.value.data ?? [];
   } catch {
     // Polling failures shouldn't toast; the UI shows a stale state
     // badge instead so transient blips don't spam the operator.
+  }
+}
+
+async function createListener(ln: ProxyListener): Promise<ProxyListener> {
+  try {
+    const res = await axios.post<ProxyListener>('/api/v1/proxy/listeners', ln);
+    listeners = [...listeners, res.data];
+    addToast('Listener created.', 'success');
+    return res.data;
+  } catch (error: any) {
+    surface(error, 'create listener');
+    throw error;
+  }
+}
+
+async function updateListener(ln: ProxyListener): Promise<ProxyListener> {
+  try {
+    const res = await axios.put<ProxyListener>(`/api/v1/proxy/listeners/${encodeURIComponent(ln.id)}`, ln);
+    listeners = listeners.map(l => (l.id === ln.id ? res.data : l));
+    addToast('Listener saved.', 'success');
+    return res.data;
+  } catch (error: any) {
+    surface(error, 'save listener');
+    throw error;
+  }
+}
+
+async function removeListener(id: string): Promise<void> {
+  try {
+    await axios.delete(`/api/v1/proxy/listeners/${encodeURIComponent(id)}`);
+    listeners = listeners.filter(l => l.id !== id);
+    addToast('Listener deleted.', 'success');
+  } catch (error: any) {
+    surface(error, 'delete listener');
+    throw error;
   }
 }
 
@@ -210,8 +270,10 @@ function surface(error: any, action: string) {
 
 export const proxyStore = {
   get servers() { return servers; },
+  get listeners() { return listeners; },
   get catalog() { return catalog; },
   get status() { return status; },
+  get listenersStatus() { return listenersStatus; },
   get loaded() { return loaded; },
   load,
   refreshStatus,
@@ -220,4 +282,7 @@ export const proxyStore = {
   remove,
   validate,
   runTest,
+  createListener,
+  updateListener,
+  removeListener,
 };

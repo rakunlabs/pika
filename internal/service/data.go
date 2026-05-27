@@ -37,6 +37,13 @@ func (s *Service) getDataForFile(ctx context.Context, filePath string, versionSt
 
 	resolved := file.Data
 	format := file.Meta.Format
+	if resolved, err = renderConfigTemplate(resolved, filePath, "", format, &file.Meta); err != nil {
+		return &DataResult{
+			Data:   file.Data,
+			Format: format,
+			Error:  err.Error(),
+		}, nil
+	}
 	needsMerge := len(file.Meta.Inherits) > 0
 
 	var convError string
@@ -93,6 +100,13 @@ func (s *Service) RenderFile(ctx context.Context, filePath string, variationKey 
 	format := "json"
 	if meta != nil && meta.Format != "" {
 		format = meta.Format
+	}
+	var err error
+	if currentData, err = renderConfigTemplate(currentData, filePath, variationKey, format, meta); err != nil {
+		return &RenderResult{
+			Data:  base64.StdEncoding.EncodeToString([]byte(content)),
+			Error: err.Error(),
+		}, nil
 	}
 
 	// Convert content to JSON for merging (if it's YAML/TOML)
@@ -218,6 +232,9 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 				sourceData = srcFile.Data
 				meta := srcFile.Meta
 				sourceMeta = &meta
+				if sourceData, err = renderConfigTemplate(sourceData, entry.Source, "", sourceMeta.Format, sourceMeta); err != nil {
+					err = fmt.Errorf("rendering template from %q: %w", sourceName, err)
+				}
 			}
 		}
 

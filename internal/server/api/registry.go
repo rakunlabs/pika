@@ -841,35 +841,38 @@ type dockerRepoEntry struct {
 	Tags []dockerTagSummary `json:"tags"`
 }
 
-// runRegistryUpstreamProbe runs a connectivity check against a
-// Remote registry's upstream. URL: POST /api/v1/registries/{type}/{ns}/{repo}/test-upstream.
+// runRegistryUpstreamProbeFor returns a typed route handler that runs
+// a connectivity check against a Remote registry's upstream. URL:
+// POST /api/v1/registries/{type}/{ns}/{repo}/test-upstream.
 // Gated on CapRegistryAdmin because the probe uses the registry's
 // real auth credentials.
 //
 // Local and Virtual registries return 400 ("not a remote") — the
 // UI hides the button for them.
-func (a *api) runRegistryUpstreamProbe(c *ada.Context) error {
-	reg, ns, repo, err := a.resolveRegistry(c, "")
-	if err != nil {
-		return err
+func (a *api) runRegistryUpstreamProbeFor(expectedType string) func(*ada.Context) error {
+	return func(c *ada.Context) error {
+		reg, ns, repo, err := a.resolveRegistry(c, expectedType)
+		if err != nil {
+			return err
+		}
+		prober, ok := reg.(registry.UpstreamProber)
+		if !ok {
+			return fmt.Errorf("upstream probe not supported for %s/%s (kind=%s): %w",
+				ns, repo, reg.Kind(), service.ErrBadRequest)
+		}
+		// Bound the probe by a tight timeout so a hanging upstream
+		// doesn't block the admin connection.
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+		defer cancel()
+		result, err := prober.ProbeUpstream(ctx)
+		if err != nil {
+			// The Probe helper folds protocol-level errors into the
+			// UpstreamHealth struct; a non-nil error here means a
+			// genuine internal failure (e.g. context cancellation).
+			return fmt.Errorf("probe: %w", err)
+		}
+		return c.SetStatus(http.StatusOK).SendJSON(result)
 	}
-	prober, ok := reg.(registry.UpstreamProber)
-	if !ok {
-		return fmt.Errorf("upstream probe not supported for %s/%s (kind=%s): %w",
-			ns, repo, reg.Kind(), service.ErrBadRequest)
-	}
-	// Bound the probe by a tight timeout so a hanging upstream
-	// doesn't block the admin connection.
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
-	defer cancel()
-	result, err := prober.ProbeUpstream(ctx)
-	if err != nil {
-		// The Probe helper folds protocol-level errors into the
-		// UpstreamHealth struct; a non-nil error here means a
-		// genuine internal failure (e.g. context cancellation).
-		return fmt.Errorf("probe: %w", err)
-	}
-	return c.SetStatus(http.StatusOK).SendJSON(result)
 }
 
 // runDockerGC triggers a mark-and-sweep garbage collection pass
@@ -890,32 +893,36 @@ type gcRunRequest struct {
 	AbandonedUploadMaxAgeSeconds *int64 `json:"abandoned_upload_max_age_seconds"`
 }
 
-// getRegistryStats returns a snapshot of on-disk counts for one
-// registry. URL: GET /api/v1/registries/{type}/{ns}/{repo}/stats.
+// getRegistryStatsFor returns a typed route handler for a snapshot of
+// on-disk counts for one registry. URL:
+// GET /api/v1/registries/{type}/{ns}/{repo}/stats.
 // Gated on CapRegistryRead (browsing is enough; no destructive
 // action involved). Walks the underlying storage each call rather
 // than maintaining persistent counters — see registry.Stats godoc.
-func (a *api) getRegistryStats(c *ada.Context) error {
-	reg, _, _, err := a.resolveRegistry(c, "")
-	if err != nil {
-		return err
+func (a *api) getRegistryStatsFor(expectedType string) func(*ada.Context) error {
+	return func(c *ada.Context) error {
+		reg, _, _, err := a.resolveRegistry(c, expectedType)
+		if err != nil {
+			return err
+		}
+		provider, ok := reg.(registry.StatsProvider)
+		if !ok {
+			// Virtual repos delegate to members; report an empty
+			// snapshot rather than erroring so the UI can render
+			// "stats not available" gracefully.
+			return c.SetStatus(http.StatusOK).SendJSON(registry.Stats{})
+		}
+		stats, err := provider.Stats(c.Request.Context())
+		if err != nil {
+			return fmt.Errorf("stats: %w", err)
+		}
+		return c.SetStatus(http.StatusOK).SendJSON(stats)
 	}
-	provider, ok := reg.(registry.StatsProvider)
-	if !ok {
-		// Virtual repos delegate to members; report an empty
-		// snapshot rather than erroring so the UI can render
-		// "stats not available" gracefully.
-		return c.SetStatus(http.StatusOK).SendJSON(registry.Stats{})
-	}
-	stats, err := provider.Stats(c.Request.Context())
-	if err != nil {
-		return fmt.Errorf("stats: %w", err)
-	}
-	return c.SetStatus(http.StatusOK).SendJSON(stats)
 }
 
-// runRegistryPurge invalidates the on-disk cache for a Remote
-// registry. URL: POST /api/v1/registries/{type}/{ns}/{repo}/purge.
+// runRegistryPurgeFor returns a typed route handler that invalidates the
+// on-disk cache for a Remote registry. URL:
+// POST /api/v1/registries/{type}/{ns}/{repo}/purge.
 //
 // Body (optional):
 //
@@ -933,33 +940,35 @@ type purgeRequest struct {
 	All bool `json:"all"`
 }
 
-func (a *api) runRegistryPurge(c *ada.Context) error {
-	reg, ns, repo, err := a.resolveRegistry(c, "")
-	if err != nil {
-		return err
-	}
-	purger, ok := reg.(registry.CachePurger)
-	if !ok {
-		return fmt.Errorf("cache purge not supported for %s/%s (kind=%s): %w", ns, repo, reg.Kind(), service.ErrBadRequest)
-	}
+func (a *api) runRegistryPurgeFor(expectedType string) func(*ada.Context) error {
+	return func(c *ada.Context) error {
+		reg, ns, repo, err := a.resolveRegistry(c, expectedType)
+		if err != nil {
+			return err
+		}
+		purger, ok := reg.(registry.CachePurger)
+		if !ok {
+			return fmt.Errorf("cache purge not supported for %s/%s (kind=%s): %w", ns, repo, reg.Kind(), service.ErrBadRequest)
+		}
 
-	req := purgeRequest{}
-	if c.Request.ContentLength > 0 {
-		_ = json.NewDecoder(c.Request.Body).Decode(&req)
+		req := purgeRequest{}
+		if c.Request.ContentLength > 0 {
+			_ = json.NewDecoder(c.Request.Body).Decode(&req)
+		}
+		stats, err := purger.PurgeCache(c.Request.Context(), registry.PurgeOptions{All: req.All})
+		if err != nil {
+			return fmt.Errorf("purge: %w", err)
+		}
+		// Semantic audit hook: surface the purge so operators can log it.
+		a.emitRegistryEvent(hook.Event{
+			Type:     hook.EventRegistryCachePurged,
+			Mount:    ns,
+			Path:     repo,
+			Protocol: "registry-" + reg.Type(),
+			Size:     stats.PurgedBytes,
+		})
+		return c.SetStatus(http.StatusOK).SendJSON(stats)
 	}
-	stats, err := purger.PurgeCache(c.Request.Context(), registry.PurgeOptions{All: req.All})
-	if err != nil {
-		return fmt.Errorf("purge: %w", err)
-	}
-	// Semantic audit hook: surface the purge so operators can log it.
-	a.emitRegistryEvent(hook.Event{
-		Type:     hook.EventRegistryCachePurged,
-		Mount:    ns,
-		Path:     repo,
-		Protocol: "registry-" + reg.Type(),
-		Size:     stats.PurgedBytes,
-	})
-	return c.SetStatus(http.StatusOK).SendJSON(stats)
 }
 
 func (a *api) runDockerGC(c *ada.Context) error {

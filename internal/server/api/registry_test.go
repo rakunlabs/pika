@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/rakunlabs/ada"
@@ -24,6 +25,61 @@ func TestHandleRegistersRoutesWithoutGreedyPanic(t *testing.T) {
 
 	if err := Handle(ada.NewMux(), ada.NewMux(), ada.NewMux(), service.New(store), Info{}, nil, nil, rh, nil, nil, nil); err != nil {
 		t.Fatalf("Handle: %v", err)
+	}
+}
+
+func TestRegistryAdminActionRoutesDoNotFallThroughToSPAFallback(t *testing.T) {
+	store, err := bwstore.New(t.Context(), &bwstore.Config{InMemory: true})
+	if err != nil {
+		t.Fatalf("bw.New: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	rh := NewRawHandler(nil, ctx, nil)
+
+	server := ada.New()
+	mData := server.Group("")
+	m := server.Group("")
+	mAuth := server.Group("")
+	if err := Handle(m, mData, mAuth, service.New(store), Info{}, nil, nil, rh, nil, nil, nil); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	mAuth.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<html>pika</html>"))
+	}))
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		cap    string
+	}{
+		{"test upstream", http.MethodPost, "/api/v1/registries/npm/default/npm/test-upstream", service.CapRegistryAdmin},
+		{"stats", http.MethodGet, "/api/v1/registries/npm/default/npm/stats", service.CapRegistryRead},
+		{"purge", http.MethodPost, "/api/v1/registries/npm/default/npm/purge", service.CapRegistryAdmin},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req = req.WithContext(service.WithCapabilities(req.Context(), []string{tc.cap}))
+			rec := httptest.NewRecorder()
+			server.ServeHTTP(rec, req)
+
+			if rec.Code == http.StatusOK && strings.Contains(rec.Body.String(), "<html>") {
+				t.Fatalf("route fell through to SPA fallback: status=%d body=%q", rec.Code, rec.Body.String())
+			}
+			if ct := rec.Header().Get("Content-Type"); strings.Contains(ct, "text/html") {
+				t.Fatalf("route returned HTML fallback content-type %q", ct)
+			}
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want %d (registry manager intentionally nil)", rec.Code, http.StatusNotFound)
+			}
+		})
 	}
 }
 

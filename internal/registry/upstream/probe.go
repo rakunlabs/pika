@@ -2,7 +2,8 @@ package upstream
 
 import (
 	"context"
-	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -22,52 +23,53 @@ import (
 //   - Go      → "" (root) or "/" — proxy.golang.org returns 200
 //   - NPM     → "/-/ping" — npmjs returns 200, others may 404
 //   - Docker  → "/v2/" — every Docker registry advertises the
-//                 challenge here
+//     challenge here
 //   - Helm    → "/index.yaml"
 //
-// A non-2xx upstream response is NOT considered a failure here —
-// we surface the status code and let the operator decide. The
-// only outcomes that flip OK=false are: request didn't go out
-// (network / DNS / TLS / auth) or status >= 500.
-func Probe(ctx context.Context, c *Client, path string) registry.UpstreamHealth {
-	out := registry.UpstreamHealth{}
+// A non-2xx upstream response is NOT considered a request failure here —
+// we surface the status code and let the operator decide. The only
+// outcomes that flip OK=false are: request didn't go out (network / DNS /
+// TLS / auth) or status >= 500.
+func Probe(ctx context.Context, c *Client, path string) (out registry.UpstreamHealth) {
 	if c == nil {
 		out.Error = "no upstream client configured"
 		return out
 	}
 	out.URL = c.resolveURL(path)
 	start := time.Now()
-	resp, err := c.Get(ctx, path)
-	out.LatencyMS = time.Since(start).Milliseconds()
+	defer func() { out.LatencyMS = time.Since(start).Milliseconds() }()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, out.URL, nil)
 	if err != nil {
 		out.Error = err.Error()
-		// Distinguish transient (server side) vs. client side
-		// (probably auth / wrong URL). Either way OK=false; the
-		// status code is what tells them apart in the response.
-		if errors.Is(err, ErrNotFound) {
-			out.StatusCode = 404
-			out.OK = true // upstream is reachable, just doesn't have this path
-		}
+		return out
+	}
+	if err := c.applyAuth(ctx, req); err != nil {
+		out.Error = "auth: " + err.Error()
+		return out
+	}
+
+	// Probe intentionally bypasses Client.Get: normal registry reads turn
+	// 401/403/5xx responses into typed errors and close the body, while the
+	// admin probe needs the raw status code and a small diagnostic preview.
+	resp, err := c.httpc.Do(req)
+	if err != nil {
+		out.Error = err.Error()
 		return out
 	}
 	defer resp.Body.Close()
 	out.StatusCode = resp.StatusCode
-	// Read up to 256 bytes for the preview.
+
 	const previewMax = 256
-	buf := make([]byte, 0, previewMax)
-	chunk := make([]byte, previewMax)
-	for len(buf) < previewMax {
-		n, err := resp.Body.Read(chunk[:previewMax-len(buf)])
-		if n > 0 {
-			buf = append(buf, chunk[:n]...)
-		}
-		if err != nil {
-			break
+	buf, _ := io.ReadAll(io.LimitReader(resp.Body, previewMax))
+	out.BodyPreview = sanitisePreview(string(buf))
+	out.OK = resp.StatusCode >= 200 && resp.StatusCode < 500
+	if !out.OK {
+		out.Error = http.StatusText(resp.StatusCode)
+		if out.Error == "" {
+			out.Error = "upstream returned status"
 		}
 	}
-	out.BodyPreview = sanitisePreview(string(buf))
-	// 2xx & 3xx = upstream reachable, mark OK.
-	out.OK = resp.StatusCode >= 200 && resp.StatusCode < 500
 	return out
 }
 

@@ -169,6 +169,20 @@ func DefaultMiddlewares() map[string]NodeSpec {
 			Description: "Buffer the downstream response and rewrite status, headers, or body before sending. Supports text substitution and template-based body replacement.",
 			Build:       adaptMW(buildResponseRewriteMW),
 		},
+		{
+			Kind:        KindMiddleware,
+			Subtype:     "template-transform",
+			Label:       "Template transform",
+			Description: "Render request/response body and headers with Go templates (mugo). Ported from chore's template node into the proxy middleware shape.",
+			Build:       adaptMW(buildTemplateTransformMW),
+		},
+		{
+			Kind:        KindMiddleware,
+			Subtype:     "js-script",
+			Label:       "JS script (goja)",
+			Description: "Run user JavaScript that can read and modify the request/response (set headers, status, body, or short-circuit). Sandboxed via goja with a per-call timeout.",
+			Build:       adaptMW(buildJSScriptMW),
+		},
 	}
 
 	out := make(map[string]NodeSpec, len(specs))

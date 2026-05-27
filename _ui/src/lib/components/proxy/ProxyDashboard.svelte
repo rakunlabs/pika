@@ -5,15 +5,14 @@
  // card title or "Open editor" switches the main pane to the
  // node-graph view for that server.
  //
- // The grid is purely informational; mutations (create / delete
- // / enable) live in the sidebar so the dashboard stays a clean
- // overview.
+ // Creation and runtime activation live here so the left sidebar
+ // can stay focused on navigation.
  import type { ProxyServer } from '@/lib/types/config';
  import type { ProxyInstanceStatus } from '@/lib/store/proxy.svelte';
- import { Network, Circle, ExternalLink, PlayCircle, Plus, Cable } from 'lucide-svelte';
+ import { Network, Circle, ExternalLink, PlayCircle, Plus, Cable, Power } from 'lucide-svelte';
 
  type ProxyProtocol = 'http' | 'tcp';
- type ProxyServerPreset = ProxyProtocol | 'cdn';
+ type ProxyServerPreset = ProxyProtocol;
 
  let {
   servers,
@@ -21,6 +20,7 @@
   canManage,
   onOpenEditor,
   onAdd,
+  onToggleEnabled,
   onTestServer,
  }: {
   servers: ProxyServer[];
@@ -28,6 +28,7 @@
   canManage: boolean;
   onOpenEditor: (id: string) => void;
   onAdd: (preset?: ProxyServerPreset) => void;
+  onToggleEnabled: (id: string, enabled: boolean) => void;
   onTestServer: (id: string) => void;
  } = $props();
 
@@ -90,19 +91,8 @@
       <button
        type="button"
        class="px-3 py-1.5 text-xs rounded
-              bg-accent-50 text-accent-700 hover:bg-accent-100
-              dark:bg-accent-900/40 dark:text-accent-300 dark:hover:bg-accent-900/60
-              inline-flex items-center gap-1.5 cursor-pointer"
-       onclick={() => onAdd('cdn')}
-      >
-       <Plus size={12} /> New CDN proxy
-      </button>
-      <button
-       type="button"
-       class="px-3 py-1.5 text-xs rounded
-              bg-slate-100 dark:bg-warm-700
-              hover:bg-slate-200 dark:hover:bg-warm-600
-              text-slate-700 dark:text-slate-200
+              bg-slate-700 text-white hover:bg-slate-800
+              dark:bg-warm-700 dark:hover:bg-warm-600 dark:text-slate-100
               inline-flex items-center gap-1.5 cursor-pointer"
        onclick={() => onAdd('tcp')}
       >
@@ -140,7 +130,8 @@
      No proxy servers yet
     </div>
     <div class="text-xs mb-4">
-     Build a custom HTTP, CDN, or TCP listener from a graph of protocol-specific middlewares and handlers.
+     Build a custom HTTP or TCP listener from a graph of protocol-specific middlewares and handlers.
+     Package CDN is available as an HTTP resource handler in the editor palette.
      Each server gets its own port and can mount /data, /raw, /external, a Consul KV shim,
      a reverse proxy and more.
     </div>
@@ -157,18 +148,9 @@
        <button
         type="button"
         class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded
-               bg-accent-50 text-accent-700 hover:bg-accent-100
-               dark:bg-accent-900/40 dark:text-accent-300 dark:hover:bg-accent-900/60
+               bg-slate-700 text-white hover:bg-slate-800
+               dark:bg-warm-700 dark:hover:bg-warm-600 dark:text-slate-100
                cursor-pointer"
-        onclick={() => onAdd('cdn')}
-       >
-        <Plus size={12} /> Create CDN proxy
-       </button>
-       <button
-        type="button"
-        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded
-               bg-slate-100 dark:bg-warm-700 hover:bg-slate-200 dark:hover:bg-warm-600
-               text-slate-700 dark:text-slate-200 cursor-pointer"
         onclick={() => onAdd('tcp')}
        >
         <Cable size={12} /> Create TCP proxy
@@ -239,15 +221,28 @@
        >
         <ExternalLink size={12} /> Open editor
        </button>
+       <div class="flex items-center gap-2">
+        {#if canManage}
+         <button
+          type="button"
+          class={'px-2 py-1 rounded text-xs inline-flex items-center gap-1 cursor-pointer ' + (srv.enabled
+           ? 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-warm-900 dark:text-slate-300 dark:hover:bg-warm-700'
+           : 'bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-600 dark:hover:bg-emerald-500')}
+          onclick={() => onToggleEnabled(srv.id, !srv.enabled)}
+         >
+          <Power size={12} /> {srv.enabled ? 'Deactivate' : 'Activate'}
+         </button>
+        {/if}
         {#if st?.running && protocol === 'http'}
-        <button
-         type="button"
-         class="text-xs text-slate-600 dark:text-slate-300 hover:text-slate-800 dark:hover:text-slate-100 inline-flex items-center gap-1 cursor-pointer"
-         onclick={() => onTestServer(srv.id)}
+         <button
+          type="button"
+          class="text-xs text-slate-600 dark:text-slate-300 hover:text-slate-800 dark:hover:text-slate-100 inline-flex items-center gap-1 cursor-pointer"
+          onclick={() => onTestServer(srv.id)}
         >
-         <PlayCircle size={12} /> Test
-        </button>
-       {/if}
+          <PlayCircle size={12} /> Test
+         </button>
+        {/if}
+       </div>
       </div>
      </div>
     {/each}

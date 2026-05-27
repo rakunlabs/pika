@@ -56,6 +56,10 @@ type FileMeta struct {
 	Description string         `json:"description,omitempty"`
 	Format      string         `json:"format,omitempty"`
 	Inherits    []InheritEntry `json:"inherits,omitempty"`
+	// GoTemplate enables server-side Go template rendering for this file's
+	// raw content before format parsing and inheritance resolution. Omitted
+	// means false so existing files keep byte-for-byte behaviour.
+	GoTemplate bool `json:"go_template,omitempty"`
 }
 
 // File represents a configuration file with metadata and data.

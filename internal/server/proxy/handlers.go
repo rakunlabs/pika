@@ -133,6 +133,13 @@ func DefaultHandlers() map[string]NodeSpec {
 			Description: "Return a Go-template body that can reference the request (path, method, headers, query). The richer cousin of static-response — use when the body needs to vary per call.",
 			Build:       adaptHandler(buildCustomResponseHandler),
 		},
+		{
+			Kind:        KindHandler,
+			Subtype:     "http-request",
+			Label:       "Outbound HTTP request",
+			Description: "Send the request to an upstream URL with templated url/method/headers/body, optional basic/bearer/oauth2 auth, retry and TLS overrides. Ported from chore; uses rakunlabs/ok.",
+			Build:       adaptHandler(buildHTTPRequestHandler),
+		},
 	}
 
 	out := make(map[string]NodeSpec, len(specs))

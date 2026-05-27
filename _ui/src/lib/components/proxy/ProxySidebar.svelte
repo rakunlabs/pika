@@ -6,10 +6,9 @@
  // overview / test view instead of the editor.
  import type { ProxyServer } from '@/lib/types/config';
  import type { ProxyInstanceStatus } from '@/lib/store/proxy.svelte';
- import { Plus, Trash2, Circle, LayoutDashboard } from 'lucide-svelte';
+ import { Trash2, Circle, LayoutDashboard } from 'lucide-svelte';
 
  type ProxyProtocol = 'http' | 'tcp';
- type ProxyServerPreset = ProxyProtocol | 'cdn';
 
  let {
   servers,
@@ -19,9 +18,7 @@
   canManage,
   onSelectDashboard,
   onSelect,
-  onAdd,
   onDelete,
-  onToggleEnabled,
  }: {
   servers: ProxyServer[];
   status: ProxyInstanceStatus[];
@@ -30,9 +27,7 @@
   canManage: boolean;
   onSelectDashboard: () => void;
   onSelect: (id: string) => void;
-  onAdd: (preset?: ProxyServerPreset) => void;
   onDelete: (id: string) => void;
-  onToggleEnabled: (id: string, enabled: boolean) => void;
  } = $props();
 
  function statusFor(id: string): ProxyInstanceStatus | undefined {
@@ -58,32 +53,6 @@
               bg-white dark:bg-warm-800 overflow-y-auto">
  <header class="flex items-center justify-between p-3 border-b border-slate-200 dark:border-warm-700">
   <h2 class="text-sm font-semibold text-slate-800 dark:text-slate-100">Proxy</h2>
-  {#if canManage}
-   <div class="flex items-center gap-1">
-    <button
-     type="button"
-     aria-label="Add CDN proxy server"
-     title="Add CDN proxy server"
-     class="px-2 py-1 rounded text-[10px] font-medium
-            bg-accent-50 text-accent-700 hover:bg-accent-100
-            dark:bg-accent-900/40 dark:text-accent-300 dark:hover:bg-accent-900/60
-            cursor-pointer"
-     onclick={() => onAdd('cdn')}
-    >
-     CDN
-    </button>
-    <button
-     type="button"
-     aria-label="Add proxy server"
-     title="Add proxy server"
-     class="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-warm-700
-            text-slate-500 dark:text-slate-400 cursor-pointer"
-     onclick={() => onAdd('http')}
-    >
-     <Plus size={14} />
-    </button>
-   </div>
-  {/if}
  </header>
 
  <div class="p-2">
@@ -104,7 +73,7 @@
 
  {#if servers.length === 0}
   <p class="px-3 py-4 text-xs text-slate-400 dark:text-slate-500 text-center">
-   No proxy servers yet.{#if canManage}<br />Click + to create one.{/if}
+   No proxy servers yet.{#if canManage}<br />Use the dashboard to create one.{/if}
   </p>
  {/if}
 
@@ -141,21 +110,12 @@
         {st.last_err}
        </div>
       {/if}
-     </button>
-     {#if canManage}
-      <div class="flex flex-col items-end gap-1 p-1.5">
-       <label class="text-[10px] opacity-70 flex items-center gap-1 cursor-pointer" title="Enable / disable">
-        <input
-         type="checkbox"
-         class="h-3 w-3 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 cursor-pointer"
-         checked={srv.enabled}
-         onchange={(e) => onToggleEnabled(srv.id, (e.currentTarget as HTMLInputElement).checked)}
-        />
-        on
-       </label>
-       <button
-        type="button"
-        aria-label="Delete proxy server"
+      </button>
+      {#if canManage}
+       <div class="flex items-center p-1.5">
+        <button
+         type="button"
+         aria-label="Delete proxy server"
         title="Delete"
         class="p-1 rounded text-vermilion-600 dark:text-vermilion-400
                hover:bg-vermilion-50 dark:hover:bg-vermilion-950/40 cursor-pointer"

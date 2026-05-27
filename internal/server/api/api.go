@@ -43,8 +43,11 @@ type Info struct {
 // (which would cycle: api -> proxy -> service -> api consumers).
 type ProxyReconciler interface {
 	Reconcile(servers []service.ProxyServer) error
+	ReconcileAll(listeners []service.ProxyListener, graphs []service.ProxyServer) error
 	Validate(s service.ProxyServer) (any, error)
+	ValidateListener(l service.ProxyListener) error
 	Status() any
+	ListenersStatus() any
 }
 
 type api struct {
@@ -311,22 +314,27 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// Docker GC estimate (dry-run). Read-gated because it doesn't
 	// delete anything — just reports how much would be reclaimed.
 	m.GET("/api/v1/registries/docker/{ns}/{repo}/gc/estimate", m.Wrap(api.withPerm(service.CapRegistryRead, api.estimateDockerGC)))
-	// Cache purge for Remote registries (Go / NPM / Docker share
-	// one handler — the {type} segment lets the UI hit a clean URL
-	// per protocol and lets the handler reject Local registries
-	// with a helpful 400). Admin-gated because it forces an
-	// upstream re-fetch that may be expensive.
-	m.POST("/api/v1/registries/{type}/{ns}/{repo}/purge", m.Wrap(api.withPerm(service.CapRegistryAdmin, api.runRegistryPurge)))
-	// Snapshot statistics for a single registry. Read-only,
-	// CapRegistryRead is enough — the UI uses this for the
-	// "Statistics" card in the repo detail panel.
-	m.GET("/api/v1/registries/{type}/{ns}/{repo}/stats", m.Wrap(api.withPerm(service.CapRegistryRead, api.getRegistryStats)))
 	// Per-package detail and registry-aware artifact deletion. These are
 	// registered per concrete type instead of under /{type}/ because Ada
 	// prefers static children over params; the protocol-specific list
-	// routes below would otherwise shadow the generic package route.
+	// routes below would otherwise shadow the generic package route. Keep
+	// the admin action routes here for the same reason: /registries/npm/...
+	// must not fall through to the SPA shell just because /npm has static
+	// children for package browsing.
 	for _, regType := range service.KnownRegistryTypes {
 		regType := regType
+		// Cache purge for Remote registries. Admin-gated because it forces an
+		// upstream re-fetch that may be expensive.
+		m.POST(fmt.Sprintf("/api/v1/registries/%s/{ns}/{repo}/purge", regType), m.Wrap(api.withPerm(service.CapRegistryAdmin, api.runRegistryPurgeFor(regType))))
+		// Snapshot statistics for a single registry. Read-only,
+		// CapRegistryRead is enough — the UI uses this for the
+		// "Statistics" card in the repo detail panel.
+		m.GET(fmt.Sprintf("/api/v1/registries/%s/{ns}/{repo}/stats", regType), m.Wrap(api.withPerm(service.CapRegistryRead, api.getRegistryStatsFor(regType))))
+		// Remote-only: connectivity probe against the configured upstream.
+		// Admin-gated because the probe uses the registry's real auth
+		// credentials.
+		m.POST(fmt.Sprintf("/api/v1/registries/%s/{ns}/{repo}/test-upstream", regType), m.Wrap(api.withPerm(service.CapRegistryAdmin, api.runRegistryUpstreamProbeFor(regType))))
+
 		packageRoute := fmt.Sprintf("/api/v1/registries/%s/{ns}/{repo}/packages/*", regType)
 		m.GET(packageRoute, m.Wrap(api.withPerm(service.CapRegistryRead, api.getRegistryPackageDetailFor(regType))))
 		// Query shape is protocol-specific: version= for Go/NPM/Helm/Maven/
@@ -340,11 +348,6 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// Go-only: raw go.mod bytes for one module version. Used by
 	// the detail UI's go.mod viewer.
 	m.GET("/api/v1/registries/go/{ns}/{repo}/modules/*", m.Wrap(api.withPerm(service.CapRegistryRead, api.getGoModuleGoMod)))
-	// Remote-only: connectivity probe against the configured
-	// upstream. Admin-gated because the probe uses the registry's
-	// real auth credentials.
-	m.POST("/api/v1/registries/{type}/{ns}/{repo}/test-upstream", m.Wrap(api.withPerm(service.CapRegistryAdmin, api.runRegistryUpstreamProbe)))
-
 	// Proxy: split into read vs. manage caps. Read covers the
 	// dashboard, status panel, catalog discovery and the in-app
 	// test request console; manage adds CRUD and validate. The
@@ -354,8 +357,17 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.GET("/api/v1/proxy", m.Wrap(api.withPerm(service.CapProxyRead, api.listProxyServers)))
 	m.GET("/api/v1/proxy/catalog", m.Wrap(api.withPerm(service.CapProxyRead, api.getProxyCatalog)))
 	m.GET("/api/v1/proxy/status", m.Wrap(api.withPerm(service.CapProxyRead, api.getProxyStatus)))
-	m.GET("/api/v1/proxy/{id}", m.Wrap(api.withPerm(service.CapProxyRead, api.getProxyServer)))
 	m.POST("/api/v1/proxy/test", m.Wrap(api.withPerm(service.CapProxyRead, api.proxyTest)))
+	// Listener endpoints — kept BEFORE the catch-all /api/v1/proxy/{id}
+	// route so "listeners" doesn't get parsed as a graph id by ada's
+	// path-priority rules.
+	m.GET("/api/v1/proxy/listeners", m.Wrap(api.withPerm(service.CapProxyRead, api.listProxyListeners)))
+	m.GET("/api/v1/proxy/listeners/status", m.Wrap(api.withPerm(service.CapProxyRead, api.getProxyListenersStatus)))
+	m.GET("/api/v1/proxy/listeners/{id}", m.Wrap(api.withPerm(service.CapProxyRead, api.getProxyListener)))
+	m.POST("/api/v1/proxy/listeners", m.Wrap(api.withPerm(service.CapProxyManage, api.createProxyListener)))
+	m.PUT("/api/v1/proxy/listeners/{id}", m.Wrap(api.withPerm(service.CapProxyManage, api.updateProxyListener)))
+	m.DELETE("/api/v1/proxy/listeners/{id}", m.Wrap(api.withPerm(service.CapProxyManage, api.deleteProxyListener)))
+	m.GET("/api/v1/proxy/{id}", m.Wrap(api.withPerm(service.CapProxyRead, api.getProxyServer)))
 	m.POST("/api/v1/proxy", m.Wrap(api.withPerm(service.CapProxyManage, api.createProxyServer)))
 	m.PUT("/api/v1/proxy/{id}", m.Wrap(api.withPerm(service.CapProxyManage, api.updateProxyServer)))
 	m.DELETE("/api/v1/proxy/{id}", m.Wrap(api.withPerm(service.CapProxyManage, api.deleteProxyServer)))
@@ -652,16 +664,18 @@ func (a *api) postSettings(c *ada.Context) error {
 	// vice versa. When the deployment-wide proxy flag is off we
 	// reconcile with an empty list so the manager stops everything
 	// while leaving the graphs persisted for later.
-	if a.proxyMgr != nil && (patchSettings.ProxyServers != nil || patchSettings.Proxy != nil) {
+	if a.proxyMgr != nil && (patchSettings.ProxyServers != nil || patchSettings.ProxyListeners != nil || patchSettings.Proxy != nil) {
 		settings, err := a.svc.Settings(c.Request.Context())
 		if err != nil {
 			slog.Error("read settings for proxy reload", "error", err)
 		} else {
-			desired := settings.ProxyServers
+			desiredGraphs := settings.ProxyServers
+			desiredListeners := settings.ProxyListeners
 			if !a.svc.ProxyEnabled(c.Request.Context()) {
-				desired = nil
+				desiredGraphs = nil
+				desiredListeners = nil
 			}
-			if err := a.proxyMgr.Reconcile(desired); err != nil {
+			if err := a.proxyMgr.ReconcileAll(desiredListeners, desiredGraphs); err != nil {
 				slog.Error("proxy reconcile failed", "error", err)
 			}
 		}

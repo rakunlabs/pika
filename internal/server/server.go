@@ -39,11 +39,21 @@ func (w proxyMgrWrapper) Reconcile(servers []service.ProxyServer) error {
 	return w.m.Reconcile(servers)
 }
 
+func (w proxyMgrWrapper) ReconcileAll(listeners []service.ProxyListener, graphs []service.ProxyServer) error {
+	return w.m.ReconcileAll(listeners, graphs)
+}
+
 func (w proxyMgrWrapper) Validate(s service.ProxyServer) (any, error) {
 	return w.m.Validate(s)
 }
 
+func (w proxyMgrWrapper) ValidateListener(l service.ProxyListener) error {
+	return w.m.ValidateListener(l)
+}
+
 func (w proxyMgrWrapper) Status() any { return w.m.Status() }
+
+func (w proxyMgrWrapper) ListenersStatus() any { return w.m.ListenersStatus() }
 
 // cookieName returns the session cookie name, preferring the AuthSettings
 // value, then the default "pika_session".
@@ -265,10 +275,12 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	// running listener but keeps the persisted graphs intact, so
 	// flipping the flag back on later restores them verbatim.
 	initialServers := settings.ProxyServers
+	initialListeners := settings.ProxyListeners
 	if !svc.ProxyEnabled(ctx) {
 		initialServers = nil
+		initialListeners = nil
 	}
-	if err := proxyMgr.Reconcile(initialServers); err != nil {
+	if err := proxyMgr.ReconcileAll(initialListeners, initialServers); err != nil {
 		slog.Error("proxy initial reconcile reported errors", "error", err)
 	}
 

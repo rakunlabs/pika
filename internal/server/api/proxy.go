@@ -143,7 +143,7 @@ func (a *api) deleteProxyServer(c *ada.Context) error {
 	if a.proxyMgr != nil {
 		// PatchSettings already triggers Reconcile via postSettings,
 		// but the dedicated CRUD endpoint bypasses postSettings.
-		_ = a.proxyMgr.Reconcile(next)
+		_ = a.proxyMgr.ReconcileAll(settings.ProxyListeners, next)
 	}
 	return c.SendNoContent()
 }
@@ -184,7 +184,7 @@ func (a *api) persistProxy(c *ada.Context, srv service.ProxyServer, isCreate boo
 		return err
 	}
 	if a.proxyMgr != nil {
-		_ = a.proxyMgr.Reconcile(next)
+		_ = a.proxyMgr.ReconcileAll(settings.ProxyListeners, next)
 	}
 	return nil
 }
@@ -353,4 +353,169 @@ func (a *api) proxyTest(c *ada.Context) error {
 	})
 }
 
+// --- Listener CRUD ----------------------------------------------------------
+
+// listProxyListeners returns every persisted ProxyListener.
+func (a *api) listProxyListeners(c *ada.Context) error {
+	if err := a.proxyFeatureGuard(c); err != nil {
+		return err
+	}
+	settings, err := a.svc.Settings(c.Request.Context())
+	if err != nil {
+		return err
+	}
+	listeners := settings.ProxyListeners
+	if listeners == nil {
+		listeners = []service.ProxyListener{}
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(listeners)
+}
+
+func (a *api) getProxyListener(c *ada.Context) error {
+	if err := a.proxyFeatureGuard(c); err != nil {
+		return err
+	}
+	id := c.Request.PathValue("id")
+	settings, err := a.svc.Settings(c.Request.Context())
+	if err != nil {
+		return err
+	}
+	for i := range settings.ProxyListeners {
+		if settings.ProxyListeners[i].ID == id {
+			return c.SetStatus(http.StatusOK).SendJSON(settings.ProxyListeners[i])
+		}
+	}
+	return errors.Join(fmt.Errorf("proxy listener %q not found", id), service.ErrNotFound)
+}
+
+func (a *api) createProxyListener(c *ada.Context) error {
+	if err := a.proxyFeatureGuard(c); err != nil {
+		return err
+	}
+	var ln service.ProxyListener
+	if err := c.Bind(&ln); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+	ln.ID = strings.TrimSpace(ln.ID)
+	if ln.ID == "" {
+		ln.ID = ulid.Make().String()
+	}
+	if err := a.persistProxyListener(c, ln, true); err != nil {
+		return err
+	}
+	return c.SetStatus(http.StatusCreated).SendJSON(ln)
+}
+
+func (a *api) updateProxyListener(c *ada.Context) error {
+	if err := a.proxyFeatureGuard(c); err != nil {
+		return err
+	}
+	id := c.Request.PathValue("id")
+	var ln service.ProxyListener
+	if err := c.Bind(&ln); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+	ln.ID = id
+	if err := a.persistProxyListener(c, ln, false); err != nil {
+		return err
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(ln)
+}
+
+func (a *api) deleteProxyListener(c *ada.Context) error {
+	if err := a.proxyFeatureGuard(c); err != nil {
+		return err
+	}
+	id := c.Request.PathValue("id")
+	settings, err := a.svc.Settings(c.Request.Context())
+	if err != nil {
+		return err
+	}
+	// Reject delete if any graph still references this listener:
+	// otherwise the graph would silently become unrunnable on next
+	// reconcile. The UI shows the count so the operator can resolve.
+	using := []string{}
+	for _, g := range settings.ProxyServers {
+		if g.ListenerID == id {
+			using = append(using, g.ID)
+		}
+	}
+	if len(using) > 0 {
+		return errors.Join(
+			fmt.Errorf("listener %q is still attached to %d graph(s): %s", id, len(using), strings.Join(using, ", ")),
+			service.ErrBadRequest,
+		)
+	}
+	next := make([]service.ProxyListener, 0, len(settings.ProxyListeners))
+	found := false
+	for _, l := range settings.ProxyListeners {
+		if l.ID == id {
+			found = true
+			continue
+		}
+		next = append(next, l)
+	}
+	if !found {
+		return errors.Join(fmt.Errorf("proxy listener %q not found", id), service.ErrNotFound)
+	}
+	if err := a.svc.PatchSettings(c.Request.Context(), &service.PatchSettings{
+		Action:         service.ActionKeySet,
+		ProxyListeners: &next,
+	}); err != nil {
+		return err
+	}
+	if a.proxyMgr != nil {
+		_ = a.proxyMgr.ReconcileAll(next, settings.ProxyServers)
+	}
+	return c.SendNoContent()
+}
+
+func (a *api) persistProxyListener(c *ada.Context, ln service.ProxyListener, isCreate bool) error {
+	if a.proxyMgr != nil {
+		if err := a.proxyMgr.ValidateListener(ln); err != nil {
+			return errors.Join(err, service.ErrBadRequest)
+		}
+	}
+	settings, err := a.svc.Settings(c.Request.Context())
+	if err != nil {
+		return err
+	}
+	next := make([]service.ProxyListener, 0, len(settings.ProxyListeners)+1)
+	replaced := false
+	for _, existing := range settings.ProxyListeners {
+		if existing.ID == ln.ID {
+			next = append(next, ln)
+			replaced = true
+			continue
+		}
+		next = append(next, existing)
+	}
+	if !replaced {
+		if !isCreate {
+			return errors.Join(fmt.Errorf("proxy listener %q not found", ln.ID), service.ErrNotFound)
+		}
+		next = append(next, ln)
+	}
+	if err := a.svc.PatchSettings(c.Request.Context(), &service.PatchSettings{
+		Action:         service.ActionKeySet,
+		ProxyListeners: &next,
+	}); err != nil {
+		return err
+	}
+	if a.proxyMgr != nil {
+		_ = a.proxyMgr.ReconcileAll(next, settings.ProxyServers)
+	}
+	return nil
+}
+
+// getProxyListenersStatus exposes the live listener bind state.
+func (a *api) getProxyListenersStatus(c *ada.Context) error {
+	if err := a.proxyFeatureGuard(c); err != nil {
+		return err
+	}
+	if a.proxyMgr == nil {
+		return c.SetStatus(http.StatusOK).SendJSON([]any{})
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(a.proxyMgr.ListenersStatus())
+}
 

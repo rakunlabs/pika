@@ -40,6 +40,9 @@ export interface FileMeta {
   description?: string;
   format?: FileFormat;
   inherits?: InheritEntry[];
+  // When true, the backend runs this file through mugo/Go templates
+  // before format parsing and inheritance resolution. Omitted = false.
+  go_template?: boolean;
 }
 
 // File data from API
@@ -461,21 +464,49 @@ export interface EventLogSettings {
   disabled?: boolean;
 }
 
-// Proxy server graph entry — one user-built listener with its
-// kaykay node/edge graph and a denormalized pipeline summary.
+// Proxy server graph entry — one user-built graph attached to a
+// listener (or carrying legacy Host/Port for back-compat).
 export interface ProxyServer {
   id: string;
   name: string;
   enabled: boolean;
+  // listener_id is the new way to bind a graph: it points at a
+  // ProxyListener that owns the socket. Legacy graphs persisted
+  // before the listener split leave this empty and rely on
+  // host/port being set directly.
+  listener_id?: string;
+  // host_match is the list of HTTP Host header patterns this graph
+  // claims on its listener. Empty list = catch-all. Patterns:
+  //   - "example.com"    exact
+  //   - "*.example.com"  suffix glob
+  //   - "*"              explicit catch-all
+  host_match?: string[];
   protocol?: 'http' | 'tcp';
+  /** @deprecated prefer listener_id; carried for legacy rows only */
   host?: string;
-  port: string;
+  /** @deprecated prefer listener_id; carried for legacy rows only */
+  port?: string;
   nodes: ProxyNode[];
   edges: ProxyEdge[];
   // pipeline is read-only from the UI; the backend regenerates it
   // on every save. Carried so the live status panel can compare
   // the row's hash with the runner's hash.
   pipeline?: { hash?: string; protocol?: 'http' | 'tcp'; listen_host?: string; listen_port?: string };
+}
+
+// ProxyListener is a first-class persisted socket bind. Graphs
+// attach to a listener via ProxyServer.listener_id; one HTTP
+// listener can host multiple graphs routed by Host header, while
+// TCP listeners hold at most one graph.
+export interface ProxyListener {
+  id: string;
+  name: string;
+  enabled: boolean;
+  protocol: 'http' | 'tcp';
+  host?: string;
+  port: string;
+  tls?: { enabled?: boolean; cert_pem?: string; key_pem?: string };
+  notes?: string;
 }
 
 export interface ProxyNode {
@@ -545,6 +576,7 @@ export interface Settings {
   event_log?: EventLogSettings;
   hooks?: Hook[];
   proxy_servers?: ProxyServer[];
+  proxy_listeners?: ProxyListener[];
   external_permissions?: ExternalPermissionsSettings;
   forward_auth?: ForwardAuthSettings;
   user_sync?: UserSyncSettings;

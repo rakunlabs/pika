@@ -54,6 +54,7 @@
  import ProxyConfigPanel from '@/lib/components/proxy/ProxyConfigPanel.svelte';
  import ProxyDashboard from '@/lib/components/proxy/ProxyDashboard.svelte';
  import ProxyTest from '@/lib/components/proxy/ProxyTest.svelte';
+ import ProxyListenersPanel from '@/lib/components/proxy/ProxyListenersPanel.svelte';
  import { PROXY_NODE_DRAG_MIME } from '@/lib/components/proxy/ProxyPalette.svelte';
 
  import ListenerNode from '@/lib/components/proxy/nodes/ListenerNode.svelte';
@@ -61,7 +62,7 @@
  import SwitchNode from '@/lib/components/proxy/nodes/SwitchNode.svelte';
  import HandlerNode from '@/lib/components/proxy/nodes/HandlerNode.svelte';
 
- import { ShieldOff, Save, Play, LayoutDashboard, Send } from 'lucide-svelte';
+ import { ShieldOff, Save, Play, LayoutDashboard, Send, Network } from 'lucide-svelte';
 
  // ── Capability + feature flag gates ─────────────────────────────
 
@@ -75,7 +76,7 @@
   // ── Page-level state ─────────────────────────────────────────────
   type View = 'dashboard' | 'test' | 'editor';
   type ProxyProtocol = 'http' | 'tcp';
-  type ProxyServerPreset = ProxyProtocol | 'cdn';
+  type ProxyServerPreset = ProxyProtocol;
   type ProxyNodeKind = 'middleware' | 'switch' | 'handler';
 
  let booted = $state(false);
@@ -84,7 +85,7 @@
  // The tab strip on the dashboard pane. Kept separate from `view`
  // so the editor can return to whichever dashboard tab the user
  // was on before clicking into a server.
- let dashboardTab = $state<'dashboard' | 'test'>('dashboard');
+ let dashboardTab = $state<'dashboard' | 'test' | 'listeners'>('dashboard');
 
  let activeId = $state<string | null>(null);
  // testServerId is the server pre-selected when the user clicks
@@ -123,6 +124,15 @@
  let activePort = $state('');
  let activeHost = $state('');
  let activeEnabled = $state(false);
+ // activeListenerID is the listener this graph is bound to. Empty
+ // string means "legacy mode": the runner auto-synthesizes a
+ // listener from activeHost:activePort. New graphs created from
+ // the Listeners tab should set this directly.
+ let activeListenerID = $state('');
+ // activeHostMatch is a comma-separated editor surface for the
+ // list of HTTP Host patterns this graph claims on its listener.
+ // Empty = catch-all.
+ let activeHostMatch = $state('');
 
  // Initial nodes/edges handed to <Canvas> at mount. Refreshed
  // alongside canvasKey when the active server changes.
@@ -250,6 +260,8 @@
    activePort = '';
    activeHost = '';
    activeEnabled = false;
+   activeListenerID = '';
+   activeHostMatch = '';
    if (flow) flow.fromJSON({ nodes: [], edges: [] });
    return;
   }
@@ -261,9 +273,11 @@
   selectedNodeId = null;
   lastValidation = null;
   activeName = srv.name;
-  activePort = srv.port;
+  activePort = srv.port ?? '';
   activeHost = srv.host ?? '';
   activeEnabled = srv.enabled;
+  activeListenerID = srv.listener_id ?? '';
+  activeHostMatch = (srv.host_match ?? []).join(', ');
   if (flow) {
    flow.fromJSON({ nodes, edges });
   } else {
@@ -281,6 +295,10 @@
  function snapshot(): ProxyServer | null {
   if (!activeServer) return null;
   const json = flow ? flow.toJSON() : { nodes: [], edges: [] };
+  const hostMatch = activeHostMatch
+   .split(',')
+   .map(s => s.trim())
+   .filter(Boolean);
   return {
    ...activeServer,
    protocol: activeProtocol,
@@ -288,6 +306,8 @@
    port: activePort,
    host: activeHost || undefined,
    enabled: activeEnabled,
+   listener_id: activeListenerID || undefined,
+   host_match: hostMatch.length > 0 ? hostMatch : undefined,
    nodes: json.nodes.map((n) => toProxyNode(n as any)),
    edges: json.edges.map((e) => toProxyEdge(e as FlowEdge)),
   };
@@ -329,16 +349,13 @@
  async function addServer(preset: ProxyServerPreset = 'http') {
   const id = (crypto as any).randomUUID?.() ?? Math.random().toString(36).slice(2);
   // Seed every new server with the smallest graph that compiles:
-  // HTTP gets listener → healthz; TCP gets listener → tcp-forward;
-  // CDN gets listener → Package CDN resource with jsDelivr-style
-  // /npm/{package}@{version}/{file} paths. Operators can then add
-  // protocol-specific middlewares between those endpoints.
+  // HTTP gets listener → healthz; TCP gets listener → tcp-forward.
+  // CDN is an HTTP handler in the editor palette, not its own server type.
   const isTCP = preset === 'tcp';
-  const isCDN = preset === 'cdn';
   const protocol: ProxyProtocol = isTCP ? 'tcp' : 'http';
   const srv: ProxyServer = {
    id,
-   name: isTCP ? 'New TCP proxy' : (isCDN ? 'New CDN proxy' : 'New proxy'),
+   name: isTCP ? 'New TCP proxy' : 'New proxy',
    enabled: false,
    protocol,
    port: isTCP ? '9091' : '9090',
@@ -347,20 +364,13 @@
      { id: 'listener', type: 'listener', protocol: 'tcp', position: { x: 80, y: 120 }, config: {} },
      { id: 'tcp-forward', type: 'handler', protocol: 'tcp', subtype: 'tcp-forward', position: { x: 380, y: 120 }, config: { network: 'tcp', address: '127.0.0.1:80' } },
     ]
-    : (isCDN
-     ? [
-      { id: 'listener', type: 'listener', protocol: 'http', position: { x: 80, y: 120 }, config: {} },
-      { id: 'cdn', type: 'handler', protocol: 'http', subtype: 'cdn', position: { x: 380, y: 120 }, config: { namespace: 'default', repository: 'npm', strip_prefix: '/npm' } },
-     ]
-     : [
-      { id: 'listener', type: 'listener', protocol: 'http', position: { x: 80, y: 120 }, config: {} },
-      { id: 'healthz', type: 'handler', protocol: 'http', subtype: 'healthz', position: { x: 380, y: 120 }, config: {} },
-     ]),
+    : [
+     { id: 'listener', type: 'listener', protocol: 'http', position: { x: 80, y: 120 }, config: {} },
+     { id: 'healthz', type: 'handler', protocol: 'http', subtype: 'healthz', position: { x: 380, y: 120 }, config: {} },
+    ],
    edges: [isTCP
     ? { id: 'e-listener-tcp-forward', source: 'listener', target: 'tcp-forward' }
-    : (isCDN
-     ? { id: 'e-listener-cdn', source: 'listener', target: 'cdn' }
-     : { id: 'e-listener-healthz', source: 'listener', target: 'healthz' })],
+    : { id: 'e-listener-healthz', source: 'listener', target: 'healthz' }],
   };
   try {
    const created = await proxyStore.create(srv);
@@ -721,9 +731,7 @@
     {canManage}
     onSelectDashboard={openDashboard}
     onSelect={openEditor}
-    onAdd={addServer}
     onDelete={deleteServer}
-    onToggleEnabled={toggleEnabled}
    />
 
     {#if view === 'editor' && activeServer}
@@ -785,6 +793,39 @@
         placeholder="(default)"
        />
       </label>
+      <label class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+       Listener
+       <select
+        class="px-2 py-1.5 text-sm rounded
+               border border-slate-300 dark:border-warm-600
+               bg-white dark:bg-warm-900
+               text-slate-800 dark:text-slate-100
+               focus:outline-none focus:ring-2 focus:ring-accent-500"
+        bind:value={activeListenerID}
+        disabled={!canManage}
+       >
+        <option value="">(legacy host:port)</option>
+        {#each proxyStore.listeners.filter(l => (l.protocol ?? 'http') === activeProtocol) as ln (ln.id)}
+         <option value={ln.id}>{ln.name || ln.id} · {ln.host || '0.0.0.0'}:{ln.port}</option>
+        {/each}
+       </select>
+      </label>
+      {#if activeListenerID && activeProtocol === 'http'}
+       <label class="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+        Host match
+        <input
+         type="text"
+         class="w-44 px-2 py-1.5 text-sm rounded
+                border border-slate-300 dark:border-warm-600
+                bg-white dark:bg-warm-900
+                text-slate-800 dark:text-slate-100
+                focus:outline-none focus:ring-2 focus:ring-accent-500 font-mono"
+         bind:value={activeHostMatch}
+         disabled={!canManage}
+         placeholder="example.com, *.api.io (empty = *)"
+        />
+       </label>
+      {/if}
       <label class="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-200 cursor-pointer">
        <input
         type="checkbox"
@@ -891,6 +932,15 @@
        </button>
        <button
         type="button"
+        class={'inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-t border-b-2 cursor-pointer ' + (dashboardTab === 'listeners'
+         ? 'border-accent-500 text-accent-700 dark:text-accent-300'
+         : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200')}
+        onclick={() => dashboardTab = 'listeners'}
+       >
+        <Network size={14} /> Listeners
+       </button>
+       <button
+        type="button"
         class={'inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-t border-b-2 cursor-pointer ' + (dashboardTab === 'test'
          ? 'border-accent-500 text-accent-700 dark:text-accent-300'
          : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200')}
@@ -905,10 +955,18 @@
       <ProxyDashboard
        servers={proxyStore.servers}
        status={proxyStore.status}
+        {canManage}
+        onOpenEditor={openEditor}
+        onAdd={addServer}
+        onToggleEnabled={toggleEnabled}
+        onTestServer={openTest}
+       />
+     {:else if dashboardTab === 'listeners'}
+      <ProxyListenersPanel
+       listeners={proxyStore.listeners}
+       status={proxyStore.listenersStatus}
+       servers={proxyStore.servers}
        {canManage}
-       onOpenEditor={openEditor}
-       onAdd={addServer}
-       onTestServer={openTest}
       />
      {:else}
       <ProxyTest

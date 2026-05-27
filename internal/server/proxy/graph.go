@@ -262,8 +262,14 @@ func Compile(srv ProxyServer, deps CompileDeps) (CompiledPipeline, error) {
 	}
 	host := trimSpace(srv.Host)
 	port := trimSpace(srv.Port)
-	if port == "" {
-		return CompiledPipeline{}, &CompileError{Code: "missing_port", Message: "listen port is required"}
+	// Legacy rows persisted before the listener split require a
+	// port; new rows attach to a listener via ListenerID and the
+	// runner resolves the bind address from the listener. Compile
+	// only inspects the value when both ListenerID and Port are
+	// unset, since at that point we have no way to know where to
+	// bind.
+	if port == "" && trimSpace(srv.ListenerID) == "" {
+		return CompiledPipeline{}, &CompileError{Code: "missing_port", Message: "graph has no listener_id and no legacy port"}
 	}
 	if protocol == ProtocolTCP {
 		return compileTCP(srv, deps, protocol, host, port)
@@ -355,6 +361,13 @@ func Compile(srv ProxyServer, deps CompileDeps) (CompiledPipeline, error) {
 	// would otherwise be built twice; we forbid that explicitly
 	// because nodes carry side-effecting builders that should not
 	// be invoked twice for the same logical node).
+	//
+	// Compare to chore: chore's flow runtime is fan-in friendly —
+	// a node with two active inputs blocks until both arrive and
+	// then runs once. Pika's proxy is stateless per-request; a
+	// "two paths into one node" topology has no defined semantics
+	// here, so we reject it at compile time with a `revisit`
+	// CompileError rather than silently picking one path.
 	visited := map[string]bool{}
 	var build func(id string) (Middleware, error)
 	build = func(id string) (Middleware, error) {

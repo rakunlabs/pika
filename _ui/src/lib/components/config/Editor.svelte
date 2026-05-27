@@ -181,7 +181,11 @@
  // a module-level singleton so its value persists across reconfigures.
  const lintExtensions = $derived(
  activeTab
- ? [...getLintExtensions(activeTab.format), createMaskExtension(activeTab.format), maskWatcher]
+ ? [
+ ...(activeTab.meta.go_template ? [] : getLintExtensions(activeTab.format)),
+ createMaskExtension(activeTab.format),
+ maskWatcher,
+ ]
  : []
  );
  const convertTargets = $derived(
@@ -246,7 +250,7 @@
  if (!activeTab || !activeTab.isDirty) return;
 
  // Check for lint errors before saving
- const validationError = validateContent(activeTab.content, activeTab.format);
+ const validationError = activeTab.meta.go_template ? null : validateContent(activeTab.content, activeTab.format);
  if (validationError && !pendingSaveConfirm) {
  pendingSaveConfirm = true;
  addToast(`${activeTab.format.toUpperCase()} has errors — press Save again to confirm`, 'warn');

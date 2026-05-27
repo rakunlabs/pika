@@ -60,6 +60,8 @@ const MIDDLEWARE_CATEGORY: Record<string, PaletteCategory> = {
   // transforms / observability
   compress:          'transform',
   'response-rewrite': 'transform',
+  'template-transform': 'transform',
+  'js-script':       'transform',
   logger:            'transform',
   requestid:         'transform',
 };
