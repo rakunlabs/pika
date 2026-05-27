@@ -1,160 +1,184 @@
 <script lang="ts">
- import { X, Folder, File } from 'lucide-svelte';
+    import { X, Folder, File } from "lucide-svelte";
 
- interface Props {
- isOpen: boolean;
- type: 'file' | 'folder';
- parentPath: string;
- onClose: () => void;
- onCreatePath: (fullPath: string, type: 'file' | 'folder') => void;
- }
+    interface Props {
+        isOpen: boolean;
+        type: "file" | "folder";
+        parentPath: string;
+        onClose: () => void;
+        onCreatePath: (fullPath: string, type: "file" | "folder") => void;
+    }
 
- let { isOpen, type, parentPath, onClose, onCreatePath }: Props = $props();
+    let { isOpen, type, parentPath, onClose, onCreatePath }: Props = $props();
 
- let fullPath = $state('');
- let error = $state('');
+    let fullPath = $state("");
+    let error = $state("");
 
- $effect(() => {
- if (isOpen) {
- const prefix = parentPath ? `${parentPath}/` : '';
- fullPath = prefix + (type === 'folder' ? 'new-folder' : 'new-config');
- error = '';
- }
- });
+    $effect(() => {
+        if (isOpen) {
+            const prefix = parentPath ? `${parentPath}/` : "";
+            fullPath =
+                prefix + (type === "folder" ? "new-folder" : "new-config");
+            error = "";
+        }
+    });
 
- function validatePath(value: string): string | null {
- if (!value.trim()) {
- return 'Path is required';
- }
- if (value.startsWith('/')) {
- return 'Path should not start with /';
- }
- if (value.endsWith('/')) {
- return 'Path should not end with /';
- }
- if (/[<>:"|?*\\]/.test(value)) {
- return 'Path contains invalid characters';
- }
- if (value.split('/').some(s => !s.trim())) {
- return 'Path contains empty segments';
- }
- return null;
- }
+    function validatePath(value: string): string | null {
+        if (!value.trim()) {
+            return "Path is required";
+        }
+        if (value.startsWith("/")) {
+            return "Path should not start with /";
+        }
+        if (value.endsWith("/")) {
+            return "Path should not end with /";
+        }
+        if (/[<>:"|?*\\]/.test(value)) {
+            return "Path contains invalid characters";
+        }
+        if (value.split("/").some((s) => !s.trim())) {
+            return "Path contains empty segments";
+        }
+        return null;
+    }
 
- function handleSubmit(e: Event) {
- e.preventDefault();
- 
- const validationError = validatePath(fullPath);
- if (validationError) {
- error = validationError;
- return;
- }
+    function handleSubmit(e: Event) {
+        e.preventDefault();
 
- onCreatePath(fullPath.trim(), type);
- onClose();
- }
+        const validationError = validatePath(fullPath);
+        if (validationError) {
+            error = validationError;
+            return;
+        }
 
- function handleKeyDown(e: KeyboardEvent) {
- if (e.key === 'Escape') {
- onClose();
- }
- }
+        onCreatePath(fullPath.trim(), type);
+        onClose();
+    }
 
- let mouseDownTarget: EventTarget | null = null;
+    function handleKeyDown(e: KeyboardEvent) {
+        if (e.key === "Escape") {
+            onClose();
+        }
+    }
 
- function handleBackdropMouseDown(e: MouseEvent) {
- mouseDownTarget = e.target;
- }
+    let mouseDownTarget: EventTarget | null = null;
 
- function handleBackdropClick(e: MouseEvent) {
- if (e.target === e.currentTarget && mouseDownTarget === e.currentTarget) {
- onClose();
- }
- }
+    function handleBackdropMouseDown(e: MouseEvent) {
+        mouseDownTarget = e.target;
+    }
+
+    function handleBackdropClick(e: MouseEvent) {
+        if (
+            e.target === e.currentTarget &&
+            mouseDownTarget === e.currentTarget
+        ) {
+            onClose();
+        }
+    }
 </script>
 
 <svelte:window onkeydown={handleKeyDown} />
 
 {#if isOpen}
- <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
- <div 
- class="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-5"
- onmousedown={handleBackdropMouseDown}
- onclick={handleBackdropClick}
- onkeydown={(e) => e.key === 'Escape' && onClose()}
- role="dialog"
- aria-modal="true"
- aria-labelledby="create-dialog-title"
- tabindex="-1"
- >
- <div class="bg-white dark:bg-warm-900 rounded-lg shadow-xl w-full max-w-[480px] overflow-hidden">
- <div class="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900">
- <div class="flex items-center gap-2.5 text-gray-700 dark:text-slate-200">
- {#if type === 'folder'}
- <Folder size={18} />
- {:else}
- <File size={18} />
- {/if}
- <h2 id="create-dialog-title" class="text-base font-semibold m-0">
- Create New {type === 'folder' ? 'Folder' : 'Config'}
- </h2>
- </div>
- <button 
- class="flex items-center justify-center p-1.5 bg-transparent border-none rounded text-slate-500 dark:text-slate-400 cursor-pointer transition-all hover:bg-slate-200 dark:hover:bg-warm-700 hover:text-slate-800 dark:hover:text-slate-100"
- onclick={onClose} 
- aria-label="Close"
- >
- <X size={18} />
- </button>
- </div>
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+        class="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-5"
+        onmousedown={handleBackdropMouseDown}
+        onclick={handleBackdropClick}
+        onkeydown={(e) => e.key === "Escape" && onClose()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-dialog-title"
+        tabindex="-1"
+    >
+        <div
+            class="bg-white dark:bg-warm-900 rounded-lg shadow-xl w-full max-w-[480px] overflow-hidden"
+        >
+            <div
+                class="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900"
+            >
+                <div
+                    class="flex items-center gap-2.5 text-gray-700 dark:text-slate-200"
+                >
+                    {#if type === "folder"}
+                        <Folder size={18} />
+                    {:else}
+                        <File size={18} />
+                    {/if}
+                    <h2
+                        id="create-dialog-title"
+                        class="text-base font-semibold m-0"
+                    >
+                        Create New {type === "folder" ? "Folder" : "Config"}
+                    </h2>
+                </div>
+                <button
+                    class="flex items-center justify-center p-1.5 bg-transparent border-none rounded text-slate-500 dark:text-slate-400 cursor-pointer transition-all hover:bg-slate-200 dark:hover:bg-warm-700 hover:text-slate-800 dark:hover:text-slate-100"
+                    onclick={onClose}
+                    aria-label="Close"
+                >
+                    <X size={18} />
+                </button>
+            </div>
 
- <form onsubmit={handleSubmit}>
- <div class="p-5">
- <div class="mb-3">
- <label for="path-input" class="block text-[13px] font-medium text-gray-700 dark:text-slate-200 mb-1.5">
- {type === 'folder' ? 'Folder Path' : 'Config Path'}
- </label>
- <!-- svelte-ignore a11y_autofocus -->
- <input
- id="path-input"
- type="text"
- bind:value={fullPath}
- placeholder={type === 'folder' ? 'path/to/folder' : 'path/to/config-name'}
- class="w-full px-3 py-2.5 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded transition-all
+            <form onsubmit={handleSubmit}>
+                <div class="p-5">
+                    <div class="mb-3">
+                        <label
+                            for="path-input"
+                            class="block text-[13px] font-medium text-gray-700 dark:text-slate-200 mb-1.5"
+                        >
+                            {type === "folder" ? "Folder Path" : "Config Path"}
+                        </label>
+                        <!-- svelte-ignore a11y_autofocus -->
+                        <input
+                            id="path-input"
+                            type="text"
+                            bind:value={fullPath}
+                            placeholder={type === "folder"
+                                ? "path/to/folder"
+                                : "path/to/config-name"}
+                            class="w-full px-3 py-2.5 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded transition-all
  focus:outline-none focus:border-brand-500 focus:ring-[3px] focus:ring-brand-500/10
  {error ? 'border-red-600' : ''}"
- autofocus
- />
- {#if error}
- <span class="block mt-1.5 text-xs text-red-600">{error}</span>
- {/if}
- </div>
+                            autofocus
+                        />
+                        {#if error}
+                            <span class="block mt-1.5 text-xs text-red-600"
+                                >{error}</span
+                            >
+                        {/if}
+                    </div>
 
- <p class="text-xs text-slate-500 dark:text-slate-400 m-0">
- {#if type === 'file'}
- Config will be created in YAML format. You can convert to other formats in the editor.
- {:else}
- Parent folders will be created automatically if they don't exist.
- {/if}
- </p>
- </div>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 m-0">
+                        {#if type === "file"}
+                            Config will be created in YAML format. You can
+                            convert to other formats in the editor.
+                        {:else}
+                            Parent folders will be created automatically if they
+                            don't exist.
+                        {/if}
+                    </p>
+                </div>
 
- <div class="flex justify-end gap-2.5 px-5 py-4 border-t border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900">
- <button 
- type="button" 
- class="px-4 py-2 bg-white dark:bg-warm-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-warm-700 rounded text-[13px] font-medium cursor-pointer transition-all hover:bg-slate-100 dark:hover:bg-warm-700"
- onclick={onClose}
- >
- Cancel
- </button>
- <button 
- type="submit" 
- class="px-4 py-2 bg-brand-500 text-white border-none rounded text-[13px] font-medium cursor-pointer transition-colors hover:bg-brand-600"
- >
- Create {type === 'folder' ? 'Folder' : 'Config'}
- </button>
- </div>
- </form>
- </div>
- </div>
+                <div
+                    class="flex justify-end gap-2.5 px-5 py-4 border-t border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900"
+                >
+                    <button
+                        type="button"
+                        class="px-4 py-2 bg-white dark:bg-warm-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-warm-700 rounded text-[13px] font-medium cursor-pointer transition-all hover:bg-slate-100 dark:hover:bg-warm-700"
+                        onclick={onClose}
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="submit"
+                        class="px-4 py-2 bg-brand-500 text-white border-none rounded text-[13px] font-medium cursor-pointer transition-colors hover:bg-brand-600"
+                    >
+                        Create {type === "folder" ? "Folder" : "Config"}
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
 {/if}

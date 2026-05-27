@@ -1,17 +1,17 @@
 <script lang="ts">
-  import { Copy, Check, AlertCircle } from 'lucide-svelte';
-  import { computeTOTP, type TOTPField } from '@/lib/vault/totp';
-  import { addToast } from '@/lib/store/toast.svelte';
+  import { Copy, Check, AlertCircle } from "lucide-svelte";
+  import { computeTOTP, type TOTPField } from "@/lib/vault/totp";
+  import { addToast } from "@/lib/store/toast.svelte";
 
   interface Props {
     field: TOTPField;
   }
   let { field }: Props = $props();
 
-  let code = $state('');
+  let code = $state("");
   let period = $state(30);
   let remaining = $state(0);
-  let err = $state('');
+  let err = $state("");
   let copied = $state(false);
 
   // Re-compute every second so the countdown bar animates and the
@@ -27,9 +27,9 @@
         code = r.code;
         period = r.period;
         remaining = r.remainingSeconds;
-        err = '';
+        err = "";
       } catch (e: any) {
-        err = e?.message ?? 'Invalid TOTP secret';
+        err = e?.message ?? "Invalid TOTP secret";
       }
     }
     tick();
@@ -47,12 +47,14 @@
       copied = true;
       setTimeout(() => (copied = false), 1500);
     } catch {
-      addToast('Clipboard unavailable', 'warn');
+      addToast("Clipboard unavailable", "warn");
     }
   }
 
   const pct = $derived(period > 0 ? (remaining / period) * 100 : 0);
-  const formatted = $derived(code.length === 6 ? `${code.slice(0, 3)} ${code.slice(3)}` : code);
+  const formatted = $derived(
+    code.length === 6 ? `${code.slice(0, 3)} ${code.slice(3)}` : code,
+  );
 </script>
 
 {#if err}
@@ -77,7 +79,15 @@
     </button>
     <div class="relative w-8 h-8">
       <svg viewBox="0 0 36 36" class="w-8 h-8 -rotate-90">
-        <circle cx="18" cy="18" r="14" fill="none" stroke="currentColor" stroke-width="3" class="text-slate-200 dark:text-warm-700" />
+        <circle
+          cx="18"
+          cy="18"
+          r="14"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="3"
+          class="text-slate-200 dark:text-warm-700"
+        />
         <circle
           cx="18"
           cy="18"
@@ -87,10 +97,15 @@
           stroke-width="3"
           stroke-dasharray="87.96"
           stroke-dashoffset={87.96 * (1 - pct / 100)}
-          class={remaining <= 5 ? 'text-red-500' : 'text-accent-600'}
+          class={remaining <= 5 ? "text-red-500" : "text-accent-600"}
         />
       </svg>
-      <span class="absolute inset-0 flex items-center justify-center text-[10px] tabular-nums {remaining <= 5 ? 'text-red-500' : 'text-slate-500 dark:text-slate-400'}">
+      <span
+        class="absolute inset-0 flex items-center justify-center text-[10px] tabular-nums {remaining <=
+        5
+          ? 'text-red-500'
+          : 'text-slate-500 dark:text-slate-400'}"
+      >
         {remaining}
       </span>
     </div>

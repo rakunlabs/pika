@@ -1,10 +1,26 @@
 <script lang="ts">
-  import { X, KeyRound, CreditCard, UserSquare2, FileText, Terminal, Plug, Database, Server, FileBadge, ShieldCheck } from 'lucide-svelte';
-  import { vaultStore } from '@/lib/vault/store.svelte';
-  import { templateFor, typeLabel, extractHostnames } from '@/lib/vault/templates';
-  import type { VaultItemType } from '@/lib/vault/api';
-  import { addToast } from '@/lib/store/toast.svelte';
-  import { backdropClose } from '@/lib/actions/backdropClose';
+  import {
+    X,
+    KeyRound,
+    CreditCard,
+    UserSquare2,
+    FileText,
+    Terminal,
+    Plug,
+    Database,
+    Server,
+    FileBadge,
+    ShieldCheck,
+  } from "lucide-svelte";
+  import { vaultStore } from "@/lib/vault/store.svelte";
+  import {
+    templateFor,
+    typeLabel,
+    extractHostnames,
+  } from "@/lib/vault/templates";
+  import type { VaultItemType } from "@/lib/vault/api";
+  import { addToast } from "@/lib/store/toast.svelte";
+  import { backdropClose } from "@/lib/actions/backdropClose";
 
   interface Props {
     onCreated: (id: string) => void;
@@ -15,11 +31,11 @@
      *  means "no folder pre-fill". */
     defaultFolder?: string;
   }
-  let { onCreated, onClose, defaultFolder = '' }: Props = $props();
+  let { onCreated, onClose, defaultFolder = "" }: Props = $props();
 
-  let step = $state<'pick' | 'name'>('pick');
+  let step = $state<"pick" | "name">("pick");
   let chosenType = $state<VaultItemType | null>(null);
-  let title = $state('');
+  let title = $state("");
   // svelte-ignore state_referenced_locally
   let folder = $state(defaultFolder);
   let busy = $state(false);
@@ -30,62 +46,90 @@
   // KnownVaultItemTypes is the source of truth for what's accepted; if
   // it gets a new entry, mirror it here.
   const types: { t: VaultItemType; icon: typeof KeyRound; desc: string }[] = [
-    { t: 'login', icon: KeyRound, desc: 'Username, password, website' },
-    { t: 'card', icon: CreditCard, desc: 'Credit card number, CVV, PIN' },
-    { t: 'identity', icon: UserSquare2, desc: 'Name, address, phone' },
-    { t: 'secure_note', icon: FileText, desc: 'Free-form note' },
-    { t: 'ssh_key', icon: Terminal, desc: 'SSH public/private key pair' },
-    { t: 'api_credential', icon: Plug, desc: 'API key and secret' },
-    { t: 'database', icon: Database, desc: 'DB host, port, credentials' },
-    { t: 'server', icon: Server, desc: 'Hostname, SSH credentials' },
-    { t: 'license', icon: FileBadge, desc: 'Software license key' },
-    { t: 'tls_cert', icon: ShieldCheck, desc: 'Certificate and private key' },
+    { t: "login", icon: KeyRound, desc: "Username, password, website" },
+    { t: "card", icon: CreditCard, desc: "Credit card number, CVV, PIN" },
+    { t: "identity", icon: UserSquare2, desc: "Name, address, phone" },
+    { t: "secure_note", icon: FileText, desc: "Free-form note" },
+    { t: "ssh_key", icon: Terminal, desc: "SSH public/private key pair" },
+    { t: "api_credential", icon: Plug, desc: "API key and secret" },
+    { t: "database", icon: Database, desc: "DB host, port, credentials" },
+    { t: "server", icon: Server, desc: "Hostname, SSH credentials" },
+    { t: "license", icon: FileBadge, desc: "Software license key" },
+    { t: "tls_cert", icon: ShieldCheck, desc: "Certificate and private key" },
   ];
 
   function pickType(t: VaultItemType) {
     chosenType = t;
-    step = 'name';
+    step = "name";
   }
 
   async function create() {
     if (!chosenType || busy) return;
     const cleanTitle = title.trim();
     if (!cleanTitle) {
-      addToast('Title is required', 'alert');
+      addToast("Title is required", "alert");
       return;
     }
     busy = true;
     try {
       const payload = templateFor(chosenType);
       const hostnames = extractHostnames(payload);
-      const item = await vaultStore.createItem(chosenType, cleanTitle, payload, {
-        urlHostnames: hostnames,
-        folder: folder.trim() || undefined,
-      });
+      const item = await vaultStore.createItem(
+        chosenType,
+        cleanTitle,
+        payload,
+        {
+          urlHostnames: hostnames,
+          folder: folder.trim() || undefined,
+        },
+      );
       onCreated(item.id);
     } catch (e: any) {
-      addToast(e?.response?.data?.message ?? e?.message ?? 'Create failed', 'alert');
+      addToast(
+        e?.response?.data?.message ?? e?.message ?? "Create failed",
+        "alert",
+      );
     } finally {
       busy = false;
     }
   }
 </script>
 
-<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" use:backdropClose={onClose} role="dialog" tabindex="-1" aria-modal="true" onkeydown={(e) => { if (e.key === 'Escape') onClose(); }}>
+<div
+  class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+  use:backdropClose={onClose}
+  role="dialog"
+  tabindex="-1"
+  aria-modal="true"
+  onkeydown={(e) => {
+    if (e.key === "Escape") onClose();
+  }}
+>
   <!-- Inner panel. backdropClose tracks mousedown+mouseup on the
        backdrop, so we don't need to stop click propagation here. -->
-  <div class="bg-white dark:bg-warm-800 rounded-lg shadow-xl w-[640px] max-h-[90vh] flex flex-col" role="document">
-    <div class="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-warm-700">
+  <div
+    class="bg-white dark:bg-warm-800 rounded-lg shadow-xl w-[640px] max-h-[90vh] flex flex-col"
+    role="document"
+  >
+    <div
+      class="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-warm-700"
+    >
       <h2 class="text-sm font-semibold">
-        {#if step === 'pick'}Choose item type{:else}Name your {chosenType ? typeLabel(chosenType).toLowerCase() : 'item'}{/if}
+        {#if step === "pick"}Choose item type{:else}Name your {chosenType
+            ? typeLabel(chosenType).toLowerCase()
+            : "item"}{/if}
       </h2>
-      <button onclick={onClose} class="text-slate-400 hover:text-slate-600 cursor-pointer" aria-label="Close">
+      <button
+        onclick={onClose}
+        class="text-slate-400 hover:text-slate-600 cursor-pointer"
+        aria-label="Close"
+      >
         <X size={16} />
       </button>
     </div>
 
     <div class="overflow-y-auto p-4">
-      {#if step === 'pick'}
+      {#if step === "pick"}
         <div class="grid grid-cols-2 gap-2">
           {#each types as { t, icon: Icon, desc } (t)}
             <button
@@ -95,19 +139,30 @@
               <Icon size={20} class="shrink-0 mt-0.5 text-accent-600" />
               <div class="flex-1 min-w-0">
                 <div class="text-sm font-medium">{typeLabel(t)}</div>
-                <div class="text-xs text-slate-500 dark:text-slate-400">{desc}</div>
+                <div class="text-xs text-slate-500 dark:text-slate-400">
+                  {desc}
+                </div>
               </div>
             </button>
           {/each}
         </div>
-      {:else if step === 'name'}
-        <form onsubmit={(e) => { e.preventDefault(); create(); }} class="space-y-3">
+      {:else if step === "name"}
+        <form
+          onsubmit={(e) => {
+            e.preventDefault();
+            create();
+          }}
+          class="space-y-3"
+        >
           <p class="text-sm text-slate-600 dark:text-slate-300">
-            The title is encrypted before it reaches the server, so it
-            can be as descriptive as you like.
+            The title is encrypted before it reaches the server, so it can be as
+            descriptive as you like.
           </p>
           <div>
-            <label class="block text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-1" for="new-item-title">Title</label>
+            <label
+              class="block text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-1"
+              for="new-item-title">Title</label
+            >
             <input
               id="new-item-title"
               type="text"
@@ -118,8 +173,14 @@
             />
           </div>
           <div>
-            <label class="block text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-1" for="new-item-folder">
-              Folder <span class="ml-1 normal-case tracking-normal text-[10px] text-slate-400">(optional)</span>
+            <label
+              class="block text-[10px] font-medium uppercase tracking-wider text-slate-500 mb-1"
+              for="new-item-folder"
+            >
+              Folder <span
+                class="ml-1 normal-case tracking-normal text-[10px] text-slate-400"
+                >(optional)</span
+              >
             </label>
             <input
               id="new-item-folder"
@@ -139,14 +200,19 @@
           <div class="flex gap-2 justify-end">
             <button
               type="button"
-              onclick={() => { step = 'pick'; chosenType = null; }}
+              onclick={() => {
+                step = "pick";
+                chosenType = null;
+              }}
               class="px-3 py-1.5 text-xs rounded hover:bg-slate-100 dark:hover:bg-warm-800 cursor-pointer"
-            >Back</button>
+              >Back</button
+            >
             <button
               type="submit"
               disabled={busy || !title.trim()}
               class="px-3 py-1.5 text-xs rounded bg-accent-600 text-white font-medium hover:bg-accent-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-            >Create</button>
+              >Create</button
+            >
           </div>
         </form>
       {/if}

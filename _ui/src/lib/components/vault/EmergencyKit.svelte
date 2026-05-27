@@ -1,6 +1,13 @@
 <script lang="ts">
-  import { Printer, Download, Copy, Check, FileDown, ShieldAlert } from 'lucide-svelte';
-  import { addToast } from '@/lib/store/toast.svelte';
+  import {
+    Printer,
+    Download,
+    Copy,
+    Check,
+    FileDown,
+    ShieldAlert,
+  } from "lucide-svelte";
+  import { addToast } from "@/lib/store/toast.svelte";
 
   interface Props {
     username: string;
@@ -8,7 +15,7 @@
     kitID?: string;
     onAcknowledge?: () => void;
   }
-  let { username, secretKey, kitID = '', onAcknowledge }: Props = $props();
+  let { username, secretKey, kitID = "", onAcknowledge }: Props = $props();
 
   let acknowledged = $state(false);
   let copied = $state(false);
@@ -22,8 +29,11 @@
   let didExport = $state(false);
 
   const issuedAt = new Date().toLocaleString(undefined, {
-    year: 'numeric', month: 'long', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 
   // The Print path runs the browser's native print dialog. Modern
@@ -42,7 +52,11 @@
   // same dialog.
   function savePdf() {
     didExport = true;
-    addToast('In the print dialog, choose "Save as PDF" as the destination', 'success', 4500);
+    addToast(
+      'In the print dialog, choose "Save as PDF" as the destination',
+      "success",
+      4500,
+    );
     // Give the toast a moment to render before the modal print
     // dialog takes focus away.
     setTimeout(() => window.print(), 250);
@@ -53,9 +67,9 @@
   // browser, can be re-printed later, survives offline use.
   function downloadHtml() {
     const html = renderStandaloneHtml();
-    const blob = new Blob([html], { type: 'text/html' });
+    const blob = new Blob([html], { type: "text/html" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    const a = document.createElement("a");
     a.href = url;
     a.download = `pika-emergency-kit-${slugify(username)}.html`;
     document.body.appendChild(a);
@@ -70,19 +84,33 @@
       await navigator.clipboard.writeText(secretKey);
       copied = true;
       didExport = true;
-      setTimeout(() => { copied = false; }, 2000);
-      addToast('Secret Key copied to clipboard', 'success');
+      setTimeout(() => {
+        copied = false;
+      }, 2000);
+      addToast("Secret Key copied to clipboard", "success");
     } catch {
-      addToast('Clipboard unavailable; print, save as PDF, or download instead', 'warn');
+      addToast(
+        "Clipboard unavailable; print, save as PDF, or download instead",
+        "warn",
+      );
     }
   }
 
   function escapeHTML(s: string): string {
-    return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] ?? c));
+    return s.replace(
+      /[&<>"]/g,
+      (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c,
+    );
   }
 
   function slugify(s: string): string {
-    return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'user';
+    return (
+      s
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "user"
+    );
   }
 
   // Self-contained HTML for the Download button. Mirrors the
@@ -241,10 +269,14 @@
       <div class="value secret">${escapeHTML(secretKey)}</div>
     </div>
 
-    ${kitID ? `<div class="field">
+    ${
+      kitID
+        ? `<div class="field">
       <div class="label">Kit ID</div>
       <div class="value">${escapeHTML(kitID)}</div>
-    </div>` : ''}
+    </div>`
+        : ""
+    }
 
     <div class="field">
       <div class="label">Master password <span class="pill">write below in pen — never digitally</span></div>
@@ -271,44 +303,69 @@
      uses the .kit-print section further down, which is invisible on
      screen and unconstrained on paper. -->
 <div class="space-y-4 print:hidden">
-  <div class="bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-700 rounded p-3 text-sm flex gap-2">
-    <ShieldAlert size={18} class="text-amber-700 dark:text-amber-300 shrink-0 mt-0.5" />
+  <div
+    class="bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-700 rounded p-3 text-sm flex gap-2"
+  >
+    <ShieldAlert
+      size={18}
+      class="text-amber-700 dark:text-amber-300 shrink-0 mt-0.5"
+    />
     <div>
       <p class="font-semibold text-amber-900 dark:text-amber-200 mb-1">
         Save this Secret Key now. It is shown only once.
       </p>
       <p class="text-amber-800 dark:text-amber-200">
-        You will need both your master password <em>and</em> this Secret Key to unlock your vault on
-        another device. If you lose both, the vault cannot be recovered.
+        You will need both your master password <em>and</em> this Secret Key to unlock
+        your vault on another device. If you lose both, the vault cannot be recovered.
       </p>
     </div>
   </div>
 
   <div>
-    <div class="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Username</div>
-    <div class="font-mono text-sm bg-slate-100 dark:bg-warm-800 px-3 py-2 rounded border border-slate-200 dark:border-warm-700">
+    <div
+      class="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1"
+    >
+      Username
+    </div>
+    <div
+      class="font-mono text-sm bg-slate-100 dark:bg-warm-800 px-3 py-2 rounded border border-slate-200 dark:border-warm-700"
+    >
       {username}
     </div>
   </div>
 
   <div>
-    <div class="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Secret Key</div>
-    <div class="font-mono text-base bg-slate-100 dark:bg-warm-800 px-3 py-2 rounded border border-slate-200 dark:border-warm-700 break-all select-all tracking-wider">
+    <div
+      class="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1"
+    >
+      Secret Key
+    </div>
+    <div
+      class="font-mono text-base bg-slate-100 dark:bg-warm-800 px-3 py-2 rounded border border-slate-200 dark:border-warm-700 break-all select-all tracking-wider"
+    >
       {secretKey}
     </div>
   </div>
 
   {#if kitID}
     <div>
-      <div class="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Kit ID</div>
-      <div class="font-mono text-xs bg-slate-100 dark:bg-warm-800 px-3 py-2 rounded border border-slate-200 dark:border-warm-700 break-all">
+      <div
+        class="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1"
+      >
+        Kit ID
+      </div>
+      <div
+        class="font-mono text-xs bg-slate-100 dark:bg-warm-800 px-3 py-2 rounded border border-slate-200 dark:border-warm-700 break-all"
+      >
         {kitID}
       </div>
     </div>
   {/if}
 
   <div class="pt-2">
-    <div class="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+    <div
+      class="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2"
+    >
       Save your Secret Key — pick at least one
     </div>
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -340,11 +397,14 @@
         onclick={copyKey}
         class="flex items-center justify-center gap-1.5 px-3 py-2 text-sm rounded bg-slate-100 dark:bg-warm-800 hover:bg-slate-200 dark:hover:bg-warm-700 border border-slate-200 dark:border-warm-700 cursor-pointer"
       >
-        {#if copied}<Check size={14} class="text-emerald-600" /> Copied{:else}<Copy size={14} /> Copy key{/if}
+        {#if copied}<Check size={14} class="text-emerald-600" /> Copied{:else}<Copy
+            size={14}
+          /> Copy key{/if}
       </button>
     </div>
     <p class="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
-      <strong>PDF</strong> uses your browser's print dialog — select "Save as PDF" as the destination.
+      <strong>PDF</strong> uses your browser's print dialog — select "Save as PDF"
+      as the destination.
     </p>
   </div>
 
@@ -354,17 +414,25 @@
          the box must be checked before Continue activates. -->
     {#if !didExport}
       <div class="text-xs text-slate-500 dark:text-slate-400 italic">
-        Save, download, print, or copy the Secret Key above to enable the confirmation below.
+        Save, download, print, or copy the Secret Key above to enable the
+        confirmation below.
       </div>
     {/if}
-    <label class="flex items-start gap-2 text-sm {didExport ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}">
+    <label
+      class="flex items-start gap-2 text-sm {didExport
+        ? 'cursor-pointer'
+        : 'cursor-not-allowed opacity-50'}"
+    >
       <input
         type="checkbox"
         bind:checked={acknowledged}
         disabled={!didExport}
         class="mt-0.5 {didExport ? 'cursor-pointer' : 'cursor-not-allowed'}"
       />
-      <span>I have saved my Secret Key in a safe place. I understand the vault cannot be recovered without it.</span>
+      <span
+        >I have saved my Secret Key in a safe place. I understand the vault
+        cannot be recovered without it.</span
+      >
     </label>
     <button
       onclick={onAcknowledge}
@@ -384,9 +452,19 @@
   <div class="kit-sheet">
     <header class="kit-brand">
       <div class="kit-mark" aria-hidden="true">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M10 22V7a1 1 0 0 0-1-1H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 0 0-1-1H2"/>
-          <rect x="14" y="2" width="8" height="8" rx="1"/>
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path
+            d="M10 22V7a1 1 0 0 0-1-1H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 0 0-1-1H2"
+          />
+          <rect x="14" y="2" width="8" height="8" rx="1" />
         </svg>
       </div>
       <div class="kit-brand-text">
@@ -396,10 +474,12 @@
     </header>
 
     <p class="kit-lede">
-      Anyone with <strong>both</strong> the Secret Key below <strong>and</strong> your master password
-      can read your vault. Store this sheet somewhere physical and private: a fireproof safe,
-      a bank deposit box, a sealed envelope at home. Do <strong>not</strong> store it together
-      with a written copy of your master password.
+      Anyone with <strong>both</strong> the Secret Key below
+      <strong>and</strong>
+      your master password can read your vault. Store this sheet somewhere
+      physical and private: a fireproof safe, a bank deposit box, a sealed
+      envelope at home. Do <strong>not</strong> store it together with a written
+      copy of your master password.
     </p>
 
     <div class="kit-field">
@@ -432,8 +512,8 @@
 
     <div class="kit-warn">
       <strong>If you lose both</strong> the master password and this Secret Key,
-      your vault cannot be recovered — not by you, not by an administrator.
-      The server stores only encrypted ciphertext.
+      your vault cannot be recovered — not by you, not by an administrator. The server
+      stores only encrypted ciphertext.
     </div>
 
     <footer class="kit-footer">
@@ -451,14 +531,23 @@
      already toggle the on-screen views; this block makes sure the
      surrounding app chrome (navbar, sidebar, modal frame) disappear
      from the printed sheet too. */
-  :global(body.kit-printing) { background: white !important; }
+  :global(body.kit-printing) {
+    background: white !important;
+  }
 
   @media print {
-    :global(body) { background: white !important; }
+    :global(body) {
+      background: white !important;
+    }
     /* The :global(*) selector is intentional: the print path nukes
        every sibling of the kit sheet so the PDF is just the kit. */
-    :global(body *) { visibility: hidden !important; }
-    .kit-print, .kit-print * { visibility: visible !important; }
+    :global(body *) {
+      visibility: hidden !important;
+    }
+    .kit-print,
+    .kit-print * {
+      visibility: visible !important;
+    }
     .kit-print {
       position: absolute;
       inset: 0;
@@ -479,13 +568,16 @@
   .kit-sheet {
     max-width: 720px;
     margin: 0 auto;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, sans-serif;
     color: #0f172a;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
   .kit-brand {
-    display: flex; align-items: center; gap: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
     padding-bottom: 1rem;
     border-bottom: 2px solid #0f172a;
     margin-bottom: 1.5rem;
@@ -494,39 +586,62 @@
      in the brand red (#EF233C). Pure SVG so it scales crisp at any
      PDF resolution. */
   .kit-mark {
-    width: 44px; height: 44px;
-    display: flex; align-items: center; justify-content: center;
-    color: #EF233C;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ef233c;
   }
-  .kit-mark svg { width: 100%; height: 100%; }
-  .kit-brand-text { line-height: 1.1; }
-  .kit-title { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; }
-  .kit-sub { font-size: 0.85rem; color: #475569; margin-top: 0.15rem; }
+  .kit-mark svg {
+    width: 100%;
+    height: 100%;
+  }
+  .kit-brand-text {
+    line-height: 1.1;
+  }
+  .kit-title {
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .kit-sub {
+    font-size: 0.85rem;
+    color: #475569;
+    margin-top: 0.15rem;
+  }
   .kit-lede {
-    font-size: 0.95rem; line-height: 1.55; color: #475569;
+    font-size: 0.95rem;
+    line-height: 1.55;
+    color: #475569;
     margin: 0 0 1.5rem;
   }
-  .kit-field { margin: 1.25rem 0; }
+  .kit-field {
+    margin: 1.25rem 0;
+  }
   .kit-label {
     font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: #475569;
     margin-bottom: 0.4rem;
-    display: flex; align-items: baseline; gap: 0.5rem;
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
   }
   .kit-pill {
     display: inline-block;
     padding: 1px 6px;
     border-radius: 999px;
     background: #fef0f2;
-    color: #EF233C;
+    color: #ef233c;
     font-size: 0.6rem;
     font-weight: 600;
     letter-spacing: 0.05em;
   }
   .kit-value {
-    font-family: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+    font-family: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas,
+      monospace;
     font-size: 1.05rem;
     padding: 0.85rem 1rem;
     background: #f8fafc;
@@ -535,19 +650,21 @@
     word-break: break-all;
     line-height: 1.5;
   }
-  .kit-secret { font-size: 1.15rem; letter-spacing: 0.02em; }
+  .kit-secret {
+    font-size: 1.15rem;
+    letter-spacing: 0.02em;
+  }
   .kit-handwrite {
     height: 2.5rem;
     border: 1px dashed #cbd5e1;
     border-radius: 8px;
-    background:
-      repeating-linear-gradient(
-        to bottom,
-        transparent 0,
-        transparent 1.2rem,
-        #e2e8f0 1.2rem,
-        #e2e8f0 calc(1.2rem + 1px)
-      );
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 1.2rem,
+      #e2e8f0 1.2rem,
+      #e2e8f0 calc(1.2rem + 1px)
+    );
   }
   .kit-warn {
     background: #fef3c7;
@@ -563,7 +680,9 @@
     margin-top: 2.25rem;
     padding-top: 1rem;
     border-top: 1px solid #cbd5e1;
-    display: flex; justify-content: space-between;
-    color: #475569; font-size: 0.75rem;
+    display: flex;
+    justify-content: space-between;
+    color: #475569;
+    font-size: 0.75rem;
   }
 </style>

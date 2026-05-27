@@ -2,6 +2,12 @@
 
 # pika
 
+[![License](https://img.shields.io/github/license/rakunlabs/pika?color=blue&style=flat-square)](https://raw.githubusercontent.com/rakunlabs/pika/main/LICENSE)
+[![Coverage](https://img.shields.io/sonar/coverage/rakunlabs_pika?logo=sonarcloud&server=https%3A%2F%2Fsonarcloud.io&style=flat-square)](https://sonarcloud.io/summary/overall?id=rakunlabs_pika)
+[![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/rakunlabs/pika/test.yml?branch=main&logo=github&style=flat-square&label=ci)](https://github.com/rakunlabs/pika/actions)
+[![Go Report Card](https://goreportcard.com/badge/github.com/rakunlabs/pika?style=flat-square)](https://goreportcard.com/report/github.com/rakunlabs/pika)
+[![Web](https://img.shields.io/badge/web-document-blueviolet?style=flat-square)](https://rakunlabs.github.io/pika/)
+
 General configuration server, secrets manager, and personal vault with a beautiful web UI and a powerful API.
 
 ## Quick Start

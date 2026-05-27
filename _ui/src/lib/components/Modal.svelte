@@ -24,11 +24,11 @@
   the inner panel width. Defaults to 'md'.
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import type { Snippet } from 'svelte';
-  import { backdropClose } from '@/lib/actions/backdropClose';
+  import { onMount } from "svelte";
+  import type { Snippet } from "svelte";
+  import { backdropClose } from "@/lib/actions/backdropClose";
 
-  type Size = 'sm' | 'md' | 'lg' | 'xl' | 'full';
+  type Size = "sm" | "md" | "lg" | "xl" | "full";
 
   type Props = {
     /** Whether the modal is open. Caller controls visibility. */
@@ -50,7 +50,7 @@
   let {
     open,
     onClose,
-    size = 'md',
+    size = "md",
     ariaLabel,
     header,
     children,
@@ -61,11 +61,11 @@
   // sites don't have to redeclare them; adjust once for global
   // consistency.
   const sizeClass: Record<Size, string> = {
-    sm: 'max-w-md',
-    md: 'max-w-2xl',
-    lg: 'max-w-4xl',
-    xl: 'max-w-6xl',
-    full: 'max-w-full mx-4',
+    sm: "max-w-md",
+    md: "max-w-2xl",
+    lg: "max-w-4xl",
+    xl: "max-w-6xl",
+    full: "max-w-full mx-4",
   };
 
   // Escape-to-close. Bound to window for the duration the modal is
@@ -73,13 +73,13 @@
   // triggers the dismiss.
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && open) {
+      if (e.key === "Escape" && open) {
         e.preventDefault();
         onClose();
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   });
 </script>
 
@@ -93,11 +93,15 @@
     tabindex="-1"
   >
     <div
-      class="relative bg-white dark:bg-warm-900 rounded shadow-xl border border-warm-200 dark:border-warm-800 w-full {sizeClass[size]} max-h-[90vh] flex flex-col"
+      class="relative bg-white dark:bg-warm-900 rounded shadow-xl border border-warm-200 dark:border-warm-800 w-full {sizeClass[
+        size
+      ]} max-h-[90vh] flex flex-col"
       role="document"
     >
       {#if header}
-        <header class="flex items-center justify-between px-4 py-3 border-b border-warm-200 dark:border-warm-800 shrink-0">
+        <header
+          class="flex items-center justify-between px-4 py-3 border-b border-warm-200 dark:border-warm-800 shrink-0"
+        >
           {@render header()}
         </header>
       {/if}
@@ -107,7 +111,9 @@
       </div>
 
       {#if footer}
-        <footer class="flex items-center justify-end gap-2 px-4 py-3 border-t border-warm-200 dark:border-warm-800 shrink-0">
+        <footer
+          class="flex items-center justify-end gap-2 px-4 py-3 border-t border-warm-200 dark:border-warm-800 shrink-0"
+        >
           {@render footer()}
         </footer>
       {/if}

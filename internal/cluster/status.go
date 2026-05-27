@@ -142,7 +142,7 @@ func (c *Cluster) Status() Status {
 		ExpectedReplicas:    config.Replicas,
 		QuorumNodesRequired: quorumNodesRequired(config.Replicas),
 		HasQuorum:           s.HasQuorum,
-		Version:             s.Version,
+		Version:             c.localVersion(),
 		Config:              config,
 		Nodes:               nodes,
 	}

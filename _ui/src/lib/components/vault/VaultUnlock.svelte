@@ -1,9 +1,15 @@
 <script lang="ts">
-  import { Lock, Loader2, KeyRound, AlertCircle, ShieldCheck } from 'lucide-svelte';
-  import { onMount } from 'svelte';
-  import { vaultStore } from '@/lib/vault/store.svelte';
-  import { parseSecretKey } from '@/lib/vault/crypto';
-  import { addToast } from '@/lib/store/toast.svelte';
+  import {
+    Lock,
+    Loader2,
+    KeyRound,
+    AlertCircle,
+    ShieldCheck,
+  } from "lucide-svelte";
+  import { onMount } from "svelte";
+  import { vaultStore } from "@/lib/vault/store.svelte";
+  import { parseSecretKey } from "@/lib/vault/crypto";
+  import { addToast } from "@/lib/store/toast.svelte";
 
   interface Props {
     onUnlocked?: () => void;
@@ -17,11 +23,11 @@
   //   untrusted — first time on this device (or trust was revoked);
   //               both fields are required, plus an opt-in checkbox
   //               to seed the trust blob on a successful unlock.
-  let password = $state('');
-  let secretKeyRaw = $state('');
+  let password = $state("");
+  let secretKeyRaw = $state("");
   let trustChecked = $state(false);
   let busy = $state(false);
-  let err = $state('');
+  let err = $state("");
 
   // Live character count of the entered Secret Key after applying
   // the SAME normalization the decoder does: uppercase, Crockford
@@ -38,9 +44,9 @@
   const secretKeyCharCount = $derived(
     secretKeyRaw
       .toUpperCase()
-      .replace(/[IL]/g, '1')
-      .replace(/O/g, '0')
-      .replace(/[^A-Z0-9]/g, '').length,
+      .replace(/[IL]/g, "1")
+      .replace(/O/g, "0")
+      .replace(/[^A-Z0-9]/g, "").length,
   );
 
   // Destructive-reset escape hatch. The user has lost their Secret
@@ -53,24 +59,24 @@
   //   showReset=false  → small "Lost your Secret Key?" link
   //   showReset=true   → confirmation panel with a typed-word gate
   let showReset = $state(false);
-  let resetConfirm = $state('');
+  let resetConfirm = $state("");
   let resetBusy = $state(false);
-  let resetErr = $state('');
+  let resetErr = $state("");
 
   async function doReset() {
-    if (resetConfirm.trim().toUpperCase() !== 'RESET') {
-      resetErr = 'Type RESET to confirm';
+    if (resetConfirm.trim().toUpperCase() !== "RESET") {
+      resetErr = "Type RESET to confirm";
       return;
     }
     resetBusy = true;
-    resetErr = '';
+    resetErr = "";
     try {
       await vaultStore.reset();
-      addToast('Vault reset — you can create a new one now', 'success', 3500);
+      addToast("Vault reset — you can create a new one now", "success", 3500);
       // The parent Vault.svelte switch will flip to the setup view
       // automatically because status.initialized is now false.
     } catch (e: any) {
-      resetErr = e?.response?.data?.message ?? e?.message ?? 'Reset failed';
+      resetErr = e?.response?.data?.message ?? e?.message ?? "Reset failed";
     } finally {
       resetBusy = false;
     }
@@ -80,10 +86,10 @@
   // it doesn't flip mid-submit (e.g. when the store auto-untrusts
   // on the 3rd failed attempt — we want the error to render in the
   // mode the user just submitted from).
-  let mode = $state<'trusted' | 'untrusted'>('untrusted');
+  let mode = $state<"trusted" | "untrusted">("untrusted");
 
   function refreshMode() {
-    mode = vaultStore.isDeviceTrusted() ? 'trusted' : 'untrusted';
+    mode = vaultStore.isDeviceTrusted() ? "trusted" : "untrusted";
   }
 
   onMount(async () => {
@@ -98,11 +104,13 @@
   function useSecretKeyInstead() {
     vaultStore.untrustDevice();
     refreshMode();
-    err = '';
+    err = "";
     // Move focus to the secret-key textarea once it renders. The
     // password input keeps whatever the user already typed.
     setTimeout(() => {
-      const el = document.getElementById('unlock-sk') as HTMLTextAreaElement | null;
+      const el = document.getElementById(
+        "unlock-sk",
+      ) as HTMLTextAreaElement | null;
       el?.focus();
     }, 0);
   }
@@ -110,10 +118,10 @@
   async function submit(e: Event) {
     e.preventDefault();
     if (busy) return;
-    err = '';
+    err = "";
     busy = true;
     try {
-      if (mode === 'trusted') {
+      if (mode === "trusted") {
         // Store reads the trust blob, unseals with the master
         // password, and proceeds. Returns false on a wrong password
         // OR after the 3-strike auto-untrust fires.
@@ -124,10 +132,11 @@
             // 3-strike untrust fired (or the stored blob was
             // server-rejected as stale). Flip to the full form and
             // tell the user.
-            mode = 'untrusted';
-            err = 'Too many failed attempts — device trust removed. Please enter your Secret Key.';
+            mode = "untrusted";
+            err =
+              "Too many failed attempts — device trust removed. Please enter your Secret Key.";
           } else {
-            err = 'Wrong master password';
+            err = "Wrong master password";
           }
           return;
         }
@@ -136,32 +145,32 @@
         try {
           sk = parseSecretKey(secretKeyRaw);
         } catch (e: any) {
-          err = e?.message ?? 'Invalid Secret Key format';
+          err = e?.message ?? "Invalid Secret Key format";
           return;
         }
         const ok = await vaultStore.unlock(password, sk);
         if (!ok) {
-          err = 'Wrong password or Secret Key';
+          err = "Wrong password or Secret Key";
           return;
         }
         if (trustChecked) {
           try {
             await vaultStore.trustDevice(password);
-            addToast('This device is now trusted', 'success', 2500);
+            addToast("This device is now trusted", "success", 2500);
           } catch {
             // Non-fatal: unlock succeeded; just couldn't persist
             // the trust blob (quota, private mode, etc).
-            addToast('Could not save device trust', 'alert', 3000);
+            addToast("Could not save device trust", "alert", 3000);
           }
         }
       }
-      password = '';
-      secretKeyRaw = '';
+      password = "";
+      secretKeyRaw = "";
       trustChecked = false;
-      addToast('Vault unlocked', 'success', 2000);
+      addToast("Vault unlocked", "success", 2000);
       onUnlocked?.();
     } catch (e: any) {
-      err = e?.response?.data?.message ?? e?.message ?? 'Unlock failed';
+      err = e?.response?.data?.message ?? e?.message ?? "Unlock failed";
     } finally {
       busy = false;
     }
@@ -175,13 +184,17 @@
        version showed only the border. `warm-800` is one tick
        lighter, giving the card a visible "elevated" feel against
        the page in dark mode. -->
-  <div class="bg-white dark:bg-warm-800 rounded-lg border border-slate-200 dark:border-warm-700 p-6 shadow-sm dark:shadow-none">
+  <div
+    class="bg-white dark:bg-warm-800 rounded-lg border border-slate-200 dark:border-warm-700 p-6 shadow-sm dark:shadow-none"
+  >
     <div class="flex items-center gap-2 mb-2">
       <Lock size={18} class="text-accent-600 dark:text-accent-400" />
       <h2 class="text-lg font-semibold">Unlock your vault</h2>
     </div>
-    {#if mode === 'trusted'}
-      <p class="text-sm text-slate-600 dark:text-slate-300 mb-2 flex items-center gap-1.5">
+    {#if mode === "trusted"}
+      <p
+        class="text-sm text-slate-600 dark:text-slate-300 mb-2 flex items-center gap-1.5"
+      >
         <ShieldCheck size={14} class="text-green-600 dark:text-green-500" />
         This device is trusted — only your master password is needed.
       </p>
@@ -193,7 +206,10 @@
 
     <form onsubmit={submit} class="space-y-4">
       <div>
-        <label class="block text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1" for="unlock-pw">
+        <label
+          class="block text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1"
+          for="unlock-pw"
+        >
           Master password
         </label>
         <!-- svelte-ignore a11y_autofocus -->
@@ -208,9 +224,12 @@
         />
       </div>
 
-      {#if mode === 'untrusted'}
+      {#if mode === "untrusted"}
         <div>
-          <label class="block text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1" for="unlock-sk">
+          <label
+            class="block text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1"
+            for="unlock-sk"
+          >
             <span class="inline-flex items-center gap-1.5">
               <KeyRound size={12} /> Secret Key
             </span>
@@ -231,11 +250,12 @@
             </p>
             {#if secretKeyRaw}
               <span
-                class="font-mono tabular-nums {secretKeyCharCount === SECRET_KEY_LENGTH
+                class="font-mono tabular-nums {secretKeyCharCount ===
+                SECRET_KEY_LENGTH
                   ? 'text-emerald-600 dark:text-emerald-400'
                   : secretKeyCharCount > SECRET_KEY_LENGTH
-                  ? 'text-red-600 dark:text-red-400'
-                  : 'text-amber-600 dark:text-amber-400'}"
+                    ? 'text-red-600 dark:text-red-400'
+                    : 'text-amber-600 dark:text-amber-400'}"
                 title="Counted after stripping dashes / spaces. Should be exactly {SECRET_KEY_LENGTH}."
               >
                 {secretKeyCharCount} / {SECRET_KEY_LENGTH}
@@ -244,23 +264,29 @@
           </div>
         </div>
 
-        <label class="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none">
+        <label
+          class="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none"
+        >
           <input
             type="checkbox"
             bind:checked={trustChecked}
             class="mt-0.5 cursor-pointer accent-accent-600"
           />
           <span>
-            <span class="font-medium text-slate-700 dark:text-slate-200">Trust this device.</span>
-            Skip the Secret Key prompt on future unlocks from this browser.
-            The Secret Key is stored locally, encrypted with your master password
-            (Argon2id). Three wrong passwords automatically revoke trust.
+            <span class="font-medium text-slate-700 dark:text-slate-200"
+              >Trust this device.</span
+            >
+            Skip the Secret Key prompt on future unlocks from this browser. The Secret
+            Key is stored locally, encrypted with your master password (Argon2id).
+            Three wrong passwords automatically revoke trust.
           </span>
         </label>
       {/if}
 
       {#if err}
-        <div class="flex items-start gap-2 text-sm text-red-700 dark:text-red-400">
+        <div
+          class="flex items-start gap-2 text-sm text-red-700 dark:text-red-400"
+        >
           <AlertCircle size={14} class="mt-0.5 shrink-0" />
           <span>{err}</span>
         </div>
@@ -272,10 +298,10 @@
         class="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm rounded bg-accent-600 text-white font-medium hover:bg-accent-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
       >
         {#if busy}<Loader2 size={14} class="animate-spin" />{/if}
-        {busy && mode === 'trusted' ? 'Unlocking…' : 'Unlock'}
+        {busy && mode === "trusted" ? "Unlocking…" : "Unlock"}
       </button>
 
-      {#if mode === 'trusted'}
+      {#if mode === "trusted"}
         <button
           type="button"
           onclick={useSecretKeyInstead}
@@ -293,25 +319,38 @@
       {#if !showReset}
         <button
           type="button"
-          onclick={() => { showReset = true; resetErr = ''; resetConfirm = ''; }}
+          onclick={() => {
+            showReset = true;
+            resetErr = "";
+            resetConfirm = "";
+          }}
           class="w-full text-xs text-slate-500 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 underline cursor-pointer"
         >
           Lost your Secret Key or master password? Reset the vault…
         </button>
       {:else}
         <div class="space-y-3">
-          <div class="flex items-start gap-2 text-xs text-red-700 dark:text-red-400">
+          <div
+            class="flex items-start gap-2 text-xs text-red-700 dark:text-red-400"
+          >
             <AlertCircle size={14} class="mt-0.5 shrink-0" />
             <span>
-              <strong>This will permanently delete every item in your vault.</strong>
+              <strong
+                >This will permanently delete every item in your vault.</strong
+              >
               The server keeps no plaintext copy and cannot recover it. After reset
-              you'll be able to create a fresh vault with a new master password
-              and a brand-new Secret Key.
+              you'll be able to create a fresh vault with a new master password and
+              a brand-new Secret Key.
             </span>
           </div>
           <div>
-            <label class="block text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1" for="reset-confirm">
-              Type <span class="font-mono text-red-600 dark:text-red-400">RESET</span> to confirm
+            <label
+              class="block text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1"
+              for="reset-confirm"
+            >
+              Type <span class="font-mono text-red-600 dark:text-red-400"
+                >RESET</span
+              > to confirm
             </label>
             <input
               id="reset-confirm"
@@ -329,7 +368,8 @@
             <button
               type="button"
               onclick={doReset}
-              disabled={resetBusy || resetConfirm.trim().toUpperCase() !== 'RESET'}
+              disabled={resetBusy ||
+                resetConfirm.trim().toUpperCase() !== "RESET"}
               class="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm rounded bg-red-600 text-white font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
             >
               {#if resetBusy}<Loader2 size={14} class="animate-spin" />{/if}
@@ -337,7 +377,11 @@
             </button>
             <button
               type="button"
-              onclick={() => { showReset = false; resetErr = ''; resetConfirm = ''; }}
+              onclick={() => {
+                showReset = false;
+                resetErr = "";
+                resetConfirm = "";
+              }}
               disabled={resetBusy}
               class="px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-700 hover:bg-slate-100 dark:hover:bg-warm-800 cursor-pointer"
             >
