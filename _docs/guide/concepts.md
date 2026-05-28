@@ -75,7 +75,7 @@ API tokens authenticate non-human consumers. Each token has 1+ **scopes**, where
 }
 ```
 
-See [Tokens & scopes](/reference/tokens-and-scopes) for the matcher rules.
+See [Tokens & scopes](/guide/tokens-and-scopes) for the matcher rules.
 
 ## Hooks
 

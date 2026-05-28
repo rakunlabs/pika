@@ -7,6 +7,10 @@ import (
 	"strings"
 
 	"github.com/rakunlabs/chu"
+	_ "github.com/rakunlabs/chu/loader/external/loaderconsul"
+	_ "github.com/rakunlabs/chu/loader/external/loadergcpparameter"
+	_ "github.com/rakunlabs/chu/loader/external/loadergcpsecret"
+	_ "github.com/rakunlabs/chu/loader/external/loadervault"
 	"github.com/rakunlabs/chu/loader/loaderenv"
 	"github.com/rakunlabs/logi"
 	"github.com/rakunlabs/pika/internal/cluster"
@@ -23,11 +27,39 @@ var (
 type Config struct {
 	LogLevel string `cfg:"log_level" default:"info"`
 
-	Storage storage.Config `cfg:"storage"`
-	Server  Server         `cfg:"server"`
-	Cluster cluster.Config `cfg:"cluster"`
+	Storage    storage.Config `cfg:"storage"`
+	Server     Server         `cfg:"server"`
+	Cluster    cluster.Config `cfg:"cluster"`
+	Encryption Encryption     `cfg:"encryption"`
 
 	Telemetry tell.Config `cfg:"telemetry"`
+}
+
+// Encryption carries optional at-rest passphrase that the operator
+// can supply through the config file (or PIKA_ENCRYPTION_PASSWORD).
+//
+// Semantics applied at boot in cmd/pika/main.go:
+//
+//   - Empty: legacy behaviour. The server starts locked if a verifier
+//     exists on disk and the operator must enter the key through the
+//     UnlockScreen on every restart.
+//   - Set + already-initialized: the server attempts auto-unlock with
+//     the supplied passphrase. Success → fully online, no manual
+//     step. Failure (wrong passphrase) → server stays LOCKED, the
+//     UnlockScreen still asks for a key, and /api/v1/info carries
+//     a warning flag so the SPA can tell the operator their config
+//     value is bad.
+//   - Set + not yet initialized: the server auto-initializes using
+//     this passphrase. The supplied value becomes the at-rest key.
+//
+// SECURITY NOTE: when populated this field defeats the original
+// "key never lives on disk" design. We mask it from `chu.MarshalMap`
+// via `log:"-"` so it doesn't leak into the loaded-configuration
+// log line, but it IS readable to anyone who can read the config
+// file or process env. Operators trading manual-unlock UX for
+// at-rest-key-on-disk should understand that trade-off.
+type Encryption struct {
+	Password string `cfg:"password" log:"-"`
 }
 
 type Server struct {
@@ -54,6 +86,7 @@ func Load(ctx context.Context) (*Config, error) {
 		chu.WithLoaderOption(loaderenv.New(
 			loaderenv.WithPrefix("PIKA_"),
 		)),
+		chu.WithVersion(Version),
 	); err != nil {
 		return nil, err
 	}

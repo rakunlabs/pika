@@ -10,11 +10,11 @@ export default defineConfig({
   ignoreDeadLinks: 'localhostLinks',
 
   themeConfig: {
-    logo: '/favicon-192x192.png',
+    logo: '/logo.svg',
+    siteTitle: 'pika',
 
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
-      { text: 'Reference', link: '/reference/consuming-data' },
       {
         text: 'Links',
         items: [
@@ -39,6 +39,7 @@ export default defineConfig({
           items: [
             { text: 'Concepts', link: '/guide/concepts' },
             { text: 'Versions & variants', link: '/guide/versions-variants' },
+            { text: 'Consuming data', link: '/guide/consuming-data' },
             {
               text: 'Inheritance',
               link: '/guide/inheritance/',
@@ -50,15 +51,17 @@ export default defineConfig({
                 { text: 'Consul', link: '/guide/inheritance/consul' },
                 { text: 'etcd', link: '/guide/inheritance/etcd' },
                 { text: 'AWS', link: '/guide/inheritance/aws' },
-                { text: 'GCP', link: '/guide/inheritance/gcp' },
+                { text: 'GCP Secret Manager', link: '/guide/inheritance/gcp' },
+                { text: 'GCP Parameter Manager', link: '/guide/inheritance/gcp-parameter' },
                 { text: 'Azure', link: '/guide/inheritance/azure' },
               ],
             },
           ],
         },
         {
-          text: 'Events',
+          text: 'Serving',
           items: [
+            { text: 'Endpoints', link: '/guide/endpoints' },
             { text: 'Hooks', link: '/guide/hooks' },
           ],
         },
@@ -72,22 +75,17 @@ export default defineConfig({
           text: 'Operations',
           items: [
             { text: 'Authentication', link: '/guide/authentication' },
+            { text: 'Tokens & scopes', link: '/guide/tokens-and-scopes' },
             { text: 'Encryption', link: '/guide/encryption' },
             { text: 'Server key management', link: '/guide/server-key-management' },
             { text: 'Clustering', link: '/guide/clustering' },
             { text: 'Kubernetes', link: '/guide/kubernetes' },
           ],
         },
-      ],
-
-      '/reference/': [
         {
-          text: 'Reference',
+          text: 'API',
           items: [
-            { text: 'Consuming data', link: '/reference/consuming-data' },
-            { text: 'Admin API', link: '/reference/api' },
-            { text: 'Tokens & scopes', link: '/reference/tokens-and-scopes' },
-            { text: 'Endpoints', link: '/reference/compat' },
+            { text: 'Admin API', link: '/guide/api' },
           ],
         },
       ],

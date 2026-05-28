@@ -12,11 +12,12 @@ docker run -d \
   ghcr.io/rakunlabs/pika:latest
 ```
 
-| Path / port | Purpose                                             |
-| ----------- | --------------------------------------------------- |
-| `/data`     | Persistent volume — holds the embedded bw database. |
-| `8080`      | HTTPS admin UI + authenticated `/data/*` endpoint.  |
-| `9090`      | (Optional) Public unauthenticated `/data/*` port.   |
+| Path / port | Purpose                                                         |
+| ----------- | --------------------------------------------------------------- |
+| `/data`     | Persistent volume — holds the embedded bw database.             |
+| `8080`      | HTTPS admin UI + authenticated `/data/*` endpoint.              |
+
+Extra public ports (e.g. unauthenticated `/data/*`, Consul KV shim, custom Go-template responses) are configured at runtime under **Settings → Endpoints** and bind their own listeners — publish the matching `host:port` from the container as needed. See [Endpoints](./endpoints).
 
 ::: tip
 The image is published for `linux/amd64` and `linux/arm64`. Pin a tag in production (`ghcr.io/rakunlabs/pika:v0.x.y`) instead of `latest`.
@@ -88,10 +89,9 @@ make build       # builds the UI and the Go binary into ./dist/pika
 
 On first launch, open `https://localhost:8080`. The default certificate is self-signed, so your browser will ask you to trust it. The UI presents a setup screen to create the initial admin account. After that, sign in and head to **Settings** to:
 
-- Mint your first [API token](/reference/tokens-and-scopes).
+- Mint your first [API token](/guide/tokens-and-scopes).
 - (Optional) Enable [external auth](./authentication) — OAuth2/OIDC, LDAP, or forward-auth headers.
-
 - (Optional) Configure [external resources](./inheritance/) for inheritance.
-- (Optional) Add an [Endpoint](/reference/compat) — direct config data, External resource, Consul KV, or custom Go-template — for clients that don't speak pika's Bearer-auth `/data/*` API.
+- (Optional) Add an [Endpoint](./endpoints) — direct config data, External resource, Consul KV, or custom Go-template — for clients that don't speak pika's Bearer-auth `/data/*` API.
 
 Once you're happy with the layout, the [Concepts](./concepts) page is the best next read.

@@ -83,6 +83,15 @@
      let newExtAwsService = $state<"secretsmanager" | "ssm">("secretsmanager");
      // GCP fields
      let newExtGcpServiceAccountJson = $state("");
+     // GCP response-shape options (see GCPConfig in types/config.ts).
+     // Default OFF (matches server-side GCP.GetRawValue() default of
+     // false). Operators opt in per resource via the checkbox. Keeping
+     // the default off is intentional: External.svelte:301 and
+     // InheritDialog.svelte:152 both still read `entry.data.value`,
+     // so flipping the wrapper default would silently break those
+     // UI paths for every existing GCP resource.
+     let newExtGcpRawValue = $state(false);
+     let newExtGcpContentType = $state("application/yaml");
      // GCP Parameter Manager fields
      let newExtGcpParamServiceAccountJson = $state("");
      let newExtGcpParamLocation = $state("global");
@@ -214,9 +223,25 @@
                     addToast("GCP service account JSON is required", "alert");
                     return;
                }
-               resource.gcp = {
+               // Persist `raw_value` only when the operator opted IN
+               // (true). Server default is false (legacy wrapper), so
+               // omitting the field keeps existing on-disk semantics.
+               // `content_type` is only meaningful in raw mode, so we
+               // omit it unless raw is on AND the value differs from
+               // the server fallback ("application/yaml").
+               const gcpCfg: { service_account_json: string; raw_value?: boolean; content_type?: string } = {
                     service_account_json: newExtGcpServiceAccountJson.trim(),
                };
+               if (newExtGcpRawValue) {
+                    gcpCfg.raw_value = true;
+                    if (
+                         newExtGcpContentType.trim() !== "" &&
+                         newExtGcpContentType.trim() !== "application/yaml"
+                    ) {
+                         gcpCfg.content_type = newExtGcpContentType.trim();
+                    }
+               }
+               resource.gcp = gcpCfg;
           } else if (newExtType === "gcp-parameter") {
                if (!newExtGcpParamServiceAccountJson.trim()) {
                     addToast("GCP service account JSON is required", "alert");
@@ -281,6 +306,8 @@
                newExtAwsSecretKey = "";
                newExtAwsService = "secretsmanager";
                newExtGcpServiceAccountJson = "";
+               newExtGcpRawValue = false;
+               newExtGcpContentType = "application/yaml";
                newExtGcpParamServiceAccountJson = "";
                newExtGcpParamLocation = "global";
                newExtAzureVaultUrl = "";
@@ -1020,6 +1047,68 @@
                               account key with Secret Manager access
                          </p>
                     </div>
+                    <!-- Response-shape options. Controls how GCPProvider.Read
+                         returns the secret to direct callers (public endpoints
+                         / /external/{name}/read). Inheritance reads are
+                         unaffected and continue to use the consumer-side
+                         `format` hint instead. Default off so the External
+                         page editor and the InheritDialog preview keep
+                         working — both read `entry.data.value`. -->
+                    <div class="mb-4">
+                         <label
+                              class="flex items-start gap-2 text-xs font-medium text-slate-600 dark:text-slate-300 cursor-pointer select-none"
+                         >
+                              <input
+                                   type="checkbox"
+                                   bind:checked={newExtGcpRawValue}
+                                   class="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 focus:ring-offset-0"
+                              />
+                              <span class="flex-1">
+                                   Return raw value
+                                   <span
+                                        class="block mt-0.5 text-[11px] font-normal text-slate-400 dark:text-slate-500"
+                                   >
+                                        Off by default: non-JSON payloads come
+                                        back wrapped as <code
+                                             >{`{"value": "..."}`}</code
+                                        > JSON, matching how the External page
+                                        editor and Inherit preview already
+                                        read the response. Turn on to serve
+                                        the secret bytes as-is with the
+                                        Content-Type below — useful when you
+                                        front the resource through a public
+                                        endpoint that should hand out raw YAML
+                                        / plaintext.
+                                   </span>
+                              </span>
+                         </label>
+                    </div>
+                    {#if newExtGcpRawValue}
+                         <div class="mb-4">
+                              <label
+                                   for="ext-gcp-content-type"
+                                   class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"
+                                   >Content-Type</label
+                              >
+                              <input
+                                   id="ext-gcp-content-type"
+                                   type="text"
+                                   bind:value={newExtGcpContentType}
+                                   placeholder="application/yaml"
+                                   class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+                              />
+                              <p
+                                   class="mt-1 text-[11px] text-slate-400 dark:text-slate-500"
+                              >
+                                   Sent as the HTTP <code>Content-Type</code>
+                                   header on direct reads. Defaults to
+                                   <code>application/yaml</code>; use
+                                   <code>application/json</code>,
+                                   <code>text/plain</code>, etc. to match how
+                                   the secret is stored.
+                              </p>
+                         </div>
+                    {/if}
                {:else if newExtType === "gcp-parameter"}
                     <div class="mb-4">
                          <label

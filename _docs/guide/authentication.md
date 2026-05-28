@@ -3,7 +3,7 @@
 Pika has two distinct authentication mechanisms:
 
 1. **Sessions** for human users in the web UI (cookie-based).
-2. **API tokens** for programmatic consumers reading `/data/*` and `/raw/*`.
+2. **API tokens** for programmatic consumers reading `/data/*` and calling `/api/v1/*`.
 
 In addition, pika can plug external identity providers in front of the session login: OAuth2/OIDC, LDAP, or a header-based forward-auth gateway.
 
@@ -15,20 +15,20 @@ Each user belongs to one or more **permission bundles** that define which capabi
 
 ## Capabilities
 
-Users (and externally-authenticated identities) are checked against pika's capability keys:
+Users (and externally-authenticated identities) are checked against pika's capability keys (`internal/service/capabilities.go` is the source of truth):
 
 | Key                  | Grants                                                                       |
 | -------------------- | ---------------------------------------------------------------------------- |
-| `files.read`         | View configurations, versions, variants, render, search, convert.            |
-| `files.write`        | Create, update, delete configurations and variants.                          |
-| `raw.read`           | Browse and download raw mount contents.                                      |
-| `raw.write`          | Upload, delete, rename, copy, move raw mount contents.                       |
+| `files.read`         | View folders, files, versions, variants, render and search configurations.    |
+| `files.write`        | Create, update and delete folders and configuration files.                    |
+| `external.read`      | Browse, search and read entries from configured external resources (Vault, Consul, etcd, AWS, Azure, GCP, Kubernetes, HTTP, ...). |
+| `external.write`     | Create, update and delete entries on configured external resources.           |
 | `settings.manage`    | View and modify server settings, backup/restore, server encryption-key lifecycle. |
 | `tokens.manage`      | Create, edit, revoke API access tokens.                                      |
 | `users.manage`       | Create, edit, delete, kick users (built-in auth only).                       |
 | `permissions.manage` | Define permission bundles and assign them (built-in auth only).              |
 
-A bundle can also have an associated **path pattern** that scopes the file/raw permissions. For example, a bundle with `files.read` and pattern `team-a/**` lets the user read everything under `team-a/` but nothing else.
+A bundle can also have an associated **path pattern** that scopes the file/external permissions. For example, a bundle with `files.read` and pattern `team-a/**` lets the user read everything under `team-a/` but nothing else.
 
 ## API tokens
 
@@ -50,7 +50,7 @@ curl -H "Authorization: Bearer pika_..." \
   https://localhost:8080/data/myapp/config
 ```
 
-Token scope syntax and matching rules are documented in detail under [Tokens & scopes](/reference/tokens-and-scopes).
+Token scope syntax and matching rules are documented in detail under [Tokens & scopes](/guide/tokens-and-scopes).
 
 ## External authentication
 
@@ -85,8 +85,8 @@ Externally-authenticated users can be linked to local `users` rows by user sync,
 Enable enforcement under **Settings → Authentication → Permissions**, then map external groups (or OAuth2 scopes) to pika capabilities:
 
 ```text
-pika-editor  →  files.read, files.write, raw.read
-auditors     →  files.read, raw.read, tokens.manage
+pika-editor  →  files.read, files.write, external.read
+auditors     →  files.read, external.read, tokens.manage
 ```
 
 If your gateway emits `X-Groups: pika-editor,auditors` for a user, the user gets the **union** of both sets. Unknown groups are ignored. Users not in the Superadmins allowlist and without any matching group are denied any restricted action (403).

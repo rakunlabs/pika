@@ -22,7 +22,7 @@ curl -H "Authorization: Bearer pika_abc123..." \
 The token must have a scope that covers the requested path with the `read` operation. See [Tokens & scopes](./tokens-and-scopes).
 
 ::: tip Endpoints
-For client tools that don't speak Bearer auth — or that already speak a different config protocol — open an **Endpoint** (Settings → Endpoints). Each endpoint binds its own `host:port` and serves pika's data in either Consul KV shape or a custom Go-template response, with an optional request-check stage in between. See [Endpoints](./compat).
+For client tools that don't speak Bearer auth — or that already speak a different config protocol — open an **Endpoint** (Settings → Endpoints). Each endpoint binds its own `host:port` and serves pika's data in either Consul KV shape or a custom Go-template response, with an optional request-check stage in between. See [Endpoints](./endpoints).
 :::
 
 ## Query parameters
@@ -83,27 +83,16 @@ By default the response is in the file's stored format. Override with `?format=`
 | Code | Meaning                                                                         |
 | ---- | ------------------------------------------------------------------------------- |
 | 200  | OK — body contains the resolved config.                                         |
-| 401  | No token / invalid token. Endpoints with `auth=none` skip this. |
+| 400  | A configured inheritance source returned bad data, or the resolved document had errors. |
+| 401  | No token / invalid token. (Endpoints with `auth=none` use a separate listener and don't surface here.) |
 | 403  | Token doesn't have a scope covering the path with `read`.                       |
 | 404  | Path doesn't exist (or variant/version not found).                              |
-| 502  | An external inheritance source failed.                                          |
+| 503  | Server is locked (encryption verifier present, not yet unlocked). Response carries `X-Pika-Locked: true`. |
 
 ## Caching
 
-Pika does **not** add `Cache-Control` headers — caching is the consumer's responsibility. Most callers should fetch on startup and on a long interval (e.g. once a minute). For configs that change rarely, an `ETag` header is provided so you can issue conditional requests:
-
-```sh
-curl -I -H "Authorization: Bearer $TOKEN" \
-  https://localhost:8080/data/myapp/config
-# HTTP/1.1 200 OK
-# ETag: "v3"
-
-curl -H "Authorization: Bearer $TOKEN" \
-  -H 'If-None-Match: "v3"' \
-  https://localhost:8080/data/myapp/config
-# HTTP/1.1 304 Not Modified
-```
+Pika does **not** add `Cache-Control` or `ETag` headers — every successful `/data/*` request re-resolves the document from storage and inheritance sources and writes the result. Caching is the consumer's responsibility. Most callers should fetch on startup and on a long interval (e.g. once a minute), or react to a [Hook](./hooks) signal when configs change.
 
 ## Endpoints
 
-Pika can also expose its data through operator-defined endpoints — either a Consul KV-shaped reader or a custom Go-template modifier, with an optional per-request inspection stage. Each endpoint binds its own `host:port`. See [Endpoints](./compat).
+Pika can also expose its data through operator-defined endpoints — either a Consul KV-shaped reader, a direct External-resource passthrough, or a custom Go-template modifier, with an optional per-request inspection stage. Each endpoint binds its own `host:port`. See [Endpoints](./endpoints).

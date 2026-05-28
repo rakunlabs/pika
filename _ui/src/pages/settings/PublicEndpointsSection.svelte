@@ -480,6 +480,48 @@
         return { resource: externalResourceNames[0] ?? "" };
     }
 
+    // Tri-state view of ExternalCompat.raw_value for the response-mode
+    // select. Persisted as boolean | null | undefined on the wire;
+    // we map missing/null → "inherit" so the picker shows a stable
+    // default until the operator chooses to override.
+    type ExternalRawMode = "inherit" | "raw" | "wrapped";
+    const externalRawMode: ExternalRawMode = $derived.by(() => {
+        if (form.mode !== "external" || !form.external) return "inherit";
+        if (form.external.raw_value === true) return "raw";
+        if (form.external.raw_value === false) return "wrapped";
+        return "inherit";
+    });
+
+    function setExternalRawMode(mode: ExternalRawMode) {
+        if (!form.external) return;
+        switch (mode) {
+            case "inherit":
+                // Drop the override entirely so the resource's own
+                // raw_value/content_type take effect on the next request.
+                // We also clear content_type because the placeholder
+                // copy switches to "inherit"; leaving a leftover value
+                // would silently still apply.
+                form.external.raw_value = undefined;
+                form.external.content_type = undefined;
+                break;
+            case "raw":
+                form.external.raw_value = true;
+                break;
+            case "wrapped":
+                form.external.raw_value = false;
+                break;
+        }
+    }
+
+    // Placeholder for the content-type input. Reflects what the
+    // server will use when the field is left empty so the operator
+    // sees the effective default without having to read the docs.
+    const externalContentTypePlaceholder = $derived.by(() => {
+        if (externalRawMode === "raw") return "application/yaml (default)";
+        if (externalRawMode === "wrapped") return "application/json (default)";
+        return "Inherit from resource";
+    });
+
     function setMode(m: "static" | "consul" | "external" | "custom") {
         form.mode = m;
         if (m === "static") {
@@ -1840,6 +1882,92 @@
                                     GET {form.base_path && form.base_path !== "/" ? form.base_path : ""}/apps/api/db → {form.external.resource || "resource"}:apps/api/db
                                 </p>
                             {/if}
+
+                            <!-- Per-endpoint response-shape override. Inherit
+                                 (default) keeps current behaviour: the
+                                 resource's own raw_value / content_type
+                                 settings flow through unchanged. Picking
+                                 "raw" or "wrapped" lets one resource serve
+                                 different shapes across multiple endpoints
+                                 — useful for wrapper backends like GCP
+                                 Secret Manager that store YAML/plaintext
+                                 payloads. -->
+                            <details class="mt-2 group">
+                                <summary
+                                    class="cursor-pointer text-xs font-medium text-slate-600 dark:text-slate-300 py-1 select-none"
+                                >
+                                    Response shape override (optional)
+                                </summary>
+                                <div
+                                    class="mt-2 pl-3 border-l-2 border-slate-200 dark:border-warm-700 space-y-2"
+                                >
+                                    <p
+                                        class="text-[11px] text-slate-500 dark:text-slate-400"
+                                    >
+                                        Overrides the resource's <code>raw_value</code>
+                                        / <code>content_type</code> for this endpoint
+                                        only. Most useful when the underlying
+                                        backend wraps non-JSON payloads as
+                                        <code>{`{"value": "..."}`}</code> (GCP
+                                        Secret Manager, AWS Secrets Manager,
+                                        Consul KV, etcd, plain HTTP).
+                                    </p>
+                                    <label
+                                        class="text-xs space-y-1 block"
+                                    >
+                                        <span
+                                            class="text-slate-600 dark:text-slate-300"
+                                            >Response mode</span
+                                        >
+                                        <select
+                                            value={externalRawMode}
+                                            onchange={(e) =>
+                                                setExternalRawMode(
+                                                    (
+                                                        e.currentTarget as HTMLSelectElement
+                                                    )
+                                                        .value as ExternalRawMode,
+                                                )}
+                                            class="w-full px-2 py-1.5 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100"
+                                        >
+                                            <option value="inherit"
+                                                >Inherit from resource
+                                                (default)</option
+                                            >
+                                            <option value="raw"
+                                                >Force raw bytes (no wrapper)</option
+                                            >
+                                            <option value="wrapped"
+                                                >Force {`{"value": "..."}`} JSON
+                                                wrap</option
+                                            >
+                                        </select>
+                                    </label>
+                                    <label
+                                        class="text-xs space-y-1 block"
+                                    >
+                                        <span
+                                            class="text-slate-600 dark:text-slate-300"
+                                            >Content-Type (optional)</span
+                                        >
+                                        <input
+                                            type="text"
+                                            value={form.external.content_type ??
+                                                ""}
+                                            oninput={(e) => {
+                                                if (!form.external) return;
+                                                const v = (
+                                                    e.currentTarget as HTMLInputElement
+                                                ).value;
+                                                form.external.content_type =
+                                                    v === "" ? undefined : v;
+                                            }}
+                                            placeholder={externalContentTypePlaceholder}
+                                            class="w-full px-2 py-1.5 text-sm font-mono rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100"
+                                        />
+                                    </label>
+                                </div>
+                            </details>
                         </div>
                     {:else if form.mode === "custom" && form.custom}
                         <div class="space-y-2">

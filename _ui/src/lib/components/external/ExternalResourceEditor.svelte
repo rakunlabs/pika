@@ -133,6 +133,16 @@
 
   // GCP
   let gcpJson = $state(snapResource.gcp?.service_account_json ?? "");
+  // Response-shape options. Server-side default is OFF (legacy wrapper
+  // preserved — see GCP.GetRawValue() in internal/external/external.go
+  // and the External.svelte / InheritDialog.svelte rationale). Existing
+  // resources without `raw_value` set should land on the OFF state so
+  // the editor reflects current behaviour rather than offering to flip
+  // a default the server hasn't changed.
+  let gcpRawValue = $state(snapResource.gcp?.raw_value ?? false);
+  let gcpContentType = $state(
+    snapResource.gcp?.content_type ?? "application/yaml",
+  );
 
   // GCP Parameter Manager
   let gcpParamJson = $state(
@@ -299,7 +309,29 @@
         addToast("GCP service account JSON is required", "alert");
         return null;
       }
-      r.gcp = { service_account_json: gcpJson.trim() };
+      // Same opt-in rule as ExternalResourcesSection: only persist
+      // `raw_value` when the operator turned it ON, and only carry a
+      // `content_type` override when raw mode is on AND the value
+      // differs from the server's default ("application/yaml").
+      // Keeping the wire format minimal means existing resources stay
+      // on legacy behaviour unless the operator explicitly opts in.
+      const gcpCfg: {
+        service_account_json: string;
+        raw_value?: boolean;
+        content_type?: string;
+      } = {
+        service_account_json: gcpJson.trim(),
+      };
+      if (gcpRawValue) {
+        gcpCfg.raw_value = true;
+        if (
+          gcpContentType.trim() !== "" &&
+          gcpContentType.trim() !== "application/yaml"
+        ) {
+          gcpCfg.content_type = gcpContentType.trim();
+        }
+      }
+      r.gcp = gcpCfg;
     } else if (formType === "gcp-parameter") {
       if (!gcpParamJson.trim()) {
         addToast("GCP service account JSON is required", "alert");
@@ -1121,6 +1153,75 @@
           ></textarea>
         {/if}
       </div>
+      <!-- Response-shape options. Affects direct reads only
+           (public endpoints, /external/{name}/read). Inheritance
+           reads keep using the consumer-side `format` hint regardless.
+           Default off so the External editor and Inherit preview
+           (both of which read `entry.data.value`) keep working. -->
+      <div class="mb-4">
+        {#if isReadOnly}
+          <span
+            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"
+            >Return raw value</span
+          >
+          <div
+            class="px-3 py-2 text-sm font-mono text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md"
+          >
+            {gcpRawValue ? "enabled (raw bytes)" : "disabled (JSON wrapper)"}
+          </div>
+        {:else}
+          <label
+            class="flex items-start gap-2 text-xs font-medium text-slate-600 dark:text-slate-300 cursor-pointer select-none"
+          >
+            <input
+              type="checkbox"
+              bind:checked={gcpRawValue}
+              class="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 focus:ring-offset-0"
+            />
+            <span class="flex-1">
+              Return raw value
+              <span
+                class="block mt-0.5 text-[11px] font-normal text-slate-400 dark:text-slate-500"
+              >
+                Off by default: non-JSON payloads come back wrapped as
+                <code>{`{"value": "..."}`}</code> JSON, which is what the
+                External page editor and Inherit preview expect. Turn on to
+                serve the secret bytes as-is with the Content-Type below
+                (handy for public endpoints that should hand out raw YAML /
+                plaintext).
+              </span>
+            </span>
+          </label>
+        {/if}
+      </div>
+      {#if gcpRawValue}
+        <div class="mb-4">
+          <span
+            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"
+            >Content-Type</span
+          >
+          {#if isReadOnly}
+            <div
+              class="px-3 py-2 text-sm font-mono text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md"
+            >
+              {gcpContentType || "application/yaml"}
+            </div>
+          {:else}
+            <input
+              type="text"
+              bind:value={gcpContentType}
+              placeholder="application/yaml"
+              class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+            />
+            <p class="mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+              Sent as the HTTP <code>Content-Type</code> header on direct reads.
+              Defaults to <code>application/yaml</code>; use
+              <code>application/json</code>, <code>text/plain</code>, etc. to
+              match how the secret is stored.
+            </p>
+          {/if}
+        </div>
+      {/if}
     {:else if formType === "gcp-parameter"}
       <div class="mb-4">
         <span

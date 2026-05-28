@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Lock, Loader2, Eye, EyeOff } from "lucide-svelte";
+  import { Lock, Loader2, Eye, EyeOff, AlertTriangle } from "lucide-svelte";
   import { keymgrStore } from "@/lib/store/keymgr.svelte";
   import { appStore } from "@/lib/store/store.svelte";
   import ThemeSwitcher from "@/lib/components/ThemeSwitcher.svelte";
@@ -37,6 +37,17 @@
   // for the few hundred ms until /api/v1/info responds.
   const infoReady = $derived(appStore.info !== null);
   const canUnlock = $derived(appStore.hasPermission("settings.manage"));
+
+  // Surfaces the boot-time auto-unlock failure flag from /api/v1/info.
+  // True only when the operator set `encryption.password` in config
+  // (or PIKA_ENCRYPTION_PASSWORD) AND that passphrase didn't decrypt
+  // the on-disk verifier. We render this above the form so it's the
+  // first thing the admin sees — the manual unlock path still works
+  // with the correct key, but the config file needs fixing for the
+  // next restart to be hands-off again.
+  const configInvalid = $derived(
+    appStore.info?.encryption_config_invalid ?? false,
+  );
 
   // Form state. Cleared on successful submit so a back-button or
   // tab-switch later doesn't leave the key sitting in the input.
@@ -125,7 +136,40 @@
         <div class="flex items-center justify-center py-4">
           <Loader2 size={16} class="animate-spin text-slate-400" />
         </div>
-      {:else if canUnlock}
+      {:else}
+        {#if configInvalid}
+          <!-- Boot-time auto-unlock failed: the operator set
+               `encryption.password` (config file or
+               PIKA_ENCRYPTION_PASSWORD) but the value did NOT match
+               the on-disk verifier. We render this BEFORE either
+               the unlock form or the "ask admin" message so both
+               operator personas see it; the admin can still recover
+               by entering the real key below. Amber + AlertTriangle
+               per DESIGN_SYSTEM §8 (warning callout). -->
+          <div
+            class="mb-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 rounded p-3 text-xs flex gap-2"
+            role="alert"
+          >
+            <AlertTriangle
+              size={14}
+              class="text-amber-700 dark:text-amber-300 shrink-0 mt-0.5"
+            />
+            <div class="text-amber-900 dark:text-amber-200">
+              The <code
+                class="px-1 py-0.5 bg-white dark:bg-warm-900 border border-amber-200 dark:border-amber-800 rounded font-mono"
+                >encryption.password</code
+              >
+              value from this server's config didn't match the stored encryption
+              key, so auto-unlock was skipped. Enter the correct key below to bring
+              the server online, then update the config file (or
+              <code
+                class="px-1 py-0.5 bg-white dark:bg-warm-900 border border-amber-200 dark:border-amber-800 rounded font-mono"
+                >PIKA_ENCRYPTION_PASSWORD</code
+              >) so the next restart is hands-off.
+            </div>
+          </div>
+        {/if}
+        {#if canUnlock}
         <p class="text-xs text-slate-500 dark:text-slate-400 mb-4">
           Enter the server encryption key to bring Pika online. The key is held
           in memory only — every restart will require this step.
@@ -204,6 +248,7 @@
             >settings.manage</code
           >, or wait for them to unlock it.
         </div>
+        {/if}
       {/if}
 
       <!-- Bottom row: identity + escape hatch. Always shown — even a

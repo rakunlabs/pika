@@ -3,10 +3,10 @@ layout: home
 
 hero:
   name: pika
-  text: Config & secrets server
+  text: Config Manager
   tagline: General configuration server, secrets manager, and personal vault with a beautiful web UI and a powerful API.
   image:
-    src: /favicon-192x192.png
+    src: /logo.svg
     alt: pika
   actions:
     - theme: brand
@@ -34,7 +34,7 @@ features:
     details: Built-in end-to-end encrypted password and TOTP vault per user, with recovery kits and session locking.
   - icon: 🪝
     title: Event hooks
-    details: Push file and config changes to HTTP webhooks, Kafka, Redis Pub/Sub, or NATS — with custom Go templates for the payload.
+    details: Push config and personal-vault changes to HTTP webhooks, Kafka, Redis Pub/Sub, or NATS — with custom Go templates for the payload.
   - icon: 🔑
     title: Token-based access
     details: Issue API tokens with glob-scoped read/write/delete permissions. Plug in OAuth2/OIDC, LDAP, or header-based forward auth.
@@ -52,5 +52,5 @@ docker run -d --name pika -v pika:/data -p 8080:8080 ghcr.io/rakunlabs/pika:late
 Open `https://localhost:8080` and create the initial admin account. The first-start certificate is self-signed.
 
 ::: tip Next steps
-Read the [getting-started guide](/guide/getting-started), set up [authentication](/guide/authentication), or skip straight to [consuming data](/reference/consuming-data) if you already have a server running.
+Read the [getting-started guide](/guide/getting-started), set up [authentication](/guide/authentication), or skip straight to [consuming data](/guide/consuming-data) if you already have a server running.
 :::

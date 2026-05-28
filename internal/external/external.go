@@ -1,6 +1,10 @@
 package external
 
-import "github.com/rakunlabs/ok"
+import (
+	"strings"
+
+	"github.com/rakunlabs/ok"
+)
 
 type External struct {
 	Http         *ok.Config    `json:"http,omitempty"`
@@ -18,6 +22,64 @@ type External struct {
 type GCP struct {
 	// ServiceAccountJSON is the full JSON content of a service account key file.
 	ServiceAccountJSON string `json:"service_account_json"`
+
+	// RawValue controls how GCPProvider.Read returns the secret to
+	// direct callers (public endpoints, /external/{name}/read).
+	//
+	//   - nil / false (default): legacy behaviour. Non-JSON payloads
+	//     are wrapped as `{"value": "<string>"}` and the response is
+	//     served as application/json. This default is intentionally
+	//     conservative — the External page editor and the
+	//     InheritDialog preview both read `entry.data.value` and would
+	//     render an empty form if we removed the wrapper on existing
+	//     resources without an opt-in.
+	//   - true: GCPProvider.Read returns the secret payload as raw
+	//     bytes with Entry.ContentType = GetContentType(). The
+	//     "value" wrapper is NOT added — operators who store YAML or
+	//     plaintext in Secret Manager get those bytes back verbatim.
+	//     Opt in per resource via the "Return raw value" checkbox.
+	//
+	// Stored as *bool so resources that predate this field stay on
+	// the legacy default automatically, and explicit opt-outs after
+	// the field is added survive config round-trips.
+	//
+	// Note: this does NOT affect Fetch() (the inheritance pipeline).
+	// That path still emits JSON because the consumer-side
+	// `InheritEntry.Format` hint already handles unwrapping per the
+	// existing decodeWrappedValue contract.
+	RawValue *bool `json:"raw_value,omitempty"`
+
+	// ContentType is the HTTP Content-Type header applied by
+	// GCPProvider.Read when RawValue is on. Empty falls back to
+	// "application/yaml" — most operators using raw mode store YAML
+	// blobs in Secret Manager, and serving them with the matching
+	// content type lets browsers and downstream consumers render /
+	// parse them correctly without a manual override. Ignored when
+	// RawValue is false (the legacy wrapper always serves JSON).
+	ContentType string `json:"content_type,omitempty"`
+}
+
+// GetRawValue reports whether GCPProvider.Read should return the raw
+// secret bytes. The default is false (legacy wrapper preserved); a
+// nil receiver also returns false so callers don't need a separate
+// guard. See the field doc for why the default is conservative.
+func (g *GCP) GetRawValue() bool {
+	if g == nil || g.RawValue == nil {
+		return false
+	}
+	return *g.RawValue
+}
+
+// GetContentType returns the Content-Type GCPProvider.Read should use
+// when RawValue is on. Empty / whitespace falls back to
+// "application/yaml".
+func (g *GCP) GetContentType() string {
+	if g != nil {
+		if ct := strings.TrimSpace(g.ContentType); ct != "" {
+			return ct
+		}
+	}
+	return "application/yaml"
 }
 
 // GCPParameter configures a GCP Parameter Manager external resource.

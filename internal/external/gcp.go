@@ -251,12 +251,38 @@ func (c *GCPSecretManagerClient) createJWT(now time.Time) (string, error) {
 	return signingInput + "." + signatureB64, nil
 }
 
-// ReadSecret reads a secret from GCP Secret Manager and returns its data as a map.
-// It fetches the latest version, base64-decodes the payload, and attempts to unmarshal
-// it as JSON. If the payload is not valid JSON, it returns {"value": <string>}.
+// ReadSecret reads a secret from GCP Secret Manager and returns its
+// data as a map suitable for the inheritance pipeline.
+//
+// Decoding rules (legacy, preserved for Fetch / inheritance callers):
+//   - If the decoded payload parses as a JSON object → that object.
+//   - Otherwise → {"value": "<string>"}.
+//
+// New callers that need access to the original bytes (raw mode in
+// GCPProvider.Read) should use ReadSecretRaw instead.
 func (c *GCPSecretManagerClient) ReadSecret(ctx context.Context, secretName string) (map[string]any, error) {
-	if err := c.ensureToken(ctx); err != nil {
+	data, raw, err := c.ReadSecretRaw(ctx, secretName)
+	if err != nil {
 		return nil, err
+	}
+	if data != nil {
+		return data, nil
+	}
+	return map[string]any{"value": string(raw)}, nil
+}
+
+// ReadSecretRaw fetches the latest secret version, base64-decodes the
+// payload, and reports both the decoded bytes and (when applicable)
+// the parsed JSON-object view. data is nil when the payload is not a
+// JSON object — callers should use raw bytes in that case. raw is
+// always populated on success.
+//
+// The split lets GCPProvider.Read serve the secret to direct callers
+// with the operator's preferred Content-Type, without losing the
+// JSON-map view the inheritance pipeline still wants.
+func (c *GCPSecretManagerClient) ReadSecretRaw(ctx context.Context, secretName string) (map[string]any, []byte, error) {
+	if err := c.ensureToken(ctx); err != nil {
+		return nil, nil, err
 	}
 
 	c.mu.RLock()
@@ -270,19 +296,19 @@ func (c *GCPSecretManagerClient) ReadSecret(ctx context.Context, secretName stri
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, secretURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("gcp: creating read request: %w", err)
+		return nil, nil, fmt.Errorf("gcp: creating read request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("gcp: executing read request: %w", err)
+		return nil, nil, fmt.Errorf("gcp: executing read request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("gcp: reading response: %w", err)
+		return nil, nil, fmt.Errorf("gcp: reading response: %w", err)
 	}
 
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
@@ -291,36 +317,37 @@ func (c *GCPSecretManagerClient) ReadSecret(ctx context.Context, secretName stri
 		c.token = ""
 		c.tokenExp = time.Time{}
 		c.mu.Unlock()
-		return nil, fmt.Errorf("gcp: returned HTTP %d (token may be expired): %s", resp.StatusCode, string(respBody))
+		return nil, nil, fmt.Errorf("gcp: returned HTTP %d (token may be expired): %s", resp.StatusCode, string(respBody))
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("gcp: secret %q not found", secretName)
+		return nil, nil, fmt.Errorf("gcp: secret %q not found", secretName)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("gcp: returned HTTP %d: %s", resp.StatusCode, string(respBody))
+		return nil, nil, fmt.Errorf("gcp: returned HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var accessResp gcpAccessSecretResponse
 	if err := json.Unmarshal(respBody, &accessResp); err != nil {
-		return nil, fmt.Errorf("gcp: parsing secret response: %w", err)
+		return nil, nil, fmt.Errorf("gcp: parsing secret response: %w", err)
 	}
 
-	// Decode base64 payload
 	decoded, err := base64.StdEncoding.DecodeString(accessResp.Payload.Data)
 	if err != nil {
-		return nil, fmt.Errorf("gcp: decoding secret payload: %w", err)
+		return nil, nil, fmt.Errorf("gcp: decoding secret payload: %w", err)
 	}
 
-	// Try to unmarshal as JSON
+	// Try to unmarshal as a JSON object so inheritance callers get a
+	// structured view. Non-object JSON (arrays, scalars) intentionally
+	// falls through to "raw only" because the merge layer can't merge
+	// those anyway.
 	var data map[string]any
 	if err := json.Unmarshal(decoded, &data); err == nil {
-		return data, nil
+		return data, decoded, nil
 	}
 
-	// Fallback: return as plain string value
-	return map[string]any{"value": string(decoded)}, nil
+	return nil, decoded, nil
 }
 
 // ListSecrets lists all secret names in the GCP project.
@@ -472,17 +499,54 @@ func (p *GCPProvider) Test(ctx context.Context) TestResult {
 	return TestResult{OK: true, Message: msg, Sample: capSample(paths, 10)}
 }
 
+// Read returns the secret to direct callers (public endpoints,
+// /external/{name}/read). Behaviour depends on the resource config:
+//
+//   - p.Config.GetRawValue() == true (default for new resources):
+//     return the GCP payload bytes as-is, tagged with the operator's
+//     configured Content-Type (default application/yaml). When the
+//     payload is structured JSON we also surface the parsed map in
+//     Data so UI-level inspectors (which prefer Data when present)
+//     can still render a key/value view; the public-endpoint writer
+//     (writeExternalEntry) prefers Raw + ContentType so direct
+//     serving uses the raw bytes path.
+//
+//   - p.Config.GetRawValue() == false (explicit opt-out): legacy
+//     behaviour — non-JSON payloads are wrapped as
+//     `{"value": "<string>"}` and served as application/json.
 func (p *GCPProvider) Read(ctx context.Context, path string) (*Entry, error) {
 	client, err := p.Deps.GCPClient(p.Config)
 	if err != nil {
 		return nil, err
 	}
-	data, err := client.ReadSecret(ctx, path)
+
+	data, raw, err := client.ReadSecretRaw(ctx, path)
 	if err != nil {
 		return nil, err
 	}
-	raw, _ := json.Marshal(data)
-	return &Entry{Data: data, Raw: raw, ContentType: "application/json"}, nil
+
+	if p.Config.GetRawValue() {
+		// Raw mode: serve operator's bytes with operator's Content-Type.
+		// Data is included only when the payload was a JSON object so
+		// API consumers that read Entry.Data still get a structured
+		// view; writeExternalEntry takes the Raw+ContentType path so
+		// direct serving stays byte-exact.
+		return &Entry{
+			Data:        data,
+			Raw:         raw,
+			ContentType: p.Config.GetContentType(),
+		}, nil
+	}
+
+	// Legacy mode: rebuild the wrapped JSON map and serve as JSON. We
+	// reconstruct the wrapper here (instead of calling ReadSecret) so
+	// the read+wrap split stays in one place and the raw bytes we
+	// already paid the network cost for don't get thrown away.
+	if data == nil {
+		data = map[string]any{"value": string(raw)}
+	}
+	wrappedRaw, _ := json.Marshal(data)
+	return &Entry{Data: data, Raw: wrappedRaw, ContentType: "application/json"}, nil
 }
 
 func (p *GCPProvider) Write(ctx context.Context, path string, data map[string]any) error {

@@ -78,26 +78,28 @@ compatibility — `internal/secret/envelope` dispatches on byte 0.
 
 ## What gets encrypted
 
-When the server is unlocked, pika encrypts:
+When the server is unlocked, pika encrypts (see `internal/secret/settings_seal.go`):
 
-- **Mount credentials** stored in settings: S3 secret keys, FTP/SFTP
-  passwords and private keys, WebDAV passwords, Vercel Blob tokens.
-- **External-resource credentials**: Vault tokens, Vault AppRole
-  secret IDs, AWS secret keys, GCP service-account JSON, Azure
-  client secrets, Kubernetes inline kubeconfig.
-- **Hook target secrets**: Kafka SASL/SCRAM passwords, Redis
+- **External-resource credentials** — Vault tokens, Vault AppRole
+  secret IDs, AWS secret keys, GCP Secret Manager service-account
+  JSON, GCP Parameter Manager service-account JSON, Azure client
+  secrets, Kubernetes inline kubeconfig, HTTP header-auth values.
+- **Hook target secrets** — Kafka SASL/SCRAM passwords, Redis
   passwords, NATS tokens & passwords.
-- **Server-host private keys**: SFTP host key PEM, FTP TLS key PEM.
-- **Verifier record**: the 16-byte randomized known-plaintext used
-  to detect a wrong key on unlock.
+- **Auth-strategy secrets** — OAuth2 client secrets and LDAP bind
+  passwords.
+- **Endpoint static tokens** — the bearer tokens that
+  `static_token`-auth Endpoints accept.
+- **Verifier record** — the randomized known-plaintext used to
+  detect a wrong key on unlock.
 
 User passwords are independently hashed with bcrypt and are not
 touched by this layer. The personal vault uses end-to-end encryption
 in the browser; the server-side key has no access to vault contents.
 
-Operationally-visible fields (mount prefixes, hostnames, port
-numbers, share names, public access keys) stay plaintext so they
-remain available in audit logs and during the locked state.
+Operationally-visible fields (hostnames, port numbers, public
+client IDs, base paths, addresses) stay plaintext so they remain
+available in audit logs and during the locked state.
 
 ## Locked-state behavior
 

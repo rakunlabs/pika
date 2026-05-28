@@ -32,6 +32,18 @@ type Info struct {
 	Commit            string `json:"commit,omitempty"`
 	Date              string `json:"date,omitempty"`
 	ManagedTLSEnabled bool   `json:"managed_tls_enabled"`
+
+	// EncryptionConfigInvalid is true when the process was started
+	// with a non-empty `encryption.password` in config but that
+	// passphrase did NOT match the on-disk verifier. The server
+	// stays locked in that case (the operator must unlock manually
+	// through the UnlockScreen) and the SPA renders a warning in
+	// the UnlockScreen pointing at the misconfigured config field.
+	//
+	// Set once at boot in cmd/pika/main.go; never mutated afterwards.
+	// The /api/v1/info endpoint is on the lockgate allowlist so the
+	// SPA can read this even while the server is still locked.
+	EncryptionConfigInvalid bool `json:"encryption_config_invalid,omitempty"`
 }
 
 type api struct {

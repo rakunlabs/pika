@@ -34,6 +34,12 @@ export interface AppInfo {
   // VaultItemTypes is the server's known item-type vocabulary, used by
   // the new-item picker. Empty when vault is disabled.
   vault_item_types?: string[];
+  // EncryptionConfigInvalid is true when the server was started with a
+  // non-empty `encryption.password` config value that didn't match the
+  // on-disk verifier. The server stays locked in that case; the
+  // UnlockScreen surfaces a warning so the operator knows their config
+  // file (or PIKA_ENCRYPTION_PASSWORD) needs fixing.
+  encryption_config_invalid?: boolean;
 }
 
 export interface Identity {

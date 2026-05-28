@@ -4,18 +4,25 @@ Hooks fire when files or configs change. Pika logs every emitted event as one st
 
 ## Event types
 
-| Event              | Trigger                              |
-| ------------------ | ------------------------------------ |
-| `file.created`     | File uploaded to a raw mount.        |
-| `file.updated`     | File overwritten on a raw mount.     |
-| `file.deleted`     | File deleted from a raw mount.       |
-| `file.renamed`     | File renamed.                        |
-| `file.copied`      | File copied (possibly cross-mount).  |
-| `dir.created`      | Directory created on a raw mount.    |
-| `config.created`   | Config file created.                 |
-| `config.updated`   | Config file saved (new version).     |
-| `config.deleted`   | Config file deleted.                 |
-| `*`                | Match all events.                    |
+Currently emitted by pika:
+
+| Event                  | Trigger                                                     |
+| ---------------------- | ----------------------------------------------------------- |
+| `config.created`       | Config file created via the admin API.                      |
+| `config.deleted`       | Config file deleted via the admin API.                      |
+| `vault.item.created`   | Personal-vault item created.                                |
+| `vault.item.updated`   | Personal-vault item updated.                                |
+| `vault.item.deleted`   | Personal-vault item soft-deleted.                           |
+| `vault.unlock.failed`  | Personal-vault unlock attempt failed (wrong master password). |
+| `*`                    | Match all events.                                           |
+
+::: info Vault event payloads
+Vault events carry only the item id, type, and the calling user. The encrypted payload is **never** included — the server cannot read it (the personal vault is end-to-end encrypted client-side).
+:::
+
+::: info Reserved event types
+`file.*`, `dir.*`, `config.updated`, and `registry.*` are declared in the event type constants but no longer emitted in this build — the raw filesystem and artifact-registry features have been extracted out of pika. Hook filters can still reference these strings; they simply won't fire.
+:::
 
 ## Default payload
 
@@ -23,37 +30,30 @@ All sinks receive a JSON-encoded `Event`:
 
 ```json
 {
-  "type": "file.created",
+  "type": "config.created",
   "timestamp": "2026-05-07T12:34:56.789Z",
   "hook": "my-hook-name",
-  "mount": "uploads",
-  "path": "documents/report.pdf",
-  "size": 12345,
-  "protocol": "http",
+  "config_key": "myapp/config",
+  "config_version": 3,
+  "variant": "",
   "user": "alice",
-  "old_path": "",
-  "dst_mount": "",
-  "dst_path": "",
-  "config_key": "",
-  "config_version": 0,
-  "variant": ""
+  "protocol": "http"
 }
 ```
 
 Field meanings:
 
-- `protocol` — how the change was made: `http` (admin API) or `internal` (cluster sync, hooks, etc.). Public-port endpoints are read-only and never produce write events.
+- `protocol` — how the change was made: `http` (admin API) or `internal` (cluster sync, etc.). Public-port Endpoints are read-only and never produce write events.
 - `user` — pika username, or empty for internal/system actions.
-- `old_path`, `dst_*` — populated for `file.renamed` and `file.copied` events.
 - `config_key`, `config_version`, `variant` — populated for `config.*` events.
+- For `vault.item.*` events, `path` carries the item id and `user` is the owning user. The body of the vault item is intentionally **not** included.
 
 ## Filters
 
 Each hook can be filtered before it fires:
 
 - **Event types** — pick one or more of the events above (or `*`).
-- **Mounts** — restrict to specific raw mount prefixes.
-- **Path pattern** — `filepath.Match` glob (e.g. `*.pdf`, `firmware/v*/*.bin`).
+- **Path pattern** — `filepath.Match` glob (e.g. `myapp/*`, `tenants/*/secrets`).
 
 A hook only fires when all filters match.
 
@@ -145,10 +145,9 @@ Example HTTP body template:
 
 ## Pika references in TLS fields
 
-Kafka and Redis TLS fields (cert, key, CA) accept three forms:
+Kafka and Redis TLS fields (cert, key, CA) accept two forms:
 
 - A plain filesystem path (`/etc/ssl/kafka.pem`).
-- A pika raw-mount reference: `raw://certs/kafka.pem`.
-- A pika config reference: `config://certificates/kafka` — the file content is used as-is.
+- A pika config reference: `config://certificates/kafka` — the file content is read live from pika storage each time the target connects.
 
-This lets you rotate TLS material via the UI without touching the host filesystem.
+This lets you rotate TLS material via the UI without touching the host filesystem. Legacy `raw://` references from earlier pika versions decode but resolve to inline PEM text; they will fail with a parse error if the path no longer matches a real file.

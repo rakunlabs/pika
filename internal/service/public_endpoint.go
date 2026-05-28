@@ -240,8 +240,30 @@ type ConsulCompat struct{}
 // resource. The endpoint's path tail becomes the provider-specific
 // path passed to ReadExternal. No config inheritance/render pipeline
 // is involved.
+//
+// RawValue and ContentType are OPTIONAL per-endpoint overrides
+// applied AFTER the provider's Read returns. They let one resource
+// serve different shapes on different endpoints — e.g. the same GCP
+// secret can be exposed as raw YAML on a /yaml/ listener and as the
+// legacy JSON wrapper on a /json/ listener. Leave them empty/nil to
+// inherit the provider's own configuration (e.g. GCP.RawValue +
+// GCP.ContentType on the external resource).
 type ExternalCompat struct {
 	Resource string `json:"resource"`
+
+	// RawValue overrides the provider's "raw vs wrapped" decision
+	// for this endpoint. nil → inherit; true → force raw bytes (any
+	// wrapper produced upstream is unwrapped when possible);
+	// false → force the legacy `{"value": "<string>"}` JSON wrap.
+	// Stored as *bool so absent serialises as "inherit" via the
+	// omitempty tag.
+	RawValue *bool `json:"raw_value,omitempty"`
+
+	// ContentType overrides the HTTP Content-Type header on this
+	// endpoint's responses. Empty → inherit Entry.ContentType.
+	// When RawValue is forced false and ContentType is empty the
+	// shim falls back to application/json (legacy wrap CT).
+	ContentType string `json:"content_type,omitempty"`
 }
 
 // CustomCompat configures a user-authored Go-template response

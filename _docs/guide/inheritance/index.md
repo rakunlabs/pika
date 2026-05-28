@@ -5,13 +5,13 @@ A pika config file can pull values from elsewhere and merge them into the resolv
 Sources fall into two categories:
 
 1. **Internal files** — another pika config (or a specific variant of it).
-2. **External resources** — Vault, Kubernetes Secrets, Consul, etcd, AWS Secrets Manager / SSM, GCP Secret Manager, Azure Key Vault, or plain HTTP.
+2. **External resources** — Vault, Kubernetes Secrets, Consul, etcd, AWS Secrets Manager / SSM, GCP Secret Manager, GCP Parameter Manager, Azure Key Vault, or plain HTTP.
 
 External resources are configured once under **Settings → External Resources** and then referenced by name from any file's inheritance chain.
 
 ## Inheritance entry shape
 
-Each entry on a file is a small JSON object. The top-level key tells pika where to look:
+Each entry on a file is a small JSON object. Pick **one** of `source` (internal) or `resource` (external) per entry:
 
 ```json
 {
@@ -22,16 +22,20 @@ Each entry on a file is a small JSON object. The top-level key tells pika where 
 }
 ```
 
-| Field      | Required          | Description                                                                                                       |
-| ---------- | ----------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `resource` | (one of 3)        | Name of an external resource defined under **Settings**. Use this for Vault, Kubernetes, Consul, etc.             |
-| `source`   | (one of 3)        | Path to another pika config file. Append `@variant` to inherit from a specific variant.                           |
-| `mount`    | (one of 3)        | Prefix of a raw mount. Combined with `path`, picks a specific file out of the mount.                              |
-| `path`     | yes (most cases)  | The resource-specific path: a Vault secret path, an etcd key, an S3 object key, etc.                              |
-| `paths`    | no                | Pick only specific keys out of the loaded data. JSON-pointer-like paths.                                          |
-| `inject`   | no                | Nest the inherited data under this key in the resolved output (e.g. `database.auth`).                             |
+| Field      | Required        | Description                                                                                                                           |
+| ---------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`   | (one of 2)      | Path to another pika config file. Append `@variant` to inherit from a specific variant.                                               |
+| `resource` | (one of 2)      | Name of an external resource defined under **Settings**. Use this for Vault, Kubernetes, Consul, etc.                                 |
+| `path`     | yes for `resource` | The resource-specific path: a Vault secret path, an etcd key, an S3 object key, etc.                                              |
+| `paths`    | no              | Pick only specific keys out of the loaded data. Supports dot-notation (`database.host`) and wildcards (`logging.*`).                  |
+| `inject`   | no              | Nest the inherited data under this key path in the resolved output (e.g. `database.auth`). Supports dot-notation.                     |
+| `format`   | no              | When the resource returns an opaque string wrapped as `{"value": "..."}` (Consul / etcd / GCP / HTTP), set `json`, `yaml`, or `toml` to decode the inner payload before merge. Ignored for `source` entries — internal files carry their own `meta.format`. |
 
 You manage inheritance entries from the **Inherits** section of a file in the UI. Order matters — later entries override earlier ones, and the file's own content overrides everything.
+
+::: info
+The `mount` field used to point at a raw filesystem mount; that feature was extracted out of pika. Legacy rows with `"mount": "..."` decode but the field is ignored at resolution time.
+:::
 
 ## External resources
 
@@ -43,7 +47,8 @@ Each external resource has a **name** that you choose. That name is what `resour
 - [Consul](./consul) — Consul KV.
 - [etcd](./etcd) — etcd keys.
 - [AWS](./aws) — Secrets Manager or SSM Parameter Store.
-- [GCP](./gcp) — Secret Manager.
+- [GCP Secret Manager](./gcp) — opaque secret payloads.
+- [GCP Parameter Manager](./gcp-parameter) — server-side-templated parameter payloads.
 - [Azure](./azure) — Key Vault.
 
 ## Examples
@@ -77,12 +82,25 @@ Or inherit from a specific variant:
 { "source": "myapp/config@staging" }
 ```
 
-### Combine a Kubernetes secret with a JSON file from S3
+### Decode a string-wrapped Consul value
+
+When a Consul KV value contains a JSON document but Consul returned it as a plain string, set `format: json` so pika decodes the inner payload before merging:
+
+```json
+{
+  "resource": "consul",
+  "path": "config/myapp",
+  "format": "json",
+  "inject": "remote"
+}
+```
+
+### Combine sources
 
 ```json
 [
-  { "mount": "shared-configs", "path": "common.json" },
-  { "resource": "k8s",         "path": "default/secret/myapp", "inject": "secrets" }
+  { "source":   "shared/common" },
+  { "resource": "k8s", "path": "default/secret/myapp", "inject": "secrets" }
 ]
 ```
 

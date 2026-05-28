@@ -15,16 +15,24 @@ import (
 // secret-marked field leaks here, it lands in operator log streams
 // (and from there into log-aggregation, backup, support bundles…).
 //
-// Strategy: stuff a unique sentinel into Cluster.SecurityKey, marshal
-// the whole config, and assert the sentinel does not appear anywhere
-// in the serialized output.
+// Strategy: stuff a unique sentinel into every `log:"-"` field,
+// marshal the whole config, and assert no sentinel appears anywhere
+// in the serialized output. Every entry in this table corresponds to
+// one field that MUST stay masked; removing one without removing the
+// `log:"-"` tag on the field will fail this test.
 func TestMarshalMapStripsLogDashFields(t *testing.T) {
-	const sentinel = "DO-NOT-LEAK-THIS-PSK-9c5f6d3a"
+	const (
+		clusterPSK         = "DO-NOT-LEAK-THIS-PSK-9c5f6d3a"
+		encryptionPassword = "DO-NOT-LEAK-THIS-ENCRYPTION-PW-7b2e8a"
+	)
 
 	cfg := Config{
 		LogLevel: "info",
 		Cluster: cluster.Config{
-			SecurityKey: sentinel,
+			SecurityKey: clusterPSK,
+		},
+		Encryption: Encryption{
+			Password: encryptionPassword,
 		},
 	}
 
@@ -32,8 +40,10 @@ func TestMarshalMapStripsLogDashFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if strings.Contains(string(out), sentinel) {
-		t.Fatalf("cluster security key leaked into MarshalMap output:\n%s", out)
+	for _, sentinel := range []string{clusterPSK, encryptionPassword} {
+		if strings.Contains(string(out), sentinel) {
+			t.Fatalf("masked field leaked into MarshalMap output (sentinel %q):\n%s", sentinel, out)
+		}
 	}
 }
 

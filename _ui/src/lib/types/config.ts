@@ -150,9 +150,23 @@ export interface AWSConfig {
   service: string;  // "secretsmanager" or "ssm"
 }
 
-// GCP Secret Manager external resource configuration
+// GCP Secret Manager external resource configuration.
+//
+// `raw_value` and `content_type` only affect direct reads
+// (public endpoints, /external/{name}/read), not the inheritance
+// pipeline — that path uses the consumer-side `format` hint to
+// unwrap `{"value": "..."}` when needed.
 export interface GCPConfig {
   service_account_json: string;
+  // When true (server default) GCPProvider.Read returns the secret's
+  // raw bytes with `content_type` as the HTTP Content-Type. When
+  // false the server falls back to the legacy `{"value": "..."}`
+  // JSON wrapper for non-JSON payloads. The UI persists this only
+  // when the operator explicitly opts out; absent ≡ server default.
+  raw_value?: boolean;
+  // HTTP Content-Type applied by raw mode. Empty ≡ server default
+  // ("application/yaml"). Ignored when raw_value is false.
+  content_type?: string;
 }
 
 // GCP Parameter Manager external resource configuration. Location
@@ -544,8 +558,21 @@ export type ConsulCompat = Record<string, never>;
 
 // ExternalCompat points an endpoint at one configured External resource.
 // The endpoint path tail becomes the provider-specific external path.
+//
+// `raw_value` and `content_type` are OPTIONAL per-endpoint overrides
+// applied after the provider's Read returns. Leave unset to inherit
+// whatever the resource produced. Useful when one resource needs to
+// serve different shapes on different endpoints (e.g. raw YAML on
+// one listener, the legacy JSON wrapper on another).
 export interface ExternalCompat {
   resource: string;
+  // null/undefined → inherit resource behaviour.
+  // true → force raw byte output (unwraps `{"value": "..."}` if present).
+  // false → force legacy `{"value": "..."}` JSON wrap.
+  raw_value?: boolean | null;
+  // Empty → inherit Entry.ContentType.
+  // Non-empty → override the HTTP Content-Type on responses.
+  content_type?: string;
 }
 
 // CustomCompat is the user-authored Go-template modifier
