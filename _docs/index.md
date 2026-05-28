@@ -49,7 +49,7 @@ features:
 docker run -d --name pika -v pika:/data -p 8080:8080 ghcr.io/rakunlabs/pika:latest
 ```
 
-Open `http://localhost:8080` and create the initial admin account.
+Open `https://localhost:8080` and create the initial admin account. The first-start certificate is self-signed.
 
 ::: tip Next steps
 Read the [getting-started guide](/guide/getting-started), set up [authentication](/guide/authentication), or skip straight to [consuming data](/reference/consuming-data) if you already have a server running.

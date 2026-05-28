@@ -17,6 +17,8 @@
         PublicEndpoint,
         PublicEndpointStatus,
         PublicEndpointTestResult,
+        RequestRuleActionTrace,
+        RequestRuleTestResult,
         EndpointAuth,
     } from "@/lib/types/config";
 
@@ -53,6 +55,14 @@
     let probeResult = $state<PublicEndpointTestResult | null>(null);
     let probing = $state(false);
 
+    // Draft request-rule tester inside the edit modal. This sends the
+    // unsaved rule list to the backend evaluator and returns a trace.
+    let ruleTestMethod = $state("GET");
+    let ruleTestPath = $state("/legacy/myapp/config");
+    let ruleTestHeaders = $state<{ name: string; value: string }[]>([]);
+    let ruleTesting = $state(false);
+    let ruleTestResult = $state<RequestRuleTestResult | null>(null);
+
     function newEmptyEndpoint(): PublicEndpoint {
         // Default new endpoints to "static" — the simplest config
         // data mode: path tail -> config key, no Go template and no
@@ -70,6 +80,7 @@
             external: undefined,
             custom: undefined,
             auth: { mode: "none" },
+            tls: { enabled: true },
             request_check: undefined,
         };
     }
@@ -82,31 +93,34 @@
 
     type RuleDraft = import('@/lib/types/config').RequestRule;
 
-    function ensureRequestCheck() {
-        if (!form.request_check) {
-            form.request_check = { rules: [] };
-        }
-        if (!form.request_check.rules) {
-            form.request_check.rules = [];
-        }
-    }
-
-    function addRequestRule() {
-        ensureRequestCheck();
-        form.request_check!.rules!.push({
+    function defaultRequestRule(): RuleDraft {
+        return {
             name: "",
             enabled: true,
             when: {},
             then: { type: "allow" },
-        });
+            actions: [{ type: "allow" }],
+        };
+    }
+
+    function setRequestRules(rules: RuleDraft[]) {
+        form.request_check = rules.length
+            ? { ...(form.request_check ?? {}), rules }
+            : undefined;
+        ruleTestResult = null;
+    }
+
+    function addRequestRule() {
+        setRequestRules([
+            ...(form.request_check?.rules ?? []),
+            defaultRequestRule(),
+        ]);
     }
 
     function removeRequestRule(idx: number) {
-        if (!form.request_check?.rules) return;
-        form.request_check.rules.splice(idx, 1);
-        if (form.request_check.rules.length === 0) {
-            form.request_check = undefined;
-        }
+        const rules = form.request_check?.rules;
+        if (!rules) return;
+        setRequestRules(rules.filter((_, i) => i !== idx));
     }
 
     function moveRule(idx: number, dir: -1 | 1) {
@@ -114,7 +128,9 @@
         if (!rules) return;
         const j = idx + dir;
         if (j < 0 || j >= rules.length) return;
-        [rules[idx], rules[j]] = [rules[j], rules[idx]];
+        const next = [...rules];
+        [next[idx], next[j]] = [next[j], next[idx]];
+        setRequestRules(next);
     }
 
     // When picker: operator selects ONE matcher shape from a
@@ -185,66 +201,180 @@
         }
     }
 
+    type ActionDraft = import('@/lib/types/config').RequestAction;
+    type CaptureTransformDraft = import('@/lib/types/config').CaptureTransform;
+
+    function effectiveRuleActions(rule: RuleDraft): ActionDraft[] {
+        if (rule.actions && rule.actions.length > 0) return rule.actions;
+        if (rule.then?.type) return [rule.then];
+        return [{ type: "allow" } satisfies ActionDraft];
+    }
+
+    function updateRule(rule: RuleDraft, nextRule: RuleDraft) {
+        const rules = form.request_check?.rules;
+        if (!rules) return;
+        const idx = rules.indexOf(rule);
+        if (idx < 0) return;
+        const nextRules = [...rules];
+        nextRules[idx] = nextRule;
+        setRequestRules(nextRules);
+    }
+
+    function setRuleActions(rule: RuleDraft, actions: ActionDraft[]) {
+        const nextActions = actions.length
+            ? actions
+            : [{ type: "allow" } satisfies ActionDraft];
+        updateRule(rule, {
+            ...rule,
+            then: nextActions[0],
+            actions: nextActions,
+        });
+    }
+
+    function addRuleAction(rule: RuleDraft) {
+        setRuleActions(rule, [
+            ...effectiveRuleActions(rule),
+            { type: "set_query", name: "variant", value: "prod" },
+        ]);
+    }
+
+    function removeRuleAction(rule: RuleDraft, idx: number) {
+        setRuleActions(
+            rule,
+            effectiveRuleActions(rule).filter((_, i) => i !== idx),
+        );
+    }
+
+    function ruleHasAction(rule: RuleDraft, type: import('@/lib/types/config').RequestActionType): boolean {
+        return effectiveRuleActions(rule).some((a) => a.type === type);
+    }
+
     function setActionType(
         rule: RuleDraft,
+        actionIdx: number,
         t: import('@/lib/types/config').RequestActionType,
     ) {
+        const actions = effectiveRuleActions(rule);
+        const action = actions[actionIdx] ?? { type: "allow" };
         // Recreate the action so stale fields (e.g. a status from
         // a previous "block" choice) don't sneak through when the
         // type changes.
+        let next: ActionDraft;
         switch (t) {
             case "allow":
-                rule.then = { type: "allow" };
+                next = { type: "allow" };
                 break;
             case "block":
-                rule.then = {
+                next = {
                     type: "block",
-                    status: rule.then.status ?? 403,
-                    body: rule.then.body ?? "",
+                    status: action.status ?? 403,
+                    body: action.body ?? "",
                     content_type:
-                        rule.then.content_type ?? "application/json",
+                        action.content_type ?? "application/json",
                 };
                 break;
             case "set_header":
-                rule.then = {
+                next = {
                     type: "set_header",
-                    name: rule.then.name ?? "X-Tenant",
-                    value: rule.then.value ?? "",
+                    name: action.name ?? "X-Tenant",
+                    value: action.value ?? "",
                 };
                 break;
             case "del_header":
-                rule.then = {
+                next = {
                     type: "del_header",
-                    name: rule.then.name ?? "Cookie",
+                    name: action.name ?? "Cookie",
                 };
                 break;
             case "set_query":
-                rule.then = {
+                next = {
                     type: "set_query",
-                    name: rule.then.name ?? "variant",
-                    value: rule.then.value ?? "prod",
+                    name: action.name ?? "variant",
+                    value: action.value ?? "prod",
                 };
                 break;
             case "del_query":
-                rule.then = {
+                next = {
                     type: "del_query",
-                    name: rule.then.name ?? "debug",
+                    name: action.name ?? "debug",
                 };
                 break;
             case "set_path":
-                rule.then = {
+                next = {
                     type: "set_path",
-                    value: rule.then.value ?? "/",
+                    value: action.value ?? "/",
                 };
                 break;
             case "replace_path":
-                rule.then = {
+                next = {
                     type: "replace_path",
-                    pattern: rule.then.pattern ?? "^/legacy/(.*)$",
-                    value: rule.then.value ?? "/$1",
+                    pattern: action.pattern ?? "^/legacy/(.*)$",
+                    value: action.value ?? "/$1",
+                    capture_transforms: action.capture_transforms,
                 };
                 break;
         }
+
+        setRuleActions(
+            rule,
+            actions.map((a, i) => (i === actionIdx ? next : a)),
+        );
+    }
+
+    function setActionCaptureTransforms(
+        rule: RuleDraft,
+        actionIdx: number,
+        transforms: CaptureTransformDraft[],
+    ) {
+        const actions = effectiveRuleActions(rule);
+        const action = actions[actionIdx];
+        if (!action || action.type !== "replace_path") return;
+        const nextAction: ActionDraft = {
+            ...action,
+            capture_transforms: transforms.length ? transforms : undefined,
+        };
+        setRuleActions(
+            rule,
+            actions.map((a, i) => (i === actionIdx ? nextAction : a)),
+        );
+    }
+
+    function addCaptureTransform(rule: RuleDraft, actionIdx: number) {
+        const action = effectiveRuleActions(rule)[actionIdx];
+        if (!action || action.type !== "replace_path") return;
+        setActionCaptureTransforms(rule, actionIdx, [
+            ...(action.capture_transforms ?? []),
+            { capture: "1", find: "/", value: "-" },
+        ]);
+    }
+
+    function updateCaptureTransform(
+        rule: RuleDraft,
+        actionIdx: number,
+        transformIdx: number,
+        field: keyof CaptureTransformDraft,
+        value: string,
+    ) {
+        const action = effectiveRuleActions(rule)[actionIdx];
+        if (!action || action.type !== "replace_path") return;
+        const transforms = (action.capture_transforms ?? []).map((tr, i) =>
+            i === transformIdx ? { ...tr, [field]: value } : tr,
+        );
+        setActionCaptureTransforms(rule, actionIdx, transforms);
+    }
+
+    function removeCaptureTransform(
+        rule: RuleDraft,
+        actionIdx: number,
+        transformIdx: number,
+    ) {
+        const action = effectiveRuleActions(rule)[actionIdx];
+        if (!action || action.type !== "replace_path") return;
+        setActionCaptureTransforms(
+            rule,
+            actionIdx,
+            (action.capture_transforms ?? []).filter((_, i) => i !== transformIdx),
+        );
     }
 
     function ruleSummary(rule: RuleDraft): string {
@@ -267,7 +397,12 @@
         if (w.query_absent) parts.push(`no ?${w.query_absent}`);
         const when = parts.length ? parts.join(" & ") : "any";
 
-        const t = rule.then;
+        const actions = effectiveRuleActions(rule);
+        const summaries = actions.map(actionSummary);
+        return `when ${when} → ${summaries.join(" → ")}`;
+    }
+
+    function actionSummary(t: ActionDraft): string {
         let then: string = t.type;
         if (t.type === "block") then = `block ${t.status ?? 403}`;
         else if (t.type === "set_header") then = `set ${t.name}=${t.value}`;
@@ -275,8 +410,13 @@
         else if (t.type === "set_query") then = `set ?${t.name}=${t.value}`;
         else if (t.type === "del_query") then = `del ?${t.name}`;
         else if (t.type === "set_path") then = `path → ${t.value}`;
-        else if (t.type === "replace_path") then = `path s/${t.pattern}/${t.value}/`;
-        return `when ${when} → ${then}`;
+        else if (t.type === "replace_path") {
+            then = `path s/${t.pattern}/${t.value}/`;
+            if (t.capture_transforms?.length) {
+                then += ` + ${t.capture_transforms.length} capture transform${t.capture_transforms.length === 1 ? "" : "s"}`;
+            }
+        }
+        return then;
     }
 
     onMount(() => {
@@ -305,6 +445,7 @@
     function openCreate() {
         form = newEmptyEndpoint();
         editingId = null;
+        resetRuleTest();
         formOpen = true;
     }
 
@@ -325,7 +466,9 @@
         if (form.mode === "external" && !form.external) {
             form.external = defaultExternalConfig();
         }
+        form.tls = form.tls ?? { enabled: false };
         editingId = ep.id;
+        resetRuleTest();
         formOpen = true;
     }
 
@@ -374,8 +517,24 @@
             form.auth.header_name = undefined;
         } else {
             form.auth.static_tokens = form.auth.static_tokens ?? [];
-            form.auth.header_name = form.auth.header_name ?? "Authorization";
+            form.auth.header_name = form.auth.header_name ?? "X-Pika-Token";
         }
+    }
+
+    function setEndpointTLSEnabled(enabled: boolean) {
+        form.tls = {
+            ...(form.tls ?? {}),
+            enabled,
+            allow_http: enabled ? form.tls?.allow_http : false,
+        };
+    }
+
+    function setEndpointHTTPAllowed(allowHTTP: boolean) {
+        form.tls = {
+            ...(form.tls ?? {}),
+            enabled: true,
+            allow_http: allowHTTP,
+        };
     }
 
     function defaultConsulEnvelopeTemplate(): string {
@@ -401,6 +560,9 @@
         if (form.mode === "external" && !form.external?.resource) {
             addToast("Choose an external resource for this endpoint", "alert");
             return;
+        }
+        if (form.tls && !form.tls.enabled) {
+            form.tls.allow_http = false;
         }
         saving = true;
         try {
@@ -434,7 +596,7 @@
     async function deleteEndpoint(id: string) {
         if (
             !confirm(
-                "Delete this public endpoint? The listener will stop immediately.",
+                "Delete this endpoint? The listener will stop immediately.",
             )
         ) {
             return;
@@ -511,6 +673,87 @@
         }
     }
 
+    function resetRuleTest() {
+        ruleTestMethod = "GET";
+        ruleTestPath = "/legacy/myapp/config";
+        ruleTestHeaders = [];
+        ruleTestResult = null;
+    }
+
+    function addRuleTestHeader() {
+        ruleTestHeaders = [...ruleTestHeaders, { name: "", value: "" }];
+    }
+
+    function setRuleTestHeader(
+        idx: number,
+        field: "name" | "value",
+        value: string,
+    ) {
+        ruleTestHeaders = ruleTestHeaders.map((h, i) =>
+            i === idx ? { ...h, [field]: value } : h,
+        );
+    }
+
+    function removeRuleTestHeader(idx: number) {
+        ruleTestHeaders = ruleTestHeaders.filter((_, i) => i !== idx);
+    }
+
+    async function runRuleTest() {
+        ruleTesting = true;
+        ruleTestResult = null;
+        try {
+            const headers: Record<string, string> = {};
+            for (const h of ruleTestHeaders) {
+                const name = h.name.trim();
+                if (name) headers[name] = h.value;
+            }
+            ruleTestResult = await configStore.testPublicEndpointRules({
+                request_check: form.request_check ?? { rules: [] },
+                method: ruleTestMethod,
+                path: ruleTestPath,
+                headers: Object.keys(headers).length ? headers : undefined,
+            });
+        } catch (err: any) {
+            const msg =
+                err?.response?.data?.message ||
+                err?.response?.data?.error ||
+                err?.message ||
+                "Rule test failed";
+            addToast(msg, "alert");
+        } finally {
+            ruleTesting = false;
+        }
+    }
+
+    function pathWithQuery(path?: string, rawQuery?: string): string {
+        const p = path || "/";
+        return rawQuery ? `${p}?${rawQuery}` : p;
+    }
+
+    function terminalLabel(result: RequestRuleTestResult): string {
+        if (result.terminal === "block") {
+            return `blocked with HTTP ${result.block?.status ?? 403}`;
+        }
+        if (result.terminal === "allow") {
+            return "allowed by terminal rule";
+        }
+        return "allowed by default";
+    }
+
+    function actionTraceSummary(action: RequestRuleActionTrace): string {
+        if (action.type === "allow") return "forwarded to the shim";
+        if (action.type === "block") {
+            return `blocked with HTTP ${action.block?.status ?? 403}`;
+        }
+        if (action.type === "set_header" || action.type === "del_header") {
+            return `${action.header_name}: ${action.header_before || "∅"} → ${action.header_after || "∅"}`;
+        }
+        if (action.type === "set_query" || action.type === "del_query") {
+            return `${action.query_name}: ${action.query_before || "∅"} → ${action.query_after || "∅"}`;
+        }
+        return `${pathWithQuery(action.before_path, action.before_query)} → ${pathWithQuery(action.after_path, action.after_query)}`;
+    }
+
     function staticTokensText(): string {
         return (form.auth.static_tokens ?? []).join("\n");
     }
@@ -519,6 +762,10 @@
             .split(/\r?\n/)
             .map((t) => t.trim())
             .filter((t) => t.length > 0);
+    }
+
+    function endpointScheme(ep: PublicEndpoint): string {
+        return ep.tls?.enabled ? "https" : "http";
     }
 </script>
 
@@ -613,6 +860,23 @@
                                     class="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-warm-700 text-slate-700 dark:text-slate-200"
                                     >auth: {ep.auth.mode}</span
                                 >
+                                {#if ep.tls?.enabled}
+                                    <span
+                                        class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300"
+                                        >https</span
+                                    >
+                                    {#if ep.tls.allow_http}
+                                        <span
+                                            class="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300"
+                                            >http allowed</span
+                                        >
+                                    {/if}
+                                {:else}
+                                    <span
+                                        class="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300"
+                                        >http</span
+                                    >
+                                {/if}
                                 {#if ep.request_check}
                                     <span
                                         class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300"
@@ -623,7 +887,7 @@
                             <p
                                 class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono"
                             >
-                                http://{ep.listen_host || "0.0.0.0"}:{ep.listen_port}{ep.base_path ===
+                                {endpointScheme(ep)}://{ep.listen_host || "0.0.0.0"}:{ep.listen_port}{ep.base_path ===
                                 "/"
                                     ? ""
                                     : ep.base_path}
@@ -888,6 +1152,46 @@
                         />
                         Enabled (bind the listener)
                     </label>
+                    <div class="space-y-2 rounded border border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900 p-3">
+                        <label class="inline-flex items-start gap-2 text-xs text-slate-700 dark:text-slate-200 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={form.tls?.enabled === true}
+                                onchange={(e) =>
+                                    setEndpointTLSEnabled(
+                                        (e.currentTarget as HTMLInputElement)
+                                            .checked,
+                                    )}
+                                class="mt-0.5 rounded"
+                            />
+                            <span>
+                                <span class="block font-medium text-slate-700 dark:text-slate-200">Serve this endpoint over HTTPS</span>
+                                <span class="block text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Uses the managed certificate from Settings → Certificates. New endpoints default to HTTPS.</span>
+                            </span>
+                        </label>
+                        {#if form.tls?.enabled}
+                            <label class="inline-flex items-start gap-2 text-xs text-slate-700 dark:text-slate-200 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={form.tls?.allow_http === true}
+                                    onchange={(e) =>
+                                        setEndpointHTTPAllowed(
+                                            (e.currentTarget as HTMLInputElement)
+                                                .checked,
+                                        )}
+                                    class="mt-0.5 rounded"
+                                />
+                                <span>
+                                    <span class="block font-medium text-slate-700 dark:text-slate-200">Also allow plaintext HTTP on this port</span>
+                                    <span class="block text-[11px] text-amber-700 dark:text-amber-300 mt-0.5">Only use this behind a trusted proxy or private network.</span>
+                                </span>
+                            </label>
+                        {:else}
+                            <p class="text-[11px] text-amber-700 dark:text-amber-300 inline-flex items-center gap-1">
+                                <AlertTriangle size={12} /> This endpoint will serve plaintext HTTP.
+                            </p>
+                        {/if}
+                    </div>
                 </section>
 
                 <section class="space-y-3">
@@ -967,14 +1271,16 @@
                                 <input
                                     type="text"
                                     bind:value={form.auth.header_name}
-                                    placeholder="Authorization"
+                                    placeholder="X-Pika-Token"
                                     class="w-full px-2 py-1.5 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 font-mono"
                                 />
                             </label>
                             <p class="text-[11px] text-slate-500 dark:text-slate-400 col-span-2">
-                                Tokens are sealed at rest. Leaving this list
-                                empty when editing keeps the previously stored
-                                tokens; an explicit empty list clears them.
+                                Send the raw token value in this header; do not
+                                prefix it with <code class="font-mono">Bearer</code>.
+                                Tokens are sealed at rest. Leaving this list empty
+                                when editing keeps the previously stored tokens;
+                                an explicit empty list clears them.
                             </p>
                         </div>
                     {/if}
@@ -1092,49 +1398,150 @@
                                         </div>
                                     </div>
 
-                                    <div class="grid grid-cols-[auto_1fr_1fr] gap-2 items-center text-xs">
-                                        <span class="text-slate-500 dark:text-slate-400 font-mono">then</span>
-                                        <select
-                                            value={rule.then.type}
-                                            onchange={(e) =>
-                                                setActionType(
-                                                    rule,
-                                                    (e.target as HTMLSelectElement)
-                                                        .value as import('@/lib/types/config').RequestActionType,
-                                                )}
-                                            class="px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100"
+                                    <div class="space-y-2">
+                                        {#each effectiveRuleActions(rule) as action, actionIdx}
+                                            <div class="grid grid-cols-[auto_1fr_1fr_auto] gap-2 items-center text-xs">
+                                                <span class="text-slate-500 dark:text-slate-400 font-mono">
+                                                    {actionIdx === 0 ? "then" : "and"}
+                                                </span>
+                                                <select
+                                                    value={action.type}
+                                                    onchange={(e) =>
+                                                        setActionType(
+                                                            rule,
+                                                            actionIdx,
+                                                            (e.target as HTMLSelectElement)
+                                                                .value as import('@/lib/types/config').RequestActionType,
+                                                        )}
+                                                    class="px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100"
+                                                >
+                                                    <option value="allow">allow (stop)</option>
+                                                    <option value="block">block (stop)</option>
+                                                    <option value="set_header">set header</option>
+                                                    <option value="del_header">delete header</option>
+                                                    <option value="set_query">set query param</option>
+                                                    <option value="del_query">delete query param</option>
+                                                    <option value="set_path">set path (literal)</option>
+                                                    <option value="replace_path">regex replace path</option>
+                                                </select>
+                                                <div class="flex gap-2">
+                                                    {#if action.type === "block"}
+                                                        <input type="number" min="100" max="599" bind:value={action.status} placeholder="403" class="w-20 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100" />
+                                                        <input type="text" bind:value={action.body} placeholder="response body" class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100" />
+                                                    {:else if action.type === "set_header" || action.type === "set_query"}
+                                                        <input type="text" bind:value={action.name} placeholder={action.type === "set_header" ? "X-Tenant" : "variant"} class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono" />
+                                                        <input type="text" bind:value={action.value} placeholder="value" class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono" />
+                                                    {:else if action.type === "del_header" || action.type === "del_query"}
+                                                        <input type="text" bind:value={action.name} placeholder={action.type === "del_header" ? "Cookie" : "debug"} class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono" />
+                                                    {:else if action.type === "set_path"}
+                                                        <input type="text" bind:value={action.value} placeholder="/new/path" class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono" />
+                                                    {:else if action.type === "replace_path"}
+                                                        <div class="flex-1 space-y-1.5">
+                                                            <div class="flex gap-2">
+                                                                <input type="text" bind:value={action.pattern} placeholder="^/legacy/(.*)$" class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono" />
+                                                                <input type="text" bind:value={action.value} placeholder="/$1" class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono" />
+                                                            </div>
+                                                            <div class="space-y-1 rounded border border-slate-200 dark:border-warm-700 bg-white dark:bg-warm-900 p-1.5">
+                                                                <div class="flex items-center justify-between gap-2">
+                                                                    <span class="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                                                        Capture transforms
+                                                                    </span>
+                                                                    <button
+                                                                        type="button"
+                                                                        onclick={() => addCaptureTransform(rule, actionIdx)}
+                                                                        class="px-1.5 py-0.5 text-[10px] rounded bg-slate-200 dark:bg-warm-700 hover:bg-slate-300 dark:hover:bg-warm-600 text-slate-700 dark:text-slate-200 cursor-pointer inline-flex items-center gap-1"
+                                                                    >
+                                                                        <Plus size={10} /> add
+                                                                    </button>
+                                                                </div>
+                                                                {#if action.capture_transforms?.length}
+                                                                    {#each action.capture_transforms as transform, transformIdx}
+                                                                        <div class="grid grid-cols-[4rem_1fr_1fr_auto] gap-1 items-center">
+                                                                            <input
+                                                                                type="text"
+                                                                                value={transform.capture}
+                                                                                oninput={(e) =>
+                                                                                    updateCaptureTransform(
+                                                                                        rule,
+                                                                                        actionIdx,
+                                                                                        transformIdx,
+                                                                                        "capture",
+                                                                                        (e.target as HTMLInputElement).value,
+                                                                                    )}
+                                                                                placeholder="1"
+                                                                                class="px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono"
+                                                                            />
+                                                                            <input
+                                                                                type="text"
+                                                                                value={transform.find}
+                                                                                oninput={(e) =>
+                                                                                    updateCaptureTransform(
+                                                                                        rule,
+                                                                                        actionIdx,
+                                                                                        transformIdx,
+                                                                                        "find",
+                                                                                        (e.target as HTMLInputElement).value,
+                                                                                    )}
+                                                                                placeholder="/"
+                                                                                class="px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono"
+                                                                            />
+                                                                            <input
+                                                                                type="text"
+                                                                                value={transform.value}
+                                                                                oninput={(e) =>
+                                                                                    updateCaptureTransform(
+                                                                                        rule,
+                                                                                        actionIdx,
+                                                                                        transformIdx,
+                                                                                        "value",
+                                                                                        (e.target as HTMLInputElement).value,
+                                                                                    )}
+                                                                                placeholder="-"
+                                                                                class="px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono"
+                                                                            />
+                                                                            <button
+                                                                                type="button"
+                                                                                onclick={() => removeCaptureTransform(rule, actionIdx, transformIdx)}
+                                                                                class="p-1 rounded hover:bg-red-50 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 cursor-pointer"
+                                                                                title="Remove capture transform"
+                                                                            >
+                                                                                <Trash2 size={12} />
+                                                                            </button>
+                                                                        </div>
+                                                                    {/each}
+                                                                {:else}
+                                                                    <p class="text-[10px] text-slate-500 dark:text-slate-400">
+                                                                        Optional: pick a capture and replace literal text inside it before expanding the replacement.
+                                                                    </p>
+                                                                {/if}
+                                                            </div>
+                                                        </div>
+                                                    {/if}
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onclick={() => removeRuleAction(rule, actionIdx)}
+                                                    disabled={effectiveRuleActions(rule).length === 1}
+                                                    class="p-1 rounded hover:bg-red-50 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 cursor-pointer disabled:opacity-30"
+                                                    title="Remove action"
+                                                >
+                                                    <Trash2 size={12} />
+                                                </button>
+                                            </div>
+                                        {/each}
+                                        <button
+                                            type="button"
+                                            onclick={() => addRuleAction(rule)}
+                                            class="ml-10 px-2 py-1 text-[11px] rounded bg-slate-200 dark:bg-warm-700 hover:bg-slate-300 dark:hover:bg-warm-600 text-slate-700 dark:text-slate-200 cursor-pointer inline-flex items-center gap-1"
                                         >
-                                            <option value="allow">allow (stop)</option>
-                                            <option value="block">block (stop)</option>
-                                            <option value="set_header">set header</option>
-                                            <option value="del_header">delete header</option>
-                                            <option value="set_query">set query param</option>
-                                            <option value="del_query">delete query param</option>
-                                            <option value="set_path">set path (literal)</option>
-                                            <option value="replace_path">regex replace path</option>
-                                        </select>
-                                        <div class="flex gap-2">
-                                            {#if rule.then.type === "block"}
-                                                <input type="number" min="100" max="599" bind:value={rule.then.status} placeholder="403" class="w-20 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100" />
-                                                <input type="text" bind:value={rule.then.body} placeholder="response body" class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100" />
-                                            {:else if rule.then.type === "set_header" || rule.then.type === "set_query"}
-                                                <input type="text" bind:value={rule.then.name} placeholder={rule.then.type === "set_header" ? "X-Tenant" : "variant"} class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono" />
-                                                <input type="text" bind:value={rule.then.value} placeholder="value" class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono" />
-                                            {:else if rule.then.type === "del_header" || rule.then.type === "del_query"}
-                                                <input type="text" bind:value={rule.then.name} placeholder={rule.then.type === "del_header" ? "Cookie" : "debug"} class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono" />
-                                            {:else if rule.then.type === "set_path"}
-                                                <input type="text" bind:value={rule.then.value} placeholder="/new/path" class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono" />
-                                            {:else if rule.then.type === "replace_path"}
-                                                <input type="text" bind:value={rule.then.pattern} placeholder="^/legacy/(.*)$" class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono" />
-                                                <input type="text" bind:value={rule.then.value} placeholder="/$1" class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono" />
-                                            {/if}
-                                        </div>
+                                            <Plus size={10} /> add action
+                                        </button>
                                     </div>
 
                                     <p class="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
                                         {ruleSummary(rule)}
                                     </p>
-                                    {#if rule.then.type === "set_path"}
+                                    {#if ruleHasAction(rule, "set_path")}
                                         <div class="text-[11px] text-slate-500 dark:text-slate-400 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded px-2 py-1.5">
                                             <strong class="text-slate-600 dark:text-slate-300">Path rewrite is literal.</strong>
                                             It replaces the whole request path, not a regex capture.
@@ -1143,18 +1550,27 @@
                                             <code class="font-mono">/myapp/config</code> so the shim sees
                                             <code class="font-mono">/myapp/config</code>.
                                         </div>
-                                    {:else if rule.then.type === "replace_path"}
+                                    {/if}
+                                    {#if ruleHasAction(rule, "replace_path")}
                                         <div class="text-[11px] text-slate-500 dark:text-slate-400 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded px-2 py-1.5">
                                             <strong class="text-slate-600 dark:text-slate-300">Regex path replacement.</strong>
                                             The first field is a Go regexp pattern; the second is the replacement.
                                             Capture groups use
-                                            <code class="font-mono">$1</code> or
+                                            <code class="font-mono">$1</code>,
+                                            <code class="font-mono">${"${1}"}</code>, or
                                             <code class="font-mono">$name</code>.
                                             Example:
                                             <code class="font-mono">^/legacy/(.*)$</code>
                                             → <code class="font-mono">/$1</code>
                                             turns <code class="font-mono">/legacy/myapp/config</code>
                                             into <code class="font-mono">/myapp/config</code>.
+                                            Capture transforms can edit a capture first: with pattern
+                                            <code class="font-mono">^/legacy/(.*)$</code>, replacement
+                                            <code class="font-mono">/legacy/${"${1}"}</code>, transform capture
+                                            <code class="font-mono">1</code> find <code class="font-mono">/</code>
+                                            to <code class="font-mono">-</code>,
+                                            <code class="font-mono">/legacy/1/2/3</code>
+                                            becomes <code class="font-mono">/legacy/1-2-3</code>.
                                         </div>
                                     {/if}
                                 </div>
@@ -1173,6 +1589,148 @@
                     >
                         <Plus size={12} /> Add rule
                     </button>
+
+                    <div class="p-3 rounded border border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900 space-y-3">
+                        <div class="flex items-center justify-between gap-3 flex-wrap">
+                            <div>
+                                <h5 class="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                                    Test draft rules
+                                </h5>
+                                <p class="text-[11px] text-slate-500 dark:text-slate-400">
+                                    Runs the unsaved rules through the backend evaluator and shows what the shim would see.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onclick={runRuleTest}
+                                disabled={ruleTesting}
+                                class="px-2 py-1 text-xs rounded bg-accent-600 hover:bg-accent-700 text-white cursor-pointer inline-flex items-center gap-1 disabled:opacity-50"
+                            >
+                                <Play size={12} />
+                                {ruleTesting ? "Testing…" : "Test rules"}
+                            </button>
+                        </div>
+
+                        <div class="grid grid-cols-[6rem_1fr] gap-2 text-xs">
+                            <select
+                                bind:value={ruleTestMethod}
+                                class="px-2 py-1 rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono"
+                            >
+                                <option value="GET">GET</option>
+                                <option value="POST">POST</option>
+                                <option value="PUT">PUT</option>
+                                <option value="PATCH">PATCH</option>
+                                <option value="DELETE">DELETE</option>
+                                <option value="HEAD">HEAD</option>
+                            </select>
+                            <input
+                                type="text"
+                                bind:value={ruleTestPath}
+                                placeholder="/legacy/myapp/config?variant=prod"
+                                class="px-2 py-1 rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono"
+                            />
+                        </div>
+
+                        <div class="space-y-1.5">
+                            <div class="flex items-center gap-2">
+                                <span class="text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                                    Headers
+                                </span>
+                                <button
+                                    type="button"
+                                    onclick={addRuleTestHeader}
+                                    class="px-1.5 py-0.5 text-[11px] rounded bg-slate-200 dark:bg-warm-700 hover:bg-slate-300 dark:hover:bg-warm-600 text-slate-700 dark:text-slate-200 cursor-pointer inline-flex items-center gap-1"
+                                >
+                                    <Plus size={10} /> add
+                                </button>
+                            </div>
+                            {#each ruleTestHeaders as h, i}
+                                <div class="flex gap-2 items-center">
+                                    <input
+                                        type="text"
+                                        value={h.name}
+                                        oninput={(e) =>
+                                            setRuleTestHeader(
+                                                i,
+                                                "name",
+                                                (e.target as HTMLInputElement).value,
+                                            )}
+                                        placeholder="Header"
+                                        class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono"
+                                    />
+                                    <input
+                                        type="text"
+                                        value={h.value}
+                                        oninput={(e) =>
+                                            setRuleTestHeader(
+                                                i,
+                                                "value",
+                                                (e.target as HTMLInputElement).value,
+                                            )}
+                                        placeholder="value"
+                                        class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 font-mono"
+                                    />
+                                    <button
+                                        type="button"
+                                        onclick={() => removeRuleTestHeader(i)}
+                                        class="p-1 rounded hover:bg-red-50 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 cursor-pointer"
+                                        title="Remove header"
+                                    >
+                                        <Trash2 size={12} />
+                                    </button>
+                                </div>
+                            {/each}
+                        </div>
+
+                        {#if ruleTestResult}
+                            <div class="text-xs space-y-2 rounded border border-slate-200 dark:border-warm-700 bg-white dark:bg-warm-800 p-2">
+                                <div class="font-mono text-slate-700 dark:text-slate-200">
+                                    {terminalLabel(ruleTestResult)}
+                                </div>
+                                <div class="grid grid-cols-2 gap-2 text-[11px]">
+                                    <div>
+                                        <span class="text-slate-500 dark:text-slate-400">Input</span>
+                                        <div class="font-mono text-slate-700 dark:text-slate-200">
+                                            {ruleTestResult.initial.method}
+                                            {pathWithQuery(ruleTestResult.initial.path, ruleTestResult.initial.raw_query)}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <span class="text-slate-500 dark:text-slate-400">Shim sees</span>
+                                        <div class="font-mono text-slate-700 dark:text-slate-200">
+                                            {ruleTestResult.final.method}
+                                            {pathWithQuery(ruleTestResult.final.path, ruleTestResult.final.raw_query)}
+                                        </div>
+                                    </div>
+                                </div>
+                                {#if ruleTestResult.matched_rules.length === 0}
+                                    <div class="text-[11px] text-slate-500 dark:text-slate-400">
+                                        No rules matched; request falls through to the shim.
+                                    </div>
+                                {:else}
+                                    <div class="space-y-1.5">
+                                        {#each ruleTestResult.matched_rules as trace}
+                                            <div class="text-[11px] border border-slate-200 dark:border-warm-700 rounded p-2 bg-slate-50 dark:bg-warm-900">
+                                                <div class="font-medium text-slate-700 dark:text-slate-200">
+                                                    Rule #{trace.rule_index + 1}{trace.rule_name ? ` — ${trace.rule_name}` : ""}
+                                                </div>
+                                                <div class="mt-1 space-y-1 font-mono text-slate-600 dark:text-slate-300">
+                                                    {#each trace.actions as action}
+                                                        <div>
+                                                            {action.action_index + 1}. {action.type}: {actionTraceSummary(action)}
+                                                        </div>
+                                                    {/each}
+                                                </div>
+                                            </div>
+                                        {/each}
+                                    </div>
+                                {/if}
+                                {#if ruleTestResult.block}
+                                    <pre class="text-[11px] p-2 rounded bg-slate-900 text-slate-100 overflow-auto max-h-32">{ruleTestResult.block.body}</pre>
+                                {/if}
+                            </div>
+                        {/if}
+                    </div>
                 </section>
 
                 <section class="space-y-3">

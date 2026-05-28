@@ -63,13 +63,12 @@ func bearerTokenMiddleware(ep service.PublicEndpoint, svc Service, next http.Han
 
 // staticTokenMiddleware compares the request header in constant time
 // against the endpoint's allowed-token list. The header defaults to
-// "Authorization" with optional "Bearer " prefix; operators can set
-// ep.Auth.HeaderName to "X-Consul-Token" for consul-template
-// compatibility.
+// "X-Pika-Token"; operators can set ep.Auth.HeaderName to
+// "X-Consul-Token" for consul-template compatibility.
 func staticTokenMiddleware(ep service.PublicEndpoint, next http.Handler) http.Handler {
 	headerName := ep.Auth.HeaderName
 	if headerName == "" {
-		headerName = "Authorization"
+		headerName = "X-Pika-Token"
 	}
 	// Pre-compute byte slices so we can use ConstantTimeCompare per
 	// request without churning new []byte each time.
@@ -87,8 +86,8 @@ func staticTokenMiddleware(ep service.PublicEndpoint, next http.Handler) http.Ha
 			writeJSONError(w, http.StatusUnauthorized, "missing token")
 			return
 		}
-		// Strip "Bearer " prefix if present so operators can point
-		// either header name at the same client.
+		// Strip "Bearer " prefix if present so older Authorization-based
+		// static-token configs keep working after the default header moved.
 		if len(raw) > 7 && strings.EqualFold(raw[:7], "Bearer ") {
 			raw = strings.TrimSpace(raw[7:])
 		}

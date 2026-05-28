@@ -128,7 +128,7 @@ While the server is locked (verifier on disk, no live key):
 curl -X POST -H "Cookie: pika_session=$SESSION" \
   -H "Content-Type: application/json" \
   -d '{"current_key":"old-passphrase","new_key":"new-passphrase"}' \
-  http://localhost:8080/api/v1/key/rotate
+  https://localhost:8080/api/v1/key/rotate
 ```
 
 Sequence:
@@ -156,7 +156,7 @@ archive. Backups can themselves be password-protected:
 ```sh
 curl -H "Authorization: Bearer $TOKEN" \
   -o pika-backup.tar.gz \
-  "http://localhost:8080/api/v1/backup?encryption_password=correct-horse-battery-staple"
+  "https://localhost:8080/api/v1/backup?encryption_password=correct-horse-battery-staple"
 ```
 
 The backup envelope is a separate concern from the at-rest

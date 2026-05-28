@@ -1,7 +1,7 @@
 <script lang="ts">
   import { configStore } from "@/lib/store/config.svelte";
   import { addToast } from "@/lib/store/toast.svelte";
-  import { basePath } from "@/lib/basepath";
+  import { withBasePath } from "@/lib/basepath";
   import type { FileFormat, InheritEntry } from "@/lib/types/config";
   import {
     Play,
@@ -105,7 +105,7 @@
 
   const dataEndpoint = $derived(
     activeTab
-      ? `${basePath}/data/${activeTab.path}${activeTab.variantKey ? `?variant=${activeTab.variantKey}` : ""}`
+      ? withBasePath(`/data/${activeTab.path}${activeTab.variantKey ? `?variant=${activeTab.variantKey}` : ""}`)
       : "",
   );
 

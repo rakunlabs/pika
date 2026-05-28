@@ -63,12 +63,15 @@ spec:
           livenessProbe:
             httpGet:
               path: /healthz
-              # Probe the always-on authenticated http port. /healthz is
+              # Probe the always-on authenticated HTTP port. The Kubernetes
+              # bundle expects public TLS to terminate at Gateway / Ingress.
+              # /healthz is
               # registered on the unprotected mux (api.go:190-195) so it
               # responds without auth. The public port (9090) is optional
               # and disabled by default — UI-toggled via Settings — so
               # probing it would fail on a fresh deploy.
               port: http
+              scheme: HTTP
             # Bring-up of the BadgerDB store + cluster join can take a few
             # seconds; the original Deployment used 5s but a StatefulSet
             # rolls one pod at a time so we can be a touch more lenient.
@@ -78,6 +81,7 @@ spec:
             httpGet:
               path: /healthz
               port: http
+              scheme: HTTP
             initialDelaySeconds: 5
             periodSeconds: 5
           resources:

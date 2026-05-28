@@ -35,7 +35,7 @@ From here, every subsequent restart enters the locked state.
 curl -X POST -H "Cookie: pika_session=$SESSION" \
   -H "Content-Type: application/json" \
   -d '{"key":"correct-horse-battery-staple"}' \
-  http://localhost:8080/api/v1/key/initialize
+  https://localhost:8080/api/v1/key/initialize
 ```
 
 The endpoint requires an authenticated session OR a token carrying
@@ -67,7 +67,7 @@ CLI variant:
 curl -X POST -H "Cookie: pika_session=$SESSION" \
   -H "Content-Type: application/json" \
   -d '{"key":"correct-horse-battery-staple"}' \
-  http://localhost:8080/api/v1/key/unlock
+  https://localhost:8080/api/v1/key/unlock
 ```
 
 ## Status check
@@ -75,7 +75,7 @@ curl -X POST -H "Cookie: pika_session=$SESSION" \
 Always available, no auth required:
 
 ```sh
-curl http://localhost:8080/api/v1/key/status
+curl https://localhost:8080/api/v1/key/status
 ```
 
 Response:
@@ -118,7 +118,7 @@ CLI variant:
 curl -X POST -H "Cookie: pika_session=$SESSION" \
   -H "Content-Type: application/json" \
   -d '{"current_key":"old","new_key":"new"}' \
-  http://localhost:8080/api/v1/key/rotate
+  https://localhost:8080/api/v1/key/rotate
 ```
 
 ### Failure modes during rotation
@@ -157,7 +157,7 @@ CLI:
 
 ```sh
 curl -X POST -H "Cookie: pika_session=$SESSION" \
-  http://localhost:8080/api/v1/key/lock
+  https://localhost:8080/api/v1/key/lock
 ```
 
 After lock, every non-allowlisted request returns 503; the web

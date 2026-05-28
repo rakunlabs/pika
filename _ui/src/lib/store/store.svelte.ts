@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 import type { Capability } from '@/lib/types/config';
+import { withoutBasePath } from '@/lib/basepath';
 import { prefsStore } from '@/lib/store/prefs.svelte';
 
 export interface AppInfo {
@@ -24,6 +25,12 @@ export interface AppInfo {
   // false, the SPA hides the /vault link entirely — the routes themselves
   // 503 in that case, so a stray bookmark just fails closed.
   vault_enabled?: boolean;
+  // ManagedTLSEnabled is false when process config disables Pika's
+  // built-in HTTPS listener, e.g. Kubernetes Gateway deployments where
+  // public TLS is terminated before reaching the pod. In that mode the
+  // Certificates settings section is hidden to avoid presenting no-op
+  // runtime toggles.
+  managed_tls_enabled?: boolean;
   // VaultItemTypes is the server's known item-type vocabulary, used by
   // the new-item picker. Empty when vault is disabled.
   vault_item_types?: string[];
@@ -136,8 +143,7 @@ function createAppStore() {
 
   async function loadIdentity(): Promise<void> {
     try {
-      // ada mounts /login/* at the root (not under /api/v1) because the
-      // current ada version (v0.1.2) mis-handles non-root Base prefixes.
+      // /login/* lives beside /api/v1; axios.baseURL applies server.base_path.
       const response = await axios.get('/login/me');
       // Guard against SPA fallback: if the catch-all folder handler served
       // index.html with 200, axios will treat it as success. Only accept a
@@ -192,7 +198,7 @@ function createAppStore() {
   }
 
   async function loginWith(url: string, body: Record<string, string>): Promise<TOTPChallenge | null> {
-    const res = await axios.post(url, body, { headers: { Accept: 'application/json' } });
+    const res = await axios.post(withoutBasePath(url), body, { headers: { Accept: 'application/json' } });
     // The MFA decorator wraps phase-1 success: when the user is TOTP-
     // enrolled the response body is the step-up challenge instead of
     // ada's standard {strategy, redirect_path}. Detect by the
@@ -224,7 +230,7 @@ function createAppStore() {
   // axios error surfaces with the standard {error, message} body.
   async function finishMFA(url: string, totpSessionID: string, code: string): Promise<void> {
     await axios.post(
-      url,
+      withoutBasePath(url),
       { totp_session_id: totpSessionID, code },
       { headers: { Accept: 'application/json' } }
     );
@@ -232,7 +238,7 @@ function createAppStore() {
   }
 
   async function registerWith(url: string, body: Record<string, string>): Promise<void> {
-    await axios.post(url, body, { headers: { Accept: 'application/json' } });
+    await axios.post(withoutBasePath(url), body, { headers: { Accept: 'application/json' } });
     // On first signup the backend auto-logs the user in. Mirror loginWith
     // — see loginWith for the rationale behind allSettled.
     await Promise.allSettled([loadIdentity(), loadInfo(), prefsStore.loadPreferences()]);

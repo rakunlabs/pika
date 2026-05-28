@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/rakunlabs/ada/middleware/auth/sessionstore"
 
 	"github.com/rakunlabs/pika/internal/service"
+	"github.com/rakunlabs/pika/internal/usersync"
 )
 
 // SessionStore implements sessionstore.Store against pika's SQLite-backed
@@ -170,11 +172,12 @@ func (s *SessionStore) Save(r *http.Request, w http.ResponseWriter, sess *sessio
 // extractedIdentity is the subset of ada's Identity we need at the session
 // layer. Parsed from sess.Values["pair"] by extractIdentity below.
 type extractedIdentity struct {
-	Subject       string
-	Email         string
-	EmailVerified bool
-	Name          string
-	Provider      string
+	Subject           string
+	Email             string
+	EmailVerified     bool
+	Name              string
+	PreferredUsername string
+	Provider          string
 }
 
 // extractIdentity parses the issuer's serialized Pair out of sess.Values
@@ -196,11 +199,12 @@ func extractIdentity(values map[string]any) extractedIdentity {
 	}
 	var pair struct {
 		Identity struct {
-			Subject       string `json:"subject"`
-			Email         string `json:"email"`
-			EmailVerified bool   `json:"email_verified"`
-			Name          string `json:"name"`
-			Provider      string `json:"provider"`
+			Subject       string         `json:"subject"`
+			Email         string         `json:"email"`
+			EmailVerified bool           `json:"email_verified"`
+			Name          string         `json:"name"`
+			Claims        map[string]any `json:"claims"`
+			Provider      string         `json:"provider"`
 		} `json:"identity"`
 	}
 	if err := json.Unmarshal([]byte(raw), &pair); err != nil {
@@ -212,6 +216,9 @@ func extractIdentity(values map[string]any) extractedIdentity {
 	out.Email = pair.Identity.Email
 	out.EmailVerified = pair.Identity.EmailVerified
 	out.Name = pair.Identity.Name
+	if v, ok := pair.Identity.Claims["preferred_username"].(string); ok {
+		out.PreferredUsername = v
+	}
 	out.Provider = pair.Identity.Provider
 	return out
 }
@@ -298,10 +305,12 @@ func isLocalEquivalentProvider(provider string) bool {
 }
 
 // resolveSessionUser returns (username, user_id) for the session row. It
-// handles both local and external identities, but it never provisions
-// new users — that is reserved for the user-sync engine. Unrecognized
-// external identities fail closed (session persisted without a
-// user_id), surfacing a warning so operators can investigate.
+// handles both local and external identities. By default it never provisions
+// new users — unrecognized external identities fail closed (session persisted
+// without a user_id), surfacing a warning so operators can investigate. OAuth2
+// providers can opt into direct auto-provisioning with AutoCreateUser; LDAP can
+// opt into JIT user-sync through a configured UserSync source so permissions are
+// projected from LDAP groups at creation time.
 //
 //   - Local (provider in localEquivalentProviders): look up the user
 //     by username. Missing → return Subject with empty user_id; the
@@ -311,9 +320,10 @@ func isLocalEquivalentProvider(provider string) bool {
 //   - External: call FindExternalUser, which resolves (provider,
 //     subject) to an existing link or auto-links by verified email
 //     against an existing local user. ErrNotFound means no
-//     pre-existing user — DO NOT create one. Operators must
-//     pre-provision external users via user sync or the admin Users
-//     page.
+//     pre-existing user. For OAuth2 providers with AutoCreateUser=true,
+//     the session-save path calls FindOrCreateExternalUser instead. For LDAP
+//     with auto_create_user=true, it runs a single-user LDAP sync via the
+//     configured UserSync source.
 //
 // A best-effort failure (e.g. identity has no Subject or the DB lookup
 // errors) yields empty strings so the session still persists. The auth
@@ -337,23 +347,43 @@ func (s *SessionStore) resolveSessionUser(ctx context.Context, values map[string
 		return id.Subject, ""
 	}
 
-	// External: lookup-only. An unrecognized identity is logged and
-	// the session is persisted unbound — never auto-created. The
-	// user-sync engine (internal/usersync) is the only path
-	// permitted to materialize new users from external sources.
-	info, err := s.svc.FindExternalUser(ctx, service.ExternalIdentityInput{
-		Provider:      id.Provider,
+	// External: lookup-only unless the provider explicitly opted into
+	// login-time provisioning. Existing links / verified-email matches are
+	// always reused before any new user is created. LDAP may resolve through a
+	// user-sync source namespace so batch sync and login share the same identity.
+	authSettings := s.svc.GetAuthSettings(ctx)
+	provider := id.Provider
+	ldapSourceID := ""
+	ldapAutoCreate := false
+	if sourceID, autoCreate, ok := authSettings.LDAPLoginSyncSource(id.Provider); ok {
+		provider = sourceID
+		ldapSourceID = sourceID
+		ldapAutoCreate = autoCreate
+	}
+	input := service.ExternalIdentityInput{
+		Provider:      provider,
 		Subject:       id.Subject,
 		Email:         id.Email,
 		EmailVerified: id.EmailVerified,
 		DisplayName:   id.Name,
-		Username:      id.Name, // username hint, only consumed when verified-email auto-link fires
-	})
+		Username:      id.PreferredUsername,
+	}
+
+	var info *service.UserInfo
+	var err error
+	if ldapAutoCreate {
+		info, err = s.syncLDAPLoginUser(ctx, ldapSourceID, input)
+	} else if authSettings.OAuth2AutoCreateUserEnabled(id.Provider) {
+		info, err = s.svc.FindOrCreateExternalUser(ctx, input)
+	} else {
+		info, err = s.svc.FindExternalUser(ctx, input)
+	}
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			// Fail-closed: surface a clear hint that the user must be
-			// pre-provisioned, then let the session persist unbound.
-			slog.Warn("authx: external identity has no matching pika user; sync the user first",
+			// pre-provisioned or the provider must opt into
+			// auto_create_user, then let the session persist unbound.
+			slog.Warn("authx: external identity has no matching pika user; sync the user first or enable provider auto_create_user",
 				"provider", id.Provider,
 				"subject", id.Subject,
 			)
@@ -367,6 +397,23 @@ func (s *SessionStore) resolveSessionUser(ctx context.Context, values map[string
 		return id.Subject, ""
 	}
 	return info.Username, info.ID
+}
+
+func (s *SessionStore) syncLDAPLoginUser(ctx context.Context, sourceID string, input service.ExternalIdentityInput) (*service.UserInfo, error) {
+	settings, err := s.svc.Settings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if settings == nil || settings.UserSync == nil {
+		return nil, fmt.Errorf("ldap user-sync source %q not configured: %w", sourceID, service.ErrNotFound)
+	}
+	for _, src := range settings.UserSync.Sources {
+		if src.ID != sourceID {
+			continue
+		}
+		return usersync.New(s.svc).RunOne(ctx, src, input)
+	}
+	return nil, fmt.Errorf("ldap user-sync source %q not found: %w", sourceID, service.ErrNotFound)
 }
 
 func optPath(o *sessionstore.Options) string {

@@ -146,7 +146,7 @@ func (s *Storage) registerBuckets() error {
 	//        with PublicEndpoints == nil so deployments that never
 	//        configured one keep working without migration.
 	if s.settings, err = bw.RegisterBucket[settingsRow](s.db, bucketSettings,
-		bw.WithVersion[settingsRow](4),
+		bw.WithVersion[settingsRow](5),
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketSettings, err)
 	}

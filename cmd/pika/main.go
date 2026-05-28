@@ -106,10 +106,11 @@ func run(ctx context.Context) error {
 	// //////////////////////////////////////
 	// Start server
 	info := api.Info{
-		Name:    config.ServiceName,
-		Version: version,
-		Commit:  commit,
-		Date:    date,
+		Name:              config.ServiceName,
+		Version:           version,
+		Commit:            commit,
+		Date:              date,
+		ManagedTLSEnabled: cfg.Server.TLS.Enabled,
 	}
 
 	if err := server.Start(ctx, cfg, svc, info, encStore, cl); err != nil {

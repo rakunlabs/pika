@@ -13,6 +13,7 @@
     import type { LoginStrategy } from "@/lib/store/store.svelte";
     import ThemeSwitcher from "@/lib/components/ThemeSwitcher.svelte";
     import axios from "axios";
+    import { withBasePath, withoutBasePath } from "@/lib/basepath";
     import {
         isWebAuthnSupported,
         isConditionalMediationAvailable,
@@ -345,7 +346,7 @@
     }
 
     function handleOAuth(url: string) {
-        location.href = url;
+        location.href = withBasePath(url);
     }
 
     // Passkey login: two-step ceremony that hits the same strategy URL
@@ -377,7 +378,7 @@
                 phase: string;
                 session_id: string;
                 options: ServerRequestOptions;
-            }>(strategy.url, {}, { headers: { Accept: "application/json" } });
+            }>(withoutBasePath(strategy.url), {}, { headers: { Accept: "application/json" } });
 
             const { session_id, options } = beginRes.data;
 
@@ -396,7 +397,7 @@
             // need the cookie to be set, then refresh the post-login state
             // the same way loginWith does.
             await axios.post(
-                strategy.url,
+                withoutBasePath(strategy.url),
                 { session_id, assertion },
                 { headers: { Accept: "application/json" } },
             );
@@ -451,7 +452,7 @@
                 phase: string;
                 session_id: string;
                 options: ServerRequestOptions;
-            }>(strategy.url, {}, { headers: { Accept: "application/json" } });
+            }>(withoutBasePath(strategy.url), {}, { headers: { Accept: "application/json" } });
             if (signal.aborted) return;
 
             const { session_id, options } = beginRes.data;
@@ -462,7 +463,7 @@
             if (!assertion || signal.aborted) return; // user picked something else or aborted
 
             await axios.post(
-                strategy.url,
+                withoutBasePath(strategy.url),
                 { session_id, assertion },
                 { headers: { Accept: "application/json" } },
             );

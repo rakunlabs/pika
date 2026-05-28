@@ -15,7 +15,7 @@ docker run -d \
 | Path / port | Purpose                                             |
 | ----------- | --------------------------------------------------- |
 | `/data`     | Persistent volume — holds the embedded bw database. |
-| `8080`      | HTTP admin UI + authenticated `/data/*` endpoint.   |
+| `8080`      | HTTPS admin UI + authenticated `/data/*` endpoint.  |
 | `9090`      | (Optional) Public unauthenticated `/data/*` port.   |
 
 ::: tip
@@ -45,7 +45,7 @@ volumes:
 
 ## Kubernetes
 
-A ready-to-apply Kustomize bundle ships in [`ci/kubernetes/`](https://github.com/rakunlabs/pika/tree/main/ci/kubernetes). The default deploys a 3-replica StatefulSet with per-pod PVCs, a ClusterIP Service, and a headless Service for cluster peer discovery.
+A ready-to-apply Kustomize bundle ships in [`ci/kubernetes/`](https://github.com/rakunlabs/pika/tree/main/ci/kubernetes). The default deploys a 3-replica StatefulSet with per-pod PVCs, a ClusterIP Service, and a headless Service for cluster peer discovery. Unlike the standalone binary default, the bundle sets `server.tls.enabled: false` so a Gateway / Ingress can terminate public HTTPS and talk to Pika over in-cluster HTTP.
 
 ```sh
 kubectl apply -k https://github.com/rakunlabs/pika/ci/kubernetes
@@ -71,7 +71,7 @@ Pre-built binaries are attached to each [GitHub release](https://github.com/raku
 ./pika
 ```
 
-Pika listens on `:8080` by default and stores data in `./data/pika`. Override either with environment variables — see [Configuration](./configuration).
+Pika listens with HTTPS on `:8080` by default and stores data in `./data/pika`. Override either with environment variables — see [Configuration](./configuration).
 
 ## Building from source
 
@@ -86,7 +86,7 @@ make build       # builds the UI and the Go binary into ./dist/pika
 
 ## First-run setup
 
-On first launch the UI presents a setup screen to create the initial admin account. After that, sign in and head to **Settings** to:
+On first launch, open `https://localhost:8080`. The default certificate is self-signed, so your browser will ask you to trust it. The UI presents a setup screen to create the initial admin account. After that, sign in and head to **Settings** to:
 
 - Mint your first [API token](/reference/tokens-and-scopes).
 - (Optional) Enable [external auth](./authentication) — OAuth2/OIDC, LDAP, or forward-auth headers.

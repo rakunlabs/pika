@@ -162,6 +162,39 @@ func TestStaticMode_AuthStillApplies(t *testing.T) {
 	}
 }
 
+func TestStaticMode_StaticTokenDefaultHeader(t *testing.T) {
+	stub := &stubService{files: map[string]stubFile{"hello": {data: []byte("world"), format: "raw"}}}
+	port := freePort(t)
+	ep := service.PublicEndpoint{
+		ID: "s-default-token", Name: "ok", Enabled: true,
+		ListenHost: "127.0.0.1", ListenPort: port,
+		BasePath: "/", Mode: "static",
+		Static: &service.StaticCompat{},
+		Auth: service.EndpointAuth{
+			Mode:         "static_token",
+			StaticTokens: []string{"good"},
+		},
+	}
+	mgr := New(t.Context(), stub, nil)
+	t.Cleanup(func() { _ = mgr.Shutdown(t.Context()) })
+	if err := mgr.Reload(t.Context(), []service.PublicEndpoint{ep}); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/hello", port)
+
+	_, status := httpGet(t, url, http.Header{"Authorization": []string{"good"}})
+	if status != http.StatusUnauthorized {
+		t.Errorf("expected 401 with old default Authorization header, got %d", status)
+	}
+	body, status := httpGet(t, url, http.Header{"X-Pika-Token": []string{"good"}})
+	if status != http.StatusOK {
+		t.Errorf("expected 200 with X-Pika-Token, got %d", status)
+	}
+	if string(body) != "world" {
+		t.Errorf("body=%q", body)
+	}
+}
+
 // TestStaticMode_RequestRulesStillApply — request rules run before
 // the static shim, so a blocking rule prevents data resolution.
 func TestStaticMode_RequestRulesStillApply(t *testing.T) {

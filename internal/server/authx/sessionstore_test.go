@@ -283,11 +283,10 @@ func TestSessionStore_BindsExistingExternalUser(t *testing.T) {
 }
 
 // TestSessionStore_DoesNotProvisionUnknownExternal is the regression
-// test for the rule: the live auth path MUST NOT create users. Only
-// user-sync (internal/usersync) is permitted to materialize new
-// users; a login from an unrecognized external identity must persist
-// the session unbound (no user_id) and emit a warning, never silently
-// invent a duplicate users row.
+// test for the default rule: the live auth path MUST NOT create users unless
+// the OAuth2 provider explicitly opts into AutoCreateUser. A login from an
+// unrecognized external identity must persist the session unbound (no user_id)
+// and emit a warning, never silently invent a duplicate users row.
 //
 // Without this guarantee, an OAuth2 sign-in for an unknown subject
 // would create a brand-new "google_2"-style user even when the human
@@ -336,6 +335,127 @@ func TestSessionStore_DoesNotProvisionUnknownExternal(t *testing.T) {
 	}
 	if row.UserID != "" {
 		t.Errorf("session.UserID = %q, want empty (unbound, no auto-provision)", row.UserID)
+	}
+}
+
+func TestSessionStore_AutoCreatesUnknownOAuth2UserWhenEnabled(t *testing.T) {
+	svc := newTestService(t)
+	if err := svc.SaveSettings(context.Background(), &service.Settings{
+		Auth: &service.AuthSettings{
+			OAuth2: []service.OAuth2StrategySettings{{Name: "google", AutoCreateUser: true}},
+		},
+	}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	store := NewSessionStore(svc, "pika_session")
+	const sid = "oauth-sid-autocreate"
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "pika_session", Value: sid})
+
+	sess, err := store.Get(r, "pika_session")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	pairJSON, _ := json.Marshal(map[string]any{
+		"session_id": sid,
+		"identity": map[string]any{
+			"subject":        "new-google-sub",
+			"email":          "email-local@example.com",
+			"email_verified": true,
+			"name":           "Display Name Is Not Unique",
+			"claims":         map[string]any{"preferred_username": "preferred_user"},
+			"provider":       "google",
+		},
+		"access":  map[string]any{"value": "a", "expires_at": time.Now().Add(time.Hour)},
+		"refresh": map[string]any{"value": "r", "expires_at": time.Now().Add(24 * time.Hour)},
+	})
+	sess.Values["pair"] = string(pairJSON)
+
+	w := httptest.NewRecorder()
+	if err := store.Save(r, w, sess); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	row, err := svc.GetRawSession(context.Background(), sid)
+	if err != nil {
+		t.Fatalf("GetRawSession: %v", err)
+	}
+	if row.UserID == "" {
+		t.Fatal("session.UserID is empty; auto-created user was not bound")
+	}
+
+	info, err := svc.GetUserByIdentity(context.Background(), "google", "new-google-sub")
+	if err != nil {
+		t.Fatalf("GetUserByIdentity: %v", err)
+	}
+	if info.ID != row.UserID {
+		t.Errorf("identity user ID = %q, want session user ID %q", info.ID, row.UserID)
+	}
+	if !info.External {
+		t.Error("auto-created OAuth2 user should be external-only")
+	}
+	if info.Username != "preferred_user" {
+		t.Errorf("username = %q, want preferred_username claim", info.Username)
+	}
+}
+
+func TestSessionStore_AutoCreateUsesExistingVerifiedEmailUser(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	local, err := svc.CreateSetupUser(ctx, &service.CreateUserRequest{Username: "alice", Password: "s3cret"})
+	if err != nil {
+		t.Fatalf("CreateSetupUser: %v", err)
+	}
+	email := "alice@example.com"
+	if err := svc.UpdateUser(ctx, local.ID, &service.UpdateUserRequest{Email: &email}); err != nil {
+		t.Fatalf("UpdateUser: %v", err)
+	}
+	if err := svc.SaveSettings(ctx, &service.Settings{
+		Auth: &service.AuthSettings{
+			OAuth2: []service.OAuth2StrategySettings{{Name: "google", AutoCreateUser: true}},
+		},
+	}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	store := NewSessionStore(svc, "pika_session")
+	const sid = "oauth-sid-autolink-existing"
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: "pika_session", Value: sid})
+	sess, err := store.Get(r, "pika_session")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	pairJSON, _ := json.Marshal(map[string]any{
+		"session_id": sid,
+		"identity": map[string]any{
+			"subject":        "alice-google-sub",
+			"email":          "alice@example.com",
+			"email_verified": true,
+			"name":           "Alice via Google",
+			"provider":       "google",
+		},
+		"access":  map[string]any{"value": "a", "expires_at": time.Now().Add(time.Hour)},
+		"refresh": map[string]any{"value": "r", "expires_at": time.Now().Add(24 * time.Hour)},
+	})
+	sess.Values["pair"] = string(pairJSON)
+
+	w := httptest.NewRecorder()
+	if err := store.Save(r, w, sess); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	row, err := svc.GetRawSession(ctx, sid)
+	if err != nil {
+		t.Fatalf("GetRawSession: %v", err)
+	}
+	if row.UserID != local.ID {
+		t.Errorf("session.UserID = %q, want existing local user %q", row.UserID, local.ID)
+	}
+	if count, err := svc.UserCount(ctx); err != nil || count != 1 {
+		t.Fatalf("UserCount = %d, %v; want one reused user", count, err)
 	}
 }
 

@@ -16,12 +16,16 @@
     interface OAuth2Entry {
         name: string;
         display_name?: string;
+        auth_url?: string;
+        token_url?: string;
+        userinfo_url?: string;
         issuer_url?: string;
         client_id?: string;
         client_secret?: string;
         scopes?: string[];
         disable_pkce?: boolean;
         password_flow?: boolean;
+        auto_create_user?: boolean;
     }
 
     interface AuthSettings {
@@ -56,6 +60,8 @@
             addr?: string;
             bind_dn?: string;
             bind_password?: string;
+            auto_create_user?: boolean;
+            user_sync_source?: string;
         };
         header?: {
             name?: string;
@@ -166,6 +172,9 @@
     let ldapBindDN = $state("");
     let ldapBindPassword = $state("");
     let ldapBindPasswordChanged = $state(false);
+    let ldapAutoCreateUser = $state(false);
+    let ldapUserSyncSource = $state("");
+    let ldapSyncSources = $state<{ id: string; name: string }[]>([]);
 
     // Header
     let headerName = $state("");
@@ -253,6 +262,10 @@
             out[k] = caps;
         }
         return Object.keys(out).length > 0 ? out : undefined;
+    }
+
+    function hasOAuth2ManualEndpoints(entry: OAuth2Entry): boolean {
+        return !!(entry.token_url && (entry.password_flow || entry.auth_url));
     }
 
     function addRoleMapping() {
@@ -354,6 +367,8 @@
         ldapBindDN = auth.ldap?.bind_dn ?? "";
         ldapBindPassword = "";
         ldapBindPasswordChanged = false;
+        ldapAutoCreateUser = auth.ldap?.auto_create_user ?? false;
+        ldapUserSyncSource = auth.ldap?.user_sync_source ?? "";
 
         headerName = auth.header?.name ?? "";
         headerUser = auth.header?.user ?? "";
@@ -434,13 +449,19 @@
         if (oauth2Entries.length > 0) {
             auth.oauth2 = oauth2Entries.map((e) => {
                 const entry: OAuth2Entry = { name: e.name };
+                const hasManualEndpoints = hasOAuth2ManualEndpoints(e);
                 if (e.display_name) entry.display_name = e.display_name;
-                if (e.issuer_url) entry.issuer_url = e.issuer_url;
+                if (e.auth_url) entry.auth_url = e.auth_url;
+                if (e.token_url) entry.token_url = e.token_url;
+                if (e.userinfo_url) entry.userinfo_url = e.userinfo_url;
+                if (!hasManualEndpoints && e.issuer_url)
+                    entry.issuer_url = e.issuer_url;
                 if (e.client_id) entry.client_id = e.client_id;
                 if (e.client_secret) entry.client_secret = e.client_secret;
                 if (e.scopes && e.scopes.length > 0) entry.scopes = e.scopes;
                 if (e.disable_pkce) entry.disable_pkce = true;
                 if (e.password_flow) entry.password_flow = true;
+                if (e.auto_create_user) entry.auto_create_user = true;
                 return entry;
             });
         }
@@ -452,6 +473,8 @@
         if (ldapBindDN) ldapBlock.bind_dn = ldapBindDN;
         if (ldapBindPasswordChanged && ldapBindPassword)
             ldapBlock.bind_password = ldapBindPassword;
+        if (ldapAutoCreateUser) ldapBlock.auto_create_user = true;
+        if (ldapUserSyncSource) ldapBlock.user_sync_source = ldapUserSyncSource;
         if (Object.keys(ldapBlock).length > 0) auth.ldap = ldapBlock;
 
         // Header
@@ -598,6 +621,9 @@
     onMount(async () => {
         try {
             const response = await axios.get("/api/v1/settings");
+            ldapSyncSources = (response.data?.user_sync?.sources ?? [])
+                .filter((s: any) => s?.type === "ldap" && s?.id)
+                .map((s: any) => ({ id: s.id, name: s.name || s.id }));
             loadFromSettings(response.data?.auth || {});
         } catch (err: any) {
             loadError =
@@ -1004,7 +1030,7 @@
                                 <Trash2 size={13} />
                             </button>
                         </div>
-                        <div class="grid grid-cols-2 gap-3">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <div>
                                 <!-- svelte-ignore a11y_label_has_associated_control -->
                                 <label
@@ -1032,20 +1058,64 @@
                                 />
                             </div>
                         </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                                <!-- svelte-ignore a11y_label_has_associated_control -->
+                                <label
+                                    class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
+                                    >Authorization URL</label
+                                >
+                                <input
+                                    type="text"
+                                    bind:value={entry.auth_url}
+                                    placeholder="https://gitlab.com/oauth/authorize"
+                                    class="w-full px-3 py-2 text-sm font-mono rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                                />
+                            </div>
+                            <div>
+                                <!-- svelte-ignore a11y_label_has_associated_control -->
+                                <label
+                                    class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
+                                    >Token URL</label
+                                >
+                                <input
+                                    type="text"
+                                    bind:value={entry.token_url}
+                                    placeholder="https://gitlab.com/oauth/token"
+                                    class="w-full px-3 py-2 text-sm font-mono rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                                />
+                            </div>
+                        </div>
                         <div>
                             <!-- svelte-ignore a11y_label_has_associated_control -->
                             <label
                                 class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                                >Issuer URL</label
+                                >UserInfo URL</label
                             >
                             <input
                                 type="text"
-                                bind:value={entry.issuer_url}
-                                placeholder="https://accounts.google.com"
-                                class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+                                bind:value={entry.userinfo_url}
+                                placeholder="https://gitlab.com/oauth/userinfo"
+                                class="w-full px-3 py-2 text-sm font-mono rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500"
                             />
+                            <p
+                                class="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500"
+                            >
+                                Optional. If set, pika fetches identity claims
+                                with the access token; otherwise it falls back
+                                to token claims.
+                            </p>
                         </div>
-                        <div class="grid grid-cols-2 gap-3">
+                        {#if entry.issuer_url && !hasOAuth2ManualEndpoints(entry)}
+                            <p
+                                class="text-[11px] text-amber-600 dark:text-amber-400"
+                            >
+                                This provider still has a legacy issuer URL
+                                saved. Fill Authorization URL and Token URL to
+                                stop using discovery.
+                            </p>
+                        {/if}
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <div>
                                 <!-- svelte-ignore a11y_label_has_associated_control -->
                                 <label
@@ -1123,7 +1193,7 @@
                                 </div>
                             {/if}
                         </div>
-                        <div class="flex gap-4">
+                        <div class="flex flex-wrap gap-4">
                             <label
                                 class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
                             >
@@ -1144,7 +1214,22 @@
                                 />
                                 Password flow
                             </label>
+                            <label
+                                class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
+                            >
+                                <input
+                                    type="checkbox"
+                                    bind:checked={entry.auto_create_user}
+                                    class="rounded border-slate-300"
+                                />
+                                Auto-create users
+                            </label>
                         </div>
+                        <p class="text-[11px] text-slate-400 dark:text-slate-500">
+                            When enabled, unknown OAuth2 identities create an
+                            external-only pika user. Existing linked users or
+                            verified-email matches are reused first.
+                        </p>
                     </div>
                 {/each}
                 <button
@@ -1234,6 +1319,47 @@
                         class="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500"
                     >
                         Leave blank to keep existing password.
+                    </p>
+                </div>
+                <div
+                    class="border border-slate-200 dark:border-warm-700 rounded-md p-3 bg-slate-50 dark:bg-warm-900 space-y-2"
+                >
+                    <label
+                        class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
+                    >
+                        <input
+                            type="checkbox"
+                            bind:checked={ldapAutoCreateUser}
+                            class="rounded border-slate-300"
+                        />
+                        Auto-create users from LDAP sync source
+                    </label>
+                    <div>
+                        <!-- svelte-ignore a11y_label_has_associated_control -->
+                        <label
+                            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
+                            >User sync source</label
+                        >
+                        <select
+                            bind:value={ldapUserSyncSource}
+                            class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                        >
+                            <option value="">Use strategy name as source</option>
+                            {#each ldapSyncSources as src (src.id)}
+                                <option value={src.id}>{src.name} ({src.id})</option>
+                            {/each}
+                            {#if ldapUserSyncSource && !ldapSyncSources.some((s) => s.id === ldapUserSyncSource)}
+                                <option value={ldapUserSyncSource}>
+                                    {ldapUserSyncSource} (not found)
+                                </option>
+                            {/if}
+                        </select>
+                    </div>
+                    <p class="text-[11px] text-slate-400 dark:text-slate-500">
+                        When enabled, first LDAP login runs a single-user sync
+                        from this source, creates the external user if needed,
+                        and applies source-owned group permissions. Existing
+                        users are reused first.
                     </p>
                 </div>
             </div>

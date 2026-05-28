@@ -11,11 +11,11 @@ Versions are integers, starting at `1` and incrementing on every save. They're i
 ```sh
 # Latest
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/data/myapp/config
+  https://localhost:8080/data/myapp/config
 
 # Specific version
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/data/myapp/config?version=3
+  https://localhost:8080/data/myapp/config?version=3
 ```
 
 ### Listing versions
@@ -24,7 +24,7 @@ The admin API exposes the full history:
 
 ```sh
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/api/v1/versions/myapp/config
+  https://localhost:8080/api/v1/versions/myapp/config
 ```
 
 Each entry includes the version number, timestamp, author, and any semver constraint attached to it.
@@ -50,15 +50,15 @@ Consumers ask for the config that matches their version:
 ```sh
 # App running v0.0.5 → gets v2 (latest before the >= 0.1.0 boundary)
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8080/data/myapp/config?version=0.0.5"
+  "https://localhost:8080/data/myapp/config?version=0.0.5"
 
 # App running v0.1.5 → gets v4 (satisfies >= 0.1.0, before >= 0.2.0)
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8080/data/myapp/config?version=0.1.5"
+  "https://localhost:8080/data/myapp/config?version=0.1.5"
 
 # App running v0.2.0 → gets v5
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8080/data/myapp/config?version=0.2.0"
+  "https://localhost:8080/data/myapp/config?version=0.2.0"
 ```
 
 This lets you evolve configs alongside application versions without breaking older deployments. Add a constraint when shipping a config that requires a newer app version; older clients keep getting the last compatible version.
@@ -72,7 +72,7 @@ curl -X PATCH \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"constraint": ">= 0.1.0"}' \
-  http://localhost:8080/api/v1/versions/myapp/config/3
+  https://localhost:8080/api/v1/versions/myapp/config/3
 ```
 
 ## Variants
@@ -96,22 +96,22 @@ In the UI, open the file and use the **Variants** section in the right panel. In
 ```sh
 # Base config
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/data/myapp/config
+  https://localhost:8080/data/myapp/config
 
 # Production variant
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8080/data/myapp/config?variant=prod"
+  "https://localhost:8080/data/myapp/config?variant=prod"
 
 # Staging variant, JSON output, app version 0.3.0
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8080/data/myapp/config?variant=staging&version=0.3.0&format=json"
+  "https://localhost:8080/data/myapp/config?variant=staging&version=0.3.0&format=json"
 ```
 
 ### Listing variants
 
 ```sh
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/api/v1/variants/myapp/config
+  https://localhost:8080/api/v1/variants/myapp/config
 ```
 
 ## Format conversion
@@ -121,7 +121,7 @@ Regardless of how a file is stored, you can request it in any supported format:
 ```sh
 # Stored as YAML, served as JSON
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8080/data/myapp/config?format=json"
+  "https://localhost:8080/data/myapp/config?format=json"
 ```
 
 Supported `format` values: `json`, `yaml`, `toml`. The `Content-Type` header reflects the requested format.

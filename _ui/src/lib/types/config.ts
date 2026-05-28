@@ -392,7 +392,13 @@ export interface Settings {
   forward_auth?: ForwardAuthSettings;
   user_sync?: UserSyncSettings;
   vault?: VaultSettings;
+  server_tls?: ServerTLSSettings;
   public_endpoints?: PublicEndpoint[];
+}
+
+export interface ServerTLSSettings {
+  https_disabled?: boolean;
+  plain_http_enabled?: boolean;
 }
 
 // PublicEndpoint mirrors service.PublicEndpoint on the backend.
@@ -412,6 +418,7 @@ export interface PublicEndpoint {
   external?: ExternalCompat;
   custom?: CustomCompat;
   auth: EndpointAuth;
+  tls?: EndpointTLS;
   request_check?: RequestCheck;
   created_at?: string;
   updated_at?: string;
@@ -426,7 +433,9 @@ export interface RequestCheck {
 }
 
 // RequestRule is one row in the operator's rule list. Each rule
-// has a When matcher (AND-combined predicates) and a Then action.
+// has a When matcher (AND-combined predicates) and one or more
+// actions. `then` is the legacy single-action form; `actions` is
+// the ordered multi-action form and takes precedence when present.
 // Rules are evaluated top-to-bottom; allow/block short-circuit,
 // set_*/del_* modify the request and let evaluation continue.
 export interface RequestRule {
@@ -434,6 +443,7 @@ export interface RequestRule {
   enabled: boolean;
   when: RequestMatch;
   then: RequestAction;
+  actions?: RequestAction[];
 }
 
 // RequestMatch — AND-combined predicates. All non-empty fields
@@ -469,6 +479,57 @@ export interface RequestAction {
   name?: string;          // set_/del_ header/query
   pattern?: string;       // replace_path regex
   value?: string;         // set_header/set_query/set_path/replace_path replacement
+  capture_transforms?: CaptureTransform[]; // replace_path capture string replacements
+}
+
+export interface CaptureTransform {
+  capture: string;         // capture number ("1") or name ("tail")
+  find: string;            // literal text to replace inside that capture
+  value: string;           // replacement text
+}
+
+export interface RequestRuleTestSnapshot {
+  method: string;
+  path: string;
+  raw_query?: string;
+  headers?: Record<string, string>;
+}
+
+export interface RequestRuleBlockResult {
+  status: number;
+  body: string;
+  content_type: string;
+}
+
+export interface RequestRuleActionTrace {
+  action_index: number;
+  type: RequestActionType;
+  before_path?: string;
+  after_path?: string;
+  before_query?: string;
+  after_query?: string;
+  header_name?: string;
+  header_before?: string;
+  header_after?: string;
+  query_name?: string;
+  query_before?: string;
+  query_after?: string;
+  terminal?: boolean;
+  block?: RequestRuleBlockResult;
+}
+
+export interface RequestRuleTrace {
+  rule_index: number;
+  rule_name?: string;
+  actions: RequestRuleActionTrace[];
+}
+
+export interface RequestRuleTestResult {
+  initial: RequestRuleTestSnapshot;
+  final: RequestRuleTestSnapshot;
+  terminal: 'allow' | 'block' | 'default_allow';
+  matched_rules: RequestRuleTrace[];
+  block?: RequestRuleBlockResult;
 }
 
 // StaticCompat — the plain /data-style shim has no configurable knobs today
@@ -508,6 +569,11 @@ export interface EndpointAuth {
   header_name?: string;
 }
 
+export interface EndpointTLS {
+  enabled?: boolean;
+  allow_http?: boolean;
+}
+
 // EndpointStatus is the diagnostic row returned by
 // GET /api/v1/public-endpoints/status. Reflects what the manager
 // has currently bound (or failed to bind) against the persisted
@@ -520,6 +586,8 @@ export interface PublicEndpointStatus {
   listen_port: number;
   base_path: string;
   mode: 'static' | 'consul' | 'external' | 'custom';
+  tls_enabled?: boolean;
+  allow_http?: boolean;
   running: boolean;
   bound_addr?: string;
   last_error?: string;
@@ -531,6 +599,28 @@ export interface PublicEndpointTestResult {
   status: number;
   headers: Record<string, string>;
   body: string;
+}
+
+export interface TLSCertificateStatus {
+  loaded: boolean;
+  cert_file: string;
+  key_file: string;
+  subject?: string;
+  issuer?: string;
+  dns_names?: string[];
+  ip_addresses?: string[];
+  not_before?: string;
+  not_after?: string;
+  days_remaining: number;
+  fingerprint_sha256?: string;
+  self_signed: boolean;
+}
+
+export interface TLSServerStatus {
+  process_enabled: boolean;
+  https_enabled: boolean;
+  plain_http_enabled: boolean;
+  certificate: TLSCertificateStatus;
 }
 
 // Runtime cluster connection status from /api/v1/cluster/status.
@@ -617,9 +707,19 @@ export interface LDAPSyncSpec {
   user_base_dn: string;
   user_filter?: string;
   page_size?: number;
+  group_searches?: LDAPGroupSearchSpec[];
   attributes: LDAPAttributeMap;
   // LDAP group value (e.g. full DN as it appears in memberOf) → list of pika permission IDs.
   group_permissions?: Record<string, string[]>;
+}
+
+export interface LDAPGroupSearchSpec {
+  base_dn: string;
+  filter?: string;
+  attributes?: string[];
+  name_attribute?: string;
+  member_attribute?: string;
+  member_uid_attribute?: string;
 }
 
 export interface LDAPAttributeMap {

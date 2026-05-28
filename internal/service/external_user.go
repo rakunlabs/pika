@@ -190,6 +190,27 @@ func (s *Service) FindOrCreateExternalUser(ctx context.Context, in ExternalIdent
 	return &info, nil
 }
 
+// RefreshExternalIdentity updates the stored snapshot for an already-linked
+// external identity. Sync engines use this when they resolve a user through the
+// identity index directly (for example to re-enable a disabled LDAP user)
+// instead of going through FindExternalUser.
+func (s *Service) RefreshExternalIdentity(ctx context.Context, userID string, in ExternalIdentityInput) error {
+	if userID == "" || in.Provider == "" || in.Subject == "" {
+		return fmt.Errorf("user_id, provider and subject are required: %w", ErrBadRequest)
+	}
+	_, err := s.store.UserIdentities().Upsert(ctx, &UserIdentity{
+		UserID:      userID,
+		Provider:    in.Provider,
+		Subject:     in.Subject,
+		Email:       normalizeEmail(in.Email),
+		DisplayName: in.DisplayName,
+	})
+	if err != nil {
+		return fmt.Errorf("refresh external identity: %w", err)
+	}
+	return nil
+}
+
 // GetUserIdentities returns every identity linked to a user.
 func (s *Service) GetUserIdentities(ctx context.Context, userID string) ([]UserIdentity, error) {
 	return s.store.UserIdentities().ListByUserID(ctx, userID)

@@ -63,6 +63,7 @@ func rowToSettings(r *settingsRow) *service.Settings {
 		Auth:                r.Auth,
 		UserSync:            r.UserSync,
 		Vault:               r.Vault,
+		ServerTLS:           r.ServerTLS,
 		PublicEndpoints:     r.PublicEndpoints,
 		SensitivePayload:    r.SensitivePayload,
 	}
@@ -79,6 +80,7 @@ func settingsToRow(s *service.Settings) *settingsRow {
 		Auth:                s.Auth,
 		UserSync:            s.UserSync,
 		Vault:               s.Vault,
+		ServerTLS:           s.ServerTLS,
 		PublicEndpoints:     s.PublicEndpoints,
 		SensitivePayload:    s.SensitivePayload,
 	}

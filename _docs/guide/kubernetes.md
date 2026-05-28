@@ -7,10 +7,14 @@ Pika ships with a Kustomize bundle in [`ci/kubernetes/`](https://github.com/raku
 - A `ConfigMap` with `pika.yaml`.
 - A `Secret` carrying the cluster pre-shared key.
 - A `StatefulSet` with 3 replicas and per-pod PVCs (`volumeClaimTemplates`).
-- A `ClusterIP` `Service` for HTTP traffic (8080 admin, 9090 public).
+- A `ClusterIP` `Service` for internal admin HTTP traffic (8080) and optional Endpoint traffic (9090).
 - A headless `Service` for cluster peer discovery on QUIC (`5000/UDP`).
 
-Ingress is intentionally **not** included — bring your own (`Ingress`, Gateway API `HTTPRoute`, etc.) and point it at the `pika` Service on port 8080.
+Ingress / Gateway is intentionally **not** included — bring your own (`Ingress`, Gateway API `HTTPRoute`, etc.) and point it at the `pika` Service on port 8080. The Kubernetes bundle disables Pika's in-pod HTTPS so the Gateway can terminate and renew public TLS certificates.
+
+::: tip
+The standalone Pika binary still defaults to HTTPS. The Kubernetes manifests set `server.tls.enabled: false` specifically for the common Gateway / cert-manager model where the in-cluster upstream is HTTP.
+:::
 
 ## Quick deploy
 
@@ -55,11 +59,8 @@ patches:
         value: |
           server:
             port: "8080"
-            auth:
-              session_ttl: 24h
-              cookie:
-                secure: true
-                same_site: lax
+            tls:
+              enabled: false
           storage:
             bw:
               path: /data/pika
@@ -89,13 +90,43 @@ The default deploys a 3-replica cluster (see [Clustering](./clustering)). If you
 
 ## Endpoints
 
-Endpoints are operator-defined HTTP listeners configured at runtime (Settings → Endpoints) — each binds its own port and serves pika data in either Consul KV shape or a custom Go-template response. To expose one in Kubernetes:
+Endpoints are operator-defined listeners configured at runtime (Settings → Endpoints) — each binds its own port and can serve HTTP or HTTPS using the managed certificate. To expose one in Kubernetes:
 
 1. Pick a deterministic port per endpoint (e.g. `9090` for Consul mode).
 2. Add the port to the StatefulSet `containerPort` list and to the `pika` Service.
 3. Add an Ingress / HTTPRoute if you want external access.
 
 The endpoint configuration itself is stored in pika (not Kubernetes), so a single ConfigMap change is not enough — you also need to add the entry from the UI on a running pod.
+
+## Gateway TLS
+
+The default Kubernetes shape is:
+
+```text
+client --HTTPS--> Gateway / Ingress --HTTP--> pika Service:8080
+```
+
+Use cert-manager, your cloud Gateway integration, or your GatewayClass-specific certificate mechanism to populate the Gateway listener certificate. Pika does not need to manage the public certificate in this mode.
+
+If you want the Gateway to re-encrypt to Pika instead, override the ConfigMap with `server.tls.enabled: true` and configure backend TLS trust in your Gateway implementation (for Gateway API this is commonly done with `BackendTLSPolicy`, when supported).
+
+Runtime database settings under `settings.server_tls` only apply when process-level `server.tls.enabled` is true. Because this bundle sets `server.tls.enabled: false`, the pod serves HTTP immediately on first install and does not wait for a DB setting.
+
+When `server.tls.enabled: false`, the Pika UI hides **Settings → Certificates** because the managed HTTPS listener and runtime TLS policy are disabled by process config. Certificate lifecycle should be managed on the Gateway / cert-manager side instead.
+
+## Sub-path routing
+
+If your Gateway / Ingress serves Pika under a sub-path and forwards that prefix to the Service, set `server.base_path` in the ConfigMap:
+
+```yaml
+server:
+  port: "8080"
+  base_path: /pika
+  tls:
+    enabled: false
+```
+
+Use this for a public URL like `https://example.com/pika/` when the backend still receives `/pika/...` paths. If the Gateway strips `/pika` before proxying to Pika, leave `server.base_path` unset. The Kubernetes `/healthz` probes continue to work at the root path even when `server.base_path` is set.
 
 ## Encryption key
 
@@ -130,6 +161,7 @@ locked pods until they are unlocked:
         httpGet:
           path: /api/v1/key/status
           port: 8080
+          scheme: HTTP
         initialDelaySeconds: 5
         periodSeconds: 10
 ```
@@ -148,17 +180,19 @@ Pika emits metrics, traces, and logs through [tell](https://github.com/rakunlabs
 
 ## Probes
 
-The admin `/healthz` (port 8080) returns `200 OK` once the storage is open. Add liveness and readiness probes to the StatefulSet patch:
+The admin `/healthz` (port 8080) returns `200 OK` once the storage is open. The default bundle probes over HTTP because public TLS terminates at Gateway / Ingress:
 
 ```yaml
 livenessProbe:
   httpGet:
     path: /healthz
     port: 8080
+    scheme: HTTP
   periodSeconds: 10
 readinessProbe:
   httpGet:
     path: /healthz
     port: 8080
+    scheme: HTTP
   periodSeconds: 5
 ```

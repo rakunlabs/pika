@@ -20,16 +20,18 @@ import (
 	"github.com/rakunlabs/pika/internal/secret"
 	"github.com/rakunlabs/pika/internal/server/authx"
 	"github.com/rakunlabs/pika/internal/server/publicendpoint"
+	"github.com/rakunlabs/pika/internal/server/servertls"
 	"github.com/rakunlabs/pika/internal/service"
 	"github.com/rakunlabs/pika/internal/usersync"
 )
 
 // Info holds server metadata returned by the info endpoint.
 type Info struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	Commit  string `json:"commit,omitempty"`
-	Date    string `json:"date,omitempty"`
+	Name              string `json:"name"`
+	Version           string `json:"version"`
+	Commit            string `json:"commit,omitempty"`
+	Date              string `json:"date,omitempty"`
+	ManagedTLSEnabled bool   `json:"managed_tls_enabled"`
 }
 
 type api struct {
@@ -41,6 +43,7 @@ type api struct {
 	syncScheduler   *usersync.Scheduler     // nil until set by server.go
 	cluster         *pcluster.Cluster       // nil only in tests or custom embeddings
 	publicEndpoints *publicendpoint.Manager // nil only in tests
+	tlsMgr          *servertls.Manager      // nil only in tests
 	appCtx          context.Context         // root context used for background loops
 }
 
@@ -48,7 +51,7 @@ type response struct {
 	Message string `json:"message,omitempty"`
 }
 
-func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, mgr *authx.Manager, dispatcher *hook.Dispatcher, cl *pcluster.Cluster, peMgr *publicendpoint.Manager) error {
+func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, info Info, encStore *secret.Storage, mgr *authx.Manager, dispatcher *hook.Dispatcher, cl *pcluster.Cluster, peMgr *publicendpoint.Manager, tlsMgr *servertls.Manager) error {
 	// Set hook service identification from config
 	hook.ServiceName = config.ServiceName
 	hook.Version = config.Version
@@ -58,7 +61,7 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// path share one instance. Started below after the routes register.
 	syncSched := usersync.NewScheduler(svc)
 
-	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, dispatcher: dispatcher, syncScheduler: syncSched, cluster: cl, publicEndpoints: peMgr, appCtx: context.Background()}
+	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, dispatcher: dispatcher, syncScheduler: syncSched, cluster: cl, publicEndpoints: peMgr, tlsMgr: tlsMgr, appCtx: context.Background()}
 
 	m.ErrorHandler(api.errorHandler)
 
@@ -220,6 +223,9 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.POST("/api/v1/key/lock", m.Wrap(api.withPerm(service.CapSettingsManage, api.postKeyLock)))
 	m.POST("/api/v1/key/rotate", m.Wrap(api.withPerm(service.CapSettingsManage, api.postKeyRotate)))
 
+	m.GET("/api/v1/tls/status", m.Wrap(api.withPerm(service.CapSettingsManage, api.getTLSStatus)))
+	m.POST("/api/v1/tls/self-signed", m.Wrap(api.withPerm(service.CapSettingsManage, api.generateManagedTLS)))
+	m.PUT("/api/v1/tls/manual", m.Wrap(api.withPerm(service.CapSettingsManage, api.uploadManagedTLS)))
 	m.POST("/api/v1/tls-generate", m.Wrap(api.withPerm(service.CapSettingsManage, api.generateTLS)))
 	m.POST("/api/v1/ssh-keygen", m.Wrap(api.withPerm(service.CapSettingsManage, api.generateSSHKey)))
 
@@ -231,10 +237,10 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// Public endpoints diagnostics. The endpoint configurations
 	// themselves are persisted through the settings round-trip
 	// (POST /api/v1/settings carries the public_endpoints list);
-	// these two routes only surface runtime state and a synthetic
-	// probe so the SPA can show a "running / failed" badge and a
-	// curl-style preview without leaving the page.
+	// these routes surface runtime state, a synthetic endpoint probe,
+	// and a draft request-rule dry-run without leaving the page.
 	m.GET("/api/v1/public-endpoints/status", m.Wrap(api.withPerm(service.CapSettingsManage, api.getPublicEndpointStatus)))
+	m.POST("/api/v1/public-endpoints/test-rules", m.Wrap(api.withPerm(service.CapSettingsManage, api.testPublicEndpointRules)))
 	m.POST("/api/v1/public-endpoints/{id}/test", m.Wrap(api.withPerm(service.CapSettingsManage, api.testPublicEndpoint)))
 
 	// Backup & Restore. CapSettingsManage is the only gate — anyone
@@ -621,6 +627,43 @@ func (a *api) testPublicEndpoint(c *ada.Context) error {
 		Headers: headers,
 		Body:    rec.Body.String(),
 	})
+}
+
+// testPublicEndpointRules dry-runs a draft request_check rule list
+// without requiring the operator to save the endpoint. It runs the
+// same Go evaluator used by live Endpoints and returns a trace so the
+// UI can show matched rules, applied actions and the final request
+// shape that would reach the mode shim.
+func (a *api) testPublicEndpointRules(c *ada.Context) error {
+	var req struct {
+		RequestCheck service.RequestCheck `json:"request_check"`
+		Method       string               `json:"method,omitempty"`
+		Path         string               `json:"path"`
+		Headers      map[string]string    `json:"headers,omitempty"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+
+	ep := service.PublicEndpoint{
+		Name:         "request-rule-test",
+		ListenHost:   "127.0.0.1",
+		ListenPort:   1,
+		BasePath:     "/",
+		Mode:         "static",
+		Static:       &service.StaticCompat{},
+		Auth:         service.EndpointAuth{Mode: "none"},
+		RequestCheck: &req.RequestCheck,
+	}
+	if err := ep.Validate(); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+
+	result, err := publicendpoint.TestRequestRules(&req.RequestCheck, req.Method, req.Path, req.Headers)
+	if err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+	return c.SendJSON(result)
 }
 
 // buildProbePath assembles the URL the test handler walks. For

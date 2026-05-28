@@ -230,6 +230,8 @@ When any external strategy is enabled, pika uses a **session-first** approach:
 
 This means local login always works — even when external auth is active. The `/api/v1/info` endpoint is always accessible so the SPA can boot and show the local login page regardless of external auth redirects.
 
+OAuth2/OIDC providers read identity claims from the configured or discovered UserInfo endpoint when available, then revoke the upstream access token best-effort after pika issues its own session. Unknown OAuth2 identities fail closed by default; enable **Auto-create users** per provider to create external-only pika users at first login while still reusing existing links or verified-email matches first.
+
 #### External Permissions
 
 Under external authentication, pika can translate provider-supplied groups (or OAuth2 scopes) into its own capability keys. This is configured at runtime in **Settings > Authentication > Permissions** in the UI, and persisted in the database alongside other settings. The pika-native capability keys are:
@@ -258,7 +260,7 @@ When external permissions are **disabled** (the default), externally-authenticat
 
 The groups header name and value separator are configurable. If your gateway uses `X-Pika-Roles` with `|` separators, set both fields in the Permissions form; pika also accepts repeated header lines as a single concatenated list. The same role/scope mapping applies to OAuth2 (token claims) and LDAP (group membership) strategies.
 
-Externally-authenticated users are identified purely by username/subject — pika does not create rows in its `users` table for them. User and Permission bundle management in the UI remains available only under built-in auth.
+Externally-authenticated users are identified by provider + subject and can be linked to local `users` rows by sync, verified-email auto-linking, or OAuth2 auto-create. User and Permission bundle management in the UI remains available only under built-in auth.
 
 ## Kubernetes Deployment
 

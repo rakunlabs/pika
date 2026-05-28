@@ -7,6 +7,15 @@ data:
     log_level: info
     server:
       port: "8080"
+      # Set when your Gateway / Ingress forwards Pika under a sub-path
+      # without stripping it, e.g. https://example.com/pika/.
+      # base_path: /pika
+      # The Kubernetes bundle assumes a Gateway / Ingress terminates
+      # public TLS and talks to the in-cluster Service over HTTP.
+      # Pika standalone/default binary still serves HTTPS by default;
+      # this is a Kubernetes-specific deployment default.
+      tls:
+        enabled: false
       auth:
         session_ttl: 24h
         cookie:

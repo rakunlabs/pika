@@ -22,12 +22,12 @@ Everything is administered through a built-in web UI; consumers fetch resolved d
 docker run -d --name pika -v pika:/data -p 8080:8080 ghcr.io/rakunlabs/pika:latest
 ```
 
-Open <http://localhost:8080>, create the initial admin account, and you have a working server.
+Open <https://localhost:8080>, accept the first-start self-signed certificate, create the initial admin account, and you have a working server.
 
 To consume a config, create a file in the UI, then mint an API token under **Settings → Tokens** and read it:
 
 ```sh
-curl -H "Authorization: Bearer pika_..." http://localhost:8080/data/myapp/config
+curl -H "Authorization: Bearer pika_..." https://localhost:8080/data/myapp/config
 ```
 
 ## Where to go next

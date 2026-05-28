@@ -13,7 +13,7 @@ Tokens are minted under **Settings → Tokens**. They're shown once at creation 
 Pass tokens via the `Authorization` header:
 
 ```sh
-curl -H "Authorization: Bearer pika_..." http://localhost:8080/data/myapp/config
+curl -H "Authorization: Bearer pika_..." https://localhost:8080/data/myapp/config
 ```
 
 Pika does not accept `?token=` query parameters or `X-API-Key` headers.

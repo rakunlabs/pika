@@ -14,6 +14,7 @@
         Vault,
         Network,
         Plug,
+        Lock,
     } from "lucide-svelte";
     import { appStore } from "@/lib/store/store.svelte";
 
@@ -28,6 +29,7 @@
     import KeyRotationSection from "@/pages/settings/KeyRotationSection.svelte";
     import FeaturesSection from "@/pages/settings/FeaturesSection.svelte";
     import ClusterSection from "@/pages/settings/ClusterSection.svelte";
+    import CertificateSection from "@/pages/settings/CertificateSection.svelte";
     import PublicEndpointsSection from "@/pages/settings/PublicEndpointsSection.svelte";
     import BackupSection from "@/pages/settings/BackupSection.svelte";
     import AboutSection from "@/pages/settings/AboutSection.svelte";
@@ -44,6 +46,7 @@
         | "rotation"
         | "features"
         | "cluster"
+        | "certificates"
         | "public_endpoints"
         | "backup"
         | "about";
@@ -64,6 +67,7 @@
         rotation: "settings.manage",
         features: "settings.manage",
         cluster: "settings.manage",
+        certificates: "settings.manage",
         public_endpoints: "settings.manage",
         backup: "settings.manage",
         about: null,
@@ -81,6 +85,7 @@
         { key: "rotation", label: "Key Rotation", icon: RotateCw },
         { key: "features", label: "Features", icon: ToggleLeft },
         { key: "cluster", label: "Cluster", icon: Network },
+        { key: "certificates", label: "Certificates", icon: Lock },
         { key: "public_endpoints", label: "Endpoints", icon: Plug },
         { key: "backup", label: "Backup", icon: HardDrive },
         { key: "about", label: "About", icon: Info },
@@ -94,6 +99,9 @@
     const sections = $derived(
         allSections.filter((s) => {
             if (s.key === "vault" && !(appStore.info?.vault_enabled ?? false)) {
+                return false;
+            }
+            if (s.key === "certificates" && appStore.info?.managed_tls_enabled !== true) {
                 return false;
             }
             const cap = sectionCaps[s.key];
@@ -159,6 +167,8 @@
                 <FeaturesSection />
             {:else if activeSection === "cluster"}
                 <ClusterSection />
+            {:else if activeSection === "certificates"}
+                <CertificateSection />
             {:else if activeSection === "public_endpoints"}
                 <PublicEndpointsSection />
             {:else if activeSection === "backup"}

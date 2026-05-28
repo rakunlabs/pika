@@ -179,14 +179,38 @@ type LocalStrategySettings struct {
 }
 
 type OAuth2StrategySettings struct {
-	Name         string   `json:"name"`
-	DisplayName  string   `json:"display_name,omitempty"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name,omitempty"`
+	AuthURL     string `json:"auth_url,omitempty"`
+	TokenURL    string `json:"token_url,omitempty"`
+	UserInfoURL string `json:"userinfo_url,omitempty"`
+	// IssuerURL is retained for existing OIDC-discovery based settings.
+	// New providers should set AuthURL and TokenURL explicitly instead.
 	IssuerURL    string   `json:"issuer_url,omitempty"`
 	ClientID     string   `json:"client_id,omitempty"`
 	ClientSecret string   `json:"client_secret,omitempty"`
 	Scopes       []string `json:"scopes,omitempty"`
 	DisablePKCE  bool     `json:"disable_pkce,omitempty"`
 	PasswordFlow bool     `json:"password_flow,omitempty"`
+	// AutoCreateUser allows this OAuth2 provider to materialize unknown
+	// external identities into local external-only users during login. When
+	// false (default), login only binds to an existing user/link.
+	AutoCreateUser bool `json:"auto_create_user,omitempty"`
+}
+
+// OAuth2AutoCreateUserEnabled reports whether the named OAuth2 provider is
+// allowed to provision missing users during login. Missing settings, unknown
+// providers and non-OAuth2 strategies all default to fail-closed.
+func (s *AuthSettings) OAuth2AutoCreateUserEnabled(provider string) bool {
+	if s == nil || provider == "" {
+		return false
+	}
+	for _, spec := range s.OAuth2 {
+		if spec.Name == provider {
+			return spec.AutoCreateUser
+		}
+	}
+	return false
 }
 
 type LDAPStrategySettings struct {
@@ -200,6 +224,34 @@ type LDAPStrategySettings struct {
 	GroupFilter  string `json:"group_filter,omitempty"`
 	TLS          bool   `json:"tls,omitempty"`
 	InsecureSkip bool   `json:"insecure_skip,omitempty"`
+	// AutoCreateUser allows LDAP login to JIT-sync a missing user from the
+	// configured UserSyncSource and attach source-owned permissions.
+	AutoCreateUser bool `json:"auto_create_user,omitempty"`
+	// UserSyncSource points at UserSyncSettings.Sources[].ID. When set, LDAP
+	// login resolves identities using that source ID instead of the strategy
+	// name so login and batch sync share one provider namespace.
+	UserSyncSource string `json:"user_sync_source,omitempty"`
+}
+
+// LDAPLoginSyncSource returns the user-sync source ID that should own users
+// logging in through the named LDAP strategy. ok=false means this provider is
+// not the configured LDAP strategy.
+func (s *AuthSettings) LDAPLoginSyncSource(provider string) (sourceID string, autoCreate bool, ok bool) {
+	if s == nil || s.LDAP == nil || provider == "" {
+		return "", false, false
+	}
+	name := s.LDAP.Name
+	if name == "" {
+		name = "ldap"
+	}
+	if provider != name {
+		return "", false, false
+	}
+	sourceID = s.LDAP.UserSyncSource
+	if sourceID == "" {
+		sourceID = provider
+	}
+	return sourceID, s.LDAP.AutoCreateUser, true
 }
 
 type HeaderStrategySettings struct {
@@ -276,9 +328,9 @@ type SyncSource struct {
 	// Type is the source kind. Currently only "ldap"; reserved for future
 	// drivers (e.g. "scim").
 	Type string `json:"type"`
-	// Enabled gates the periodic schedule and JIT path. When false, the
-	// source still exists in settings but neither the cron nor login
-	// auto-provisioning will use it.
+	// Enabled gates the periodic schedule. Manual sync and explicit LDAP login
+	// JIT provisioning can still use the source so an operator can keep sync
+	// on-demand only.
 	Enabled bool `json:"enabled"`
 	// LDAP is the source-specific config when Type="ldap". Other Type
 	// values would carry their own pointer here in the future.
@@ -324,19 +376,37 @@ type LDAPSyncSpec struct {
 	// PageSize controls paged search; 0 = library default (500).
 	PageSize uint32 `json:"page_size,omitempty"`
 
+	// GroupSearches optionally searches LDAP group entries separately and maps
+	// member DN values (e.g. uniqueMember=uid=alice,...) back to user entries.
+	// This supports directories that do not expose memberOf on the user object.
+	GroupSearches []LDAPGroupSearchSpec `json:"group_searches,omitempty"`
+
 	// Attributes maps LDAP attribute names onto pika user fields. Every
 	// field is optional; an empty value means "don't read this".
 	Attributes LDAPAttributeMap `json:"attributes"`
 
-	// GroupPermissions maps an LDAP group value (verbatim, as it appears
-	// in the user's Attributes.Groups attribute — typically a full DN for
-	// memberOf) onto a list of pika permission IDs to grant.
+	// GroupPermissions maps an LDAP group value onto a list of pika permission
+	// IDs to grant. The value can come directly from Attributes.Groups (typically
+	// a full memberOf DN) or from GroupSearches' group name attribute (typically
+	// cn).
 	//
 	// At sync time, each user's groups are looked up here; the union of
 	// matched permission IDs is written to user_permissions with
 	// source=<SyncSource.ID>. Permissions assigned via the admin UI
 	// (source='local') are untouched.
 	GroupPermissions map[string][]string `json:"group_permissions,omitempty"`
+}
+
+// LDAPGroupSearchSpec describes one LDAP search that returns group entries.
+// Defaults match common OpenLDAP groupOfUniqueNames style entries and Turna's
+// historical IAM sync shape: cn as the group name and uniqueMember as member DN.
+type LDAPGroupSearchSpec struct {
+	BaseDN             string   `json:"base_dn"`
+	Filter             string   `json:"filter,omitempty"`
+	Attributes         []string `json:"attributes,omitempty"`
+	NameAttribute      string   `json:"name_attribute,omitempty"`
+	MemberAttribute    string   `json:"member_attribute,omitempty"`
+	MemberUIDAttribute string   `json:"member_uid_attribute,omitempty"`
 }
 
 // LDAPAttributeMap binds LDAP attribute names to pika user fields. Each

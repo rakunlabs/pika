@@ -183,6 +183,36 @@ func TestFindOrCreateExternalUser_UsernameCollision(t *testing.T) {
 	}
 }
 
+func TestFindOrCreateExternalUser_UsernameFallbacks(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	fromEmail, err := svc.FindOrCreateExternalUser(ctx, service.ExternalIdentityInput{
+		Provider:    "google",
+		Subject:     "sub-email",
+		Email:       "carol.smith@example.com",
+		DisplayName: "Display Name Is Not Unique",
+	})
+	if err != nil {
+		t.Fatalf("provision from email: %v", err)
+	}
+	if fromEmail.Username != "carol_smith" {
+		t.Errorf("email fallback username = %q, want carol_smith", fromEmail.Username)
+	}
+
+	fromSubject, err := svc.FindOrCreateExternalUser(ctx, service.ExternalIdentityInput{
+		Provider:    "gitlab",
+		Subject:     "12345",
+		DisplayName: "Another Non-Unique Display Name",
+	})
+	if err != nil {
+		t.Fatalf("provision from subject: %v", err)
+	}
+	if fromSubject.Username != "gitlab_12345" {
+		t.Errorf("subject fallback username = %q, want gitlab_12345", fromSubject.Username)
+	}
+}
+
 func TestGetUserByIdentity(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()

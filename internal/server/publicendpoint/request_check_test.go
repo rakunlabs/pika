@@ -16,8 +16,10 @@ func rulesEndpoint(t *testing.T, rules []service.RequestRule) (service.PublicEnd
 	t.Helper()
 	stub := &stubService{
 		files: map[string]stubFile{
-			"hello": {data: []byte("world"), format: "raw"},
-			"prod":  {data: []byte("prod-only"), format: "raw"},
+			"hello":              {data: []byte("world"), format: "raw"},
+			"prod":               {data: []byte("prod-only"), format: "raw"},
+			"myapp_config":       {data: []byte("underscore"), format: "raw"},
+			"legacy/1-2-3-4-5-6": {data: []byte("dashes"), format: "raw"},
 		},
 	}
 	port := freePort(t)
@@ -174,6 +176,177 @@ func TestRequestRules_ReplacePathRegex_RewritesKey(t *testing.T) {
 	if !strings.Contains(string(body), `"key":"prod"`) ||
 		!strings.Contains(string(body), `"data":"prod-only"`) {
 		t.Errorf("regex path rewrite did not reach shim: %s", body)
+	}
+}
+
+func TestRequestRules_MultipleActions_PathTransforms(t *testing.T) {
+	rules := []service.RequestRule{
+		{
+			Enabled: true,
+			When:    service.RequestMatch{PathPrefix: "/legacy/"},
+			Actions: []service.RequestAction{
+				{
+					Type:    "replace_path",
+					Pattern: "^/legacy/(.*)$",
+					Value:   "/${1}",
+				},
+				{
+					Type:    "replace_path",
+					Pattern: `([^/]+)/`,
+					Value:   `${1}_`,
+				},
+			},
+		},
+	}
+	ep, stub := rulesEndpoint(t, rules)
+	mgr := New(t.Context(), stub, nil)
+	t.Cleanup(func() { _ = mgr.Shutdown(t.Context()) })
+	if err := mgr.Reload(t.Context(), []service.PublicEndpoint{ep}); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	body, status := httpGet(t, fmt.Sprintf("http://127.0.0.1:%d/legacy/myapp/config", ep.ListenPort), nil)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if !strings.Contains(string(body), `"key":"myapp_config"`) ||
+		!strings.Contains(string(body), `"data":"underscore"`) {
+		t.Errorf("multi-action path transform did not reach shim: %s", body)
+	}
+}
+
+func TestRequestRules_ReplacePathCaptureTransform(t *testing.T) {
+	rules := []service.RequestRule{
+		{
+			Enabled: true,
+			When:    service.RequestMatch{PathPrefix: "/legacy/"},
+			Then: service.RequestAction{
+				Type:    "replace_path",
+				Pattern: `^/legacy/(?P<tail>.*)$`,
+				Value:   "/legacy/${tail}",
+				CaptureTransforms: []service.CaptureTransform{
+					{Capture: "tail", Find: "/", Value: "-"},
+				},
+			},
+		},
+	}
+	ep, stub := rulesEndpoint(t, rules)
+	mgr := New(t.Context(), stub, nil)
+	t.Cleanup(func() { _ = mgr.Shutdown(t.Context()) })
+	if err := mgr.Reload(t.Context(), []service.PublicEndpoint{ep}); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	body, status := httpGet(t, fmt.Sprintf("http://127.0.0.1:%d/legacy/1/2/3/4/5/6", ep.ListenPort), nil)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if !strings.Contains(string(body), `"key":"legacy/1-2-3-4-5-6"`) ||
+		!strings.Contains(string(body), `"data":"dashes"`) {
+		t.Errorf("capture transform did not reach shim: %s", body)
+	}
+}
+
+func TestRequestRules_DryRunTrace(t *testing.T) {
+	rc := &service.RequestCheck{Rules: []service.RequestRule{
+		{
+			Name:    "legacy rewrite",
+			Enabled: true,
+			When:    service.RequestMatch{PathPrefix: "/legacy/"},
+			Actions: []service.RequestAction{
+				{Type: "replace_path", Pattern: "^/legacy/(.*)$", Value: "/${1}"},
+				{Type: "set_query", Name: "variant", Value: "prod"},
+			},
+		},
+	}}
+
+	result, err := TestRequestRules(rc, "GET", "/legacy/myapp/config?debug=1", map[string]string{"X-Tenant": "acme"})
+	if err != nil {
+		t.Fatalf("test rules: %v", err)
+	}
+	if result.Terminal != requestRuleTerminalDefaultAllow {
+		t.Fatalf("terminal=%q", result.Terminal)
+	}
+	if result.Initial.Path != "/legacy/myapp/config" || result.Final.Path != "/myapp/config" {
+		t.Fatalf("path initial=%q final=%q", result.Initial.Path, result.Final.Path)
+	}
+	if result.Final.RawQuery != "debug=1&variant=prod" {
+		t.Fatalf("raw_query=%q", result.Final.RawQuery)
+	}
+	if got := result.Final.Headers["X-Tenant"]; got != "acme" {
+		t.Fatalf("header X-Tenant=%q", got)
+	}
+	if len(result.MatchedRules) != 1 {
+		t.Fatalf("matched_rules=%d", len(result.MatchedRules))
+	}
+	trace := result.MatchedRules[0]
+	if trace.RuleIndex != 0 || trace.RuleName != "legacy rewrite" || len(trace.Actions) != 2 {
+		t.Fatalf("trace=%+v", trace)
+	}
+	if trace.Actions[0].BeforePath != "/legacy/myapp/config" || trace.Actions[0].AfterPath != "/myapp/config" {
+		t.Fatalf("rewrite trace=%+v", trace.Actions[0])
+	}
+	if trace.Actions[1].QueryName != "variant" || trace.Actions[1].QueryAfter != "prod" {
+		t.Fatalf("query trace=%+v", trace.Actions[1])
+	}
+}
+
+func TestRequestRules_DryRunTraceCaptureTransform(t *testing.T) {
+	rc := &service.RequestCheck{Rules: []service.RequestRule{
+		{
+			Enabled: true,
+			When:    service.RequestMatch{PathPrefix: "/legacy/"},
+			Then: service.RequestAction{
+				Type:    "replace_path",
+				Pattern: `^/legacy/(.*)$`,
+				Value:   "/legacy/${1}",
+				CaptureTransforms: []service.CaptureTransform{
+					{Capture: "1", Find: "/", Value: "-"},
+				},
+			},
+		},
+	}}
+
+	result, err := TestRequestRules(rc, "GET", "/legacy/1/2/3/4/5/6", nil)
+	if err != nil {
+		t.Fatalf("test rules: %v", err)
+	}
+	if result.Final.Path != "/legacy/1-2-3-4-5-6" {
+		t.Fatalf("final path=%q", result.Final.Path)
+	}
+	if len(result.MatchedRules) != 1 || len(result.MatchedRules[0].Actions) != 1 {
+		t.Fatalf("matched rules=%+v", result.MatchedRules)
+	}
+	if got := result.MatchedRules[0].Actions[0].AfterPath; got != "/legacy/1-2-3-4-5-6" {
+		t.Fatalf("after path=%q", got)
+	}
+}
+
+func TestRequestRules_DryRunTraceBlock(t *testing.T) {
+	rc := &service.RequestCheck{Rules: []service.RequestRule{
+		{
+			Enabled: true,
+			When:    service.RequestMatch{HeaderAbsent: "X-Tenant"},
+			Then: service.RequestAction{
+				Type: "block", Status: http.StatusUnauthorized,
+				Body: "missing tenant", ContentType: "text/plain",
+			},
+		},
+	}}
+
+	result, err := TestRequestRules(rc, "GET", "/myapp/config", nil)
+	if err != nil {
+		t.Fatalf("test rules: %v", err)
+	}
+	if result.Terminal != requestRuleTerminalBlock {
+		t.Fatalf("terminal=%q", result.Terminal)
+	}
+	if result.Block == nil || result.Block.Status != http.StatusUnauthorized || result.Block.Body != "missing tenant" {
+		t.Fatalf("block=%+v", result.Block)
+	}
+	if len(result.MatchedRules) != 1 || len(result.MatchedRules[0].Actions) != 1 {
+		t.Fatalf("matched_rules=%+v", result.MatchedRules)
+	}
+	if !result.MatchedRules[0].Actions[0].Terminal {
+		t.Fatalf("block action should be terminal: %+v", result.MatchedRules[0].Actions[0])
 	}
 }
 

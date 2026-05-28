@@ -3,27 +3,29 @@
 //
 // Two paths exist for getting external users into pika:
 //
-//  1. JIT (just-in-time) — when a user logs in via the LDAP strategy, ada
-//     hands an *identity.Identity to the session store, which calls
-//     Service.FindOrCreateExternalUser. That path is unaffected by this
-//     package; the user shows up the moment they log in.
+//  1. JIT (just-in-time) — when a user logs in via the LDAP strategy and
+//     the strategy opts into auto_create_user, the session store calls this
+//     package to sync exactly that user plus its group-derived permissions.
 //
 //  2. Batch — this package. Walks the directory, calls
 //     FindOrCreateExternalUser for every match (idempotent), then reconciles
 //     missing users + per-user permissions per the SyncSource policy.
 //
-// The same SyncSource also drives JIT permission grants when the LDAP
-// strategy carries a "groups" attribute on the Identity — the resolver in
-// authx/caps.go will look up the source's GroupPermissions map so a
-// freshly-logged-in user gets the right grants on their first request.
+// Both paths use the same group-to-permission projection, so LDAP users get
+// consistent source-owned grants whether they arrive via schedule, manual sync,
+// or first login.
 package usersync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
+
+	goldap "github.com/go-ldap/ldap/v3"
+	adaldap "github.com/rakunlabs/ada/middleware/auth/strategy/ldap"
 
 	"github.com/rakunlabs/pika/internal/ldapclient"
 	"github.com/rakunlabs/pika/internal/service"
@@ -98,6 +100,12 @@ func (s *Syncer) Run(ctx context.Context, src service.SyncSource) Report {
 		return report
 	}
 
+	groupIndex, err := searchGroupIndex(conn, spec)
+	if err != nil {
+		report.Errors = append(report.Errors, fmt.Sprintf("group search: %v", err))
+		return report
+	}
+
 	filter := spec.UserFilter
 	if filter == "" {
 		filter = "(objectClass=*)"
@@ -126,64 +134,19 @@ func (s *Syncer) Run(ctx context.Context, src service.SyncSource) Report {
 		}
 		seenSubjects[subject] = struct{}{}
 
-		username := firstAttr(e.Attributes, spec.Attributes.Username)
-		if username == "" {
-			username = subject
-		}
-		email := firstAttr(e.Attributes, spec.Attributes.Email)
-		display := pickDisplayName(e.Attributes, spec.Attributes)
-		groups := e.Attributes[spec.Attributes.Groups]
-
-		input := service.ExternalIdentityInput{
-			Provider:      src.ID,
-			Subject:       subject,
-			Email:         email,
-			EmailVerified: false, // LDAP has no "verified" concept; never auto-link by email
-			DisplayName:   display,
-			Username:      username,
-		}
-
-		// Was this user previously known? Drives the created/updated counter.
-		_, preExisting := s.svc.GetUserByIdentity(ctx, src.ID, subject)
-		preExistingHit := preExisting == nil
-
-		userInfo, err := s.svc.FindOrCreateExternalUser(ctx, input)
+		groups := groupsForEntry(e, spec.Attributes, groupIndex)
+		_, created, permsApplied, err := s.syncEntry(ctx, src.ID, spec, e, groups)
 		if err != nil {
 			report.Errors = append(report.Errors, fmt.Sprintf("upsert %q: %v", subject, err))
 			continue
 		}
 
-		if preExistingHit {
-			report.Updated++
-		} else {
+		if created {
 			report.Created++
-		}
-
-		// Refresh email / display_name when they drifted. UpdateUser is
-		// safe to call even when nothing changed.
-		if needsUserPatch(userInfo, email, display) {
-			disabled := false // re-enable a previously-disabled user that reappeared
-			if userInfo.Disabled {
-				slog.Info("usersync: re-enabling user that reappeared in directory",
-					"source", src.ID, "user_id", userInfo.ID, "username", userInfo.Username)
-			}
-			emailPtr := normalizeOrNil(email, userInfo.Email)
-			dispPtr := stringPtr(display, userInfo.DisplayName)
-			req := &service.UpdateUserRequest{Email: emailPtr, DisplayName: dispPtr, Disabled: &disabled}
-			if err := s.svc.UpdateUser(ctx, userInfo.ID, req); err != nil {
-				report.Errors = append(report.Errors, fmt.Sprintf("update %q: %v", userInfo.Username, err))
-			}
-		}
-
-		// Group → permission projection. Even when a user has no groups
-		// we still rewrite (with an empty list) so a user removed from
-		// every group loses their previously-granted permissions.
-		permIDs := projectGroupsToPermissions(groups, spec.GroupPermissions)
-		if err := s.svc.SetUserPermissionsBySource(ctx, userInfo.ID, src.ID, permIDs); err != nil {
-			report.Errors = append(report.Errors, fmt.Sprintf("permissions %q: %v", userInfo.Username, err))
 		} else {
-			report.PermsApplied += len(permIDs)
+			report.Updated++
 		}
+		report.PermsApplied += permsApplied
 	}
 
 	// Reconciliation pass: anyone we previously synced but didn't see now.
@@ -197,6 +160,114 @@ func (s *Syncer) Run(ctx context.Context, src service.SyncSource) Report {
 	}
 
 	return report
+}
+
+// RunOne syncs a single LDAP user during login. It uses the source's LDAP
+// connection/search/group mapping so first-login provisioning gets the same
+// user row and permission grants as a full batch sync.
+func (s *Syncer) RunOne(ctx context.Context, src service.SyncSource, in service.ExternalIdentityInput) (*service.UserInfo, error) {
+	if err := validateSource(src); err != nil {
+		return nil, err
+	}
+	spec := src.LDAP
+
+	connector := ldapclient.New(ldapclient.Config{
+		Address:      spec.Address,
+		TLS:          spec.TLS,
+		InsecureSkip: spec.InsecureSkip,
+	})
+
+	conn, err := connector.NewConn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+	defer conn.Close()
+
+	if err := conn.Bind(spec.BindDN, spec.BindPassword); err != nil {
+		return nil, fmt.Errorf("bind: %w", err)
+	}
+
+	filter, err := loginUserFilter(spec.UserFilter, spec.Attributes, in)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := conn.SearchAll(spec.UserBaseDN, filter, requestedAttrs(spec.Attributes), 5)
+	if err != nil {
+		return nil, fmt.Errorf("search: %w", err)
+	}
+	entry := bestLoginEntry(entries, spec.Attributes, in)
+	if entry == nil {
+		return nil, service.ErrNotFound
+	}
+
+	groupIndex, err := searchGroupIndex(conn, spec)
+	if err != nil {
+		return nil, fmt.Errorf("group search: %w", err)
+	}
+	groups := groupsForEntry(*entry, spec.Attributes, groupIndex)
+	info, _, _, err := s.syncEntry(ctx, src.ID, spec, *entry, groups)
+	return info, err
+}
+
+func (s *Syncer) syncEntry(ctx context.Context, sourceID string, spec *service.LDAPSyncSpec, e adaEntry, groups []string) (*service.UserInfo, bool, int, error) {
+	subject := pickSubject(e, spec.Attributes)
+	if subject == "" {
+		return nil, false, 0, fmt.Errorf("entry %q has no usable subject (attr=%q)", e.DN, spec.Attributes.Subject)
+	}
+	username := firstAttr(e.Attributes, spec.Attributes.Username)
+	if username == "" {
+		username = subject
+	}
+	email := firstAttr(e.Attributes, spec.Attributes.Email)
+	display := pickDisplayName(e.Attributes, spec.Attributes)
+
+	input := service.ExternalIdentityInput{
+		Provider:      sourceID,
+		Subject:       subject,
+		Email:         email,
+		EmailVerified: false, // LDAP has no "verified" concept; never auto-link by email
+		DisplayName:   display,
+		Username:      username,
+	}
+
+	userInfo, err := s.svc.GetUserByIdentity(ctx, sourceID, subject)
+	created := false
+	if err != nil {
+		if !errors.Is(err, service.ErrNotFound) {
+			return nil, false, 0, err
+		}
+		userInfo, err = s.svc.FindOrCreateExternalUser(ctx, input)
+		if err != nil {
+			return nil, false, 0, err
+		}
+		created = true
+	} else if err := s.svc.RefreshExternalIdentity(ctx, userInfo.ID, input); err != nil {
+		return nil, false, 0, err
+	}
+
+	// Refresh email / display_name when they drift. Also re-enable a user
+	// disabled by a previous missing-user reconciliation once LDAP returns it.
+	if needsUserPatch(userInfo, email, display) {
+		disabled := false
+		if userInfo.Disabled {
+			slog.Info("usersync: re-enabling user that reappeared in directory",
+				"source", sourceID, "user_id", userInfo.ID, "username", userInfo.Username)
+		}
+		emailPtr := normalizeOrNil(email, userInfo.Email)
+		dispPtr := stringPtr(display, userInfo.DisplayName)
+		req := &service.UpdateUserRequest{Email: emailPtr, DisplayName: dispPtr, Disabled: &disabled}
+		if err := s.svc.UpdateUser(ctx, userInfo.ID, req); err != nil {
+			return nil, created, 0, fmt.Errorf("update %q: %w", userInfo.Username, err)
+		}
+	}
+
+	// Group → permission projection. Even when a user has no groups we still
+	// rewrite with an empty list so removed group memberships remove stale grants.
+	permIDs := projectGroupsToPermissions(groups, spec.GroupPermissions)
+	if err := s.svc.SetUserPermissionsBySource(ctx, userInfo.ID, sourceID, permIDs); err != nil {
+		return nil, created, 0, fmt.Errorf("permissions %q: %w", userInfo.Username, err)
+	}
+	return userInfo, created, len(permIDs), nil
 }
 
 // reconcileMissing finds every user_identities row tagged with this source's
@@ -256,6 +327,11 @@ func validateSource(src service.SyncSource) error {
 	}
 	if src.LDAP.Attributes.Username == "" {
 		return fmt.Errorf("source %q: attributes.username is required", src.ID)
+	}
+	for i, gs := range src.LDAP.GroupSearches {
+		if strings.TrimSpace(gs.BaseDN) == "" {
+			return fmt.Errorf("source %q: group_searches[%d].base_dn is required", src.ID, i)
+		}
 	}
 	return nil
 }
@@ -327,11 +403,308 @@ func firstAttr(attrs map[string][]string, key string) string {
 	if key == "" {
 		return ""
 	}
-	vs, ok := attrs[key]
-	if !ok || len(vs) == 0 {
+	vs := attrValues(attrs, key)
+	if len(vs) == 0 {
 		return ""
 	}
 	return strings.TrimSpace(vs[0])
+}
+
+func attrValues(attrs map[string][]string, key string) []string {
+	if key == "" {
+		return nil
+	}
+	if vs, ok := attrs[key]; ok {
+		return vs
+	}
+	for k, vs := range attrs {
+		if strings.EqualFold(k, key) {
+			return vs
+		}
+	}
+	return nil
+}
+
+type groupIndex map[string][]string
+
+func searchGroupIndex(conn *ldapclient.Conn, spec *service.LDAPSyncSpec) (groupIndex, error) {
+	idx := groupIndex{}
+	if spec == nil || len(spec.GroupSearches) == 0 {
+		return idx, nil
+	}
+	for _, search := range spec.GroupSearches {
+		baseDN := strings.TrimSpace(search.BaseDN)
+		if baseDN == "" {
+			continue
+		}
+		filter := strings.TrimSpace(search.Filter)
+		if filter == "" {
+			filter = "(objectClass=*)"
+		}
+		nameAttr, memberAttr, memberUIDAttr := groupSearchAttrs(search)
+		entries, err := conn.SearchAll(baseDN, filter, requestedGroupAttrs(search, nameAttr, memberAttr), spec.PageSize)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			groupName := firstAttr(e.Attributes, nameAttr)
+			if groupName == "" {
+				continue
+			}
+			for _, member := range attrValues(e.Attributes, memberAttr) {
+				memberKey := groupMemberKey(member, memberUIDAttr)
+				if memberKey == "" {
+					continue
+				}
+				idx.add(memberKey, groupName)
+			}
+		}
+	}
+	return idx, nil
+}
+
+func groupSearchAttrs(search service.LDAPGroupSearchSpec) (nameAttr, memberAttr, memberUIDAttr string) {
+	nameAttr = strings.TrimSpace(search.NameAttribute)
+	if nameAttr == "" {
+		nameAttr = "cn"
+	}
+	memberAttr = strings.TrimSpace(search.MemberAttribute)
+	if memberAttr == "" {
+		memberAttr = "uniqueMember"
+	}
+	memberUIDAttr = strings.TrimSpace(search.MemberUIDAttribute)
+	if memberUIDAttr == "" {
+		memberUIDAttr = "uid"
+	}
+	return nameAttr, memberAttr, memberUIDAttr
+}
+
+func requestedGroupAttrs(search service.LDAPGroupSearchSpec, nameAttr, memberAttr string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(a string) {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			return
+		}
+		key := strings.ToLower(a)
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, a)
+	}
+	add(nameAttr)
+	add(memberAttr)
+	for _, a := range search.Attributes {
+		add(a)
+	}
+	return out
+}
+
+func (g groupIndex) add(memberKey, groupName string) {
+	memberKey = normalizeGroupMemberKey(memberKey)
+	groupName = strings.TrimSpace(groupName)
+	if memberKey == "" || groupName == "" {
+		return
+	}
+	for _, existing := range g[memberKey] {
+		if existing == groupName {
+			return
+		}
+	}
+	g[memberKey] = append(g[memberKey], groupName)
+}
+
+func (g groupIndex) groupsFor(keys []string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, key := range keys {
+		for _, group := range g[normalizeGroupMemberKey(key)] {
+			if _, dup := seen[group]; dup {
+				continue
+			}
+			seen[group] = struct{}{}
+			out = append(out, group)
+		}
+	}
+	return out
+}
+
+func normalizeGroupMemberKey(v string) string {
+	return strings.ToLower(strings.TrimSpace(v))
+}
+
+func groupMemberKey(member, uidAttr string) string {
+	member = strings.TrimSpace(member)
+	uidAttr = strings.TrimSpace(uidAttr)
+	if member == "" {
+		return ""
+	}
+	if strings.EqualFold(uidAttr, "dn") {
+		return member
+	}
+	if uidAttr == "" {
+		uidAttr = "uid"
+	}
+	if dn, err := goldap.ParseDN(member); err == nil {
+		for _, rdn := range dn.RDNs {
+			for _, attr := range rdn.Attributes {
+				if strings.EqualFold(attr.Type, uidAttr) {
+					return strings.TrimSpace(attr.Value)
+				}
+			}
+		}
+	}
+	for _, part := range strings.Split(member, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if ok && strings.EqualFold(strings.TrimSpace(k), uidAttr) {
+			return strings.TrimSpace(v)
+		}
+	}
+	if !strings.Contains(member, "=") && !strings.Contains(member, ",") {
+		return member
+	}
+	return ""
+}
+
+func groupsForEntry(e adaEntry, attrs service.LDAPAttributeMap, idx groupIndex) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(groups []string) {
+		for _, group := range groups {
+			group = strings.TrimSpace(group)
+			if group == "" {
+				continue
+			}
+			if _, dup := seen[group]; dup {
+				continue
+			}
+			seen[group] = struct{}{}
+			out = append(out, group)
+		}
+	}
+	add(attrValues(e.Attributes, attrs.Groups))
+	add(idx.groupsFor(memberKeysForEntry(e, attrs)))
+	return out
+}
+
+func memberKeysForEntry(e adaEntry, attrs service.LDAPAttributeMap) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return
+		}
+		key := normalizeGroupMemberKey(v)
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, v)
+	}
+	add(e.DN)
+	add(pickSubject(e, attrs))
+	add(firstAttr(e.Attributes, attrs.Username))
+	add(firstAttr(e.Attributes, attrs.Email))
+	add(firstAttr(e.Attributes, attrs.DisplayName))
+	add(firstAttr(e.Attributes, attrs.GivenName))
+	add(firstAttr(e.Attributes, attrs.Surname))
+	return out
+}
+
+func loginUserFilter(baseFilter string, attrs service.LDAPAttributeMap, in service.ExternalIdentityInput) (string, error) {
+	baseFilter = strings.TrimSpace(baseFilter)
+	if strings.Contains(baseFilter, "%s") {
+		value := firstNonEmpty(in.Username, in.Subject, in.Email)
+		if value == "" {
+			return "", fmt.Errorf("login user has no searchable identifier: %w", service.ErrBadRequest)
+		}
+		escaped := escapeLDAPFilter(value)
+		args := make([]any, strings.Count(baseFilter, "%s"))
+		for i := range args {
+			args[i] = escaped
+		}
+		return fmt.Sprintf(baseFilter, args...), nil
+	}
+
+	var filters []string
+	add := func(attr, value string) {
+		attr = strings.TrimSpace(attr)
+		value = strings.TrimSpace(value)
+		if attr == "" || value == "" {
+			return
+		}
+		f := fmt.Sprintf("(%s=%s)", attr, escapeLDAPFilter(value))
+		for _, existing := range filters {
+			if existing == f {
+				return
+			}
+		}
+		filters = append(filters, f)
+	}
+	add(attrs.Subject, in.Subject)
+	add(attrs.Username, in.Subject)
+	add(attrs.Username, in.Username)
+	add(attrs.Email, in.Email)
+	if len(filters) == 0 {
+		return "", fmt.Errorf("login user has no searchable identifier: %w", service.ErrBadRequest)
+	}
+	match := filters[0]
+	if len(filters) > 1 {
+		match = "(|" + strings.Join(filters, "") + ")"
+	}
+	if baseFilter == "" {
+		return match, nil
+	}
+	return "(&" + baseFilter + match + ")", nil
+}
+
+func bestLoginEntry(entries []adaEntry, attrs service.LDAPAttributeMap, in service.ExternalIdentityInput) *adaEntry {
+	for i := range entries {
+		if in.Subject != "" && pickSubject(entries[i], attrs) == in.Subject {
+			return &entries[i]
+		}
+	}
+	for i := range entries {
+		if in.Username != "" && firstAttr(entries[i].Attributes, attrs.Username) == in.Username {
+			return &entries[i]
+		}
+	}
+	for i := range entries {
+		if in.Email != "" && strings.EqualFold(firstAttr(entries[i].Attributes, attrs.Email), in.Email) {
+			return &entries[i]
+		}
+	}
+	if len(entries) == 1 {
+		return &entries[0]
+	}
+	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func escapeLDAPFilter(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := range len(s) {
+		c := s[i]
+		switch c {
+		case '\\', '(', ')', '*', '\x00':
+			fmt.Fprintf(&b, "\\%02x", c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 // projectGroupsToPermissions maps an LDAP user's group values onto the
@@ -394,10 +767,5 @@ func stringPtr(incoming, current string) *string {
 	return &v
 }
 
-// adaEntry locally names the ada-shaped entry to avoid leaking the
-// adaldap import into this file's public surface (the test fixtures
-// construct values of this type directly).
-type adaEntry = struct {
-	DN         string
-	Attributes map[string][]string
-}
+// adaEntry locally names the ada-shaped LDAP entry used by ldapclient.
+type adaEntry = adaldap.Entry

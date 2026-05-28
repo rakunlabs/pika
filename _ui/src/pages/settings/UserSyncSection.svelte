@@ -15,10 +15,20 @@
     import type {
         SyncSource,
         LDAPSyncSpec,
+        LDAPGroupSearchSpec,
         LDAPAttributeMap,
         SyncSourceStatus,
         SyncReport,
     } from "@/lib/types/config";
+
+    type GroupSearchRow = {
+        base_dn: string;
+        filter: string;
+        attributes: string;
+        name_attribute: string;
+        member_attribute: string;
+        member_uid_attribute: string;
+    };
 
     // ── State ──
     let sources = $state<SyncSource[]>([]);
@@ -47,6 +57,7 @@
     let formUserBaseDN = $state("");
     let formUserFilter = $state("(objectClass=person)");
     let formPageSize = $state(500);
+    let groupSearchRows = $state<GroupSearchRow[]>([]);
     // Attribute mapping
     let attrUsername = $state("uid");
     let attrSubject = $state("");
@@ -92,6 +103,7 @@
         formUserBaseDN = "";
         formUserFilter = "(objectClass=person)";
         formPageSize = 500;
+        groupSearchRows = [];
         attrUsername = "uid";
         attrSubject = "";
         attrEmail = "mail";
@@ -122,6 +134,14 @@
         formUserBaseDN = ldap.user_base_dn ?? "";
         formUserFilter = ldap.user_filter ?? "(objectClass=person)";
         formPageSize = ldap.page_size ?? 500;
+        groupSearchRows = (ldap.group_searches ?? []).map((g) => ({
+            base_dn: g.base_dn ?? "",
+            filter: g.filter ?? "(objectClass=*)",
+            attributes: (g.attributes ?? ["cn", "uniqueMember", "description"]).join(", "),
+            name_attribute: g.name_attribute ?? "cn",
+            member_attribute: g.member_attribute ?? "uniqueMember",
+            member_uid_attribute: g.member_uid_attribute ?? "uid",
+        }));
         const attr: LDAPAttributeMap = ldap.attributes ?? { username: "uid" };
         attrUsername = attr.username ?? "uid";
         attrSubject = attr.subject ?? "";
@@ -172,6 +192,38 @@
         groupRows = next;
     }
 
+    // ── LDAP group search rows ──
+    function addGroupSearchRow() {
+        groupSearchRows = [
+            ...groupSearchRows,
+            {
+                base_dn: "",
+                filter: "(objectClass=*)",
+                attributes: "cn, uniqueMember, description",
+                name_attribute: "cn",
+                member_attribute: "uniqueMember",
+                member_uid_attribute: "uid",
+            },
+        ];
+    }
+
+    function removeGroupSearchRow(idx: number) {
+        groupSearchRows = groupSearchRows.filter((_, i) => i !== idx);
+    }
+
+    function updateGroupSearchRow(idx: number, patch: Partial<GroupSearchRow>) {
+        groupSearchRows = groupSearchRows.map((row, i) =>
+            i === idx ? { ...row, ...patch } : row,
+        );
+    }
+
+    function splitAttrs(value: string): string[] {
+        return value
+            .split(",")
+            .map((v) => v.trim())
+            .filter(Boolean);
+    }
+
     // ── Save ──
     function buildSourceFromForm(): SyncSource {
         const groupPermissions: Record<string, string[]> = {};
@@ -180,6 +232,17 @@
             if (!g || row.permissionIds.length === 0) continue;
             groupPermissions[g] = [...row.permissionIds];
         }
+        const groupSearches: LDAPGroupSearchSpec[] = groupSearchRows
+            .map((row) => ({
+                base_dn: row.base_dn.trim(),
+                filter: row.filter.trim() || undefined,
+                attributes: splitAttrs(row.attributes),
+                name_attribute: row.name_attribute.trim() || undefined,
+                member_attribute: row.member_attribute.trim() || undefined,
+                member_uid_attribute:
+                    row.member_uid_attribute.trim() || undefined,
+            }))
+            .filter((row) => row.base_dn);
         const ldap: LDAPSyncSpec = {
             address: formAddress.trim(),
             tls: formTLS || undefined,
@@ -189,6 +252,8 @@
             user_base_dn: formUserBaseDN.trim(),
             user_filter: formUserFilter.trim() || undefined,
             page_size: formPageSize > 0 ? formPageSize : undefined,
+            group_searches:
+                groupSearches.length > 0 ? groupSearches : undefined,
             attributes: {
                 username: attrUsername.trim() || "uid",
                 subject: attrSubject.trim() || undefined,
@@ -688,6 +753,153 @@
                 </div>
             </fieldset>
 
+            <!-- Group search -->
+            <fieldset
+                class="border border-slate-200 dark:border-warm-700 rounded-md p-3 space-y-2"
+            >
+                <legend
+                    class="text-xs font-medium text-slate-600 dark:text-slate-300 px-1"
+                    >Group search</legend
+                >
+                <p class="text-[11px] text-slate-500 dark:text-slate-400 -mt-1">
+                    Optional. Use this when membership lives on group entries
+                    such as <code>uniqueMember</code> instead of the user entry's
+                    <code>memberOf</code> attribute. Group names are matched by
+                    the Group → permissions map below.
+                </p>
+                {#each groupSearchRows as row, idx (idx)}
+                    <div
+                        class="border border-slate-200 dark:border-warm-700 rounded p-2 space-y-2 bg-slate-50 dark:bg-warm-900/50"
+                    >
+                        <div class="flex items-start gap-2">
+                            <div class="flex-1">
+                                <!-- svelte-ignore a11y_label_has_associated_control -->
+                                <label
+                                    class="block text-xs text-slate-500 dark:text-slate-400 mb-1"
+                                    >Group Base DN</label
+                                >
+                                <input
+                                    type="text"
+                                    value={row.base_dn}
+                                    oninput={(e) =>
+                                        updateGroupSearchRow(idx, {
+                                            base_dn: e.currentTarget.value,
+                                        })}
+                                    placeholder="ou=SSO_MappedRoles,ou=groups,dc=example,dc=com"
+                                    class="w-full px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-accent-500"
+                                />
+                            </div>
+                            <button
+                                type="button"
+                                onclick={() => removeGroupSearchRow(idx)}
+                                class="mt-5 p-1 text-slate-400 dark:text-slate-500 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                                title="Remove"
+                            >
+                                <Trash2 size={12} />
+                            </button>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            <div>
+                                <!-- svelte-ignore a11y_label_has_associated_control -->
+                                <label
+                                    class="block text-xs text-slate-500 dark:text-slate-400 mb-1"
+                                    >Group filter</label
+                                >
+                                <input
+                                    type="text"
+                                    value={row.filter}
+                                    oninput={(e) =>
+                                        updateGroupSearchRow(idx, {
+                                            filter: e.currentTarget.value,
+                                        })}
+                                    placeholder="(objectClass=*)"
+                                    class="w-full px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-accent-500"
+                                />
+                            </div>
+                            <div>
+                                <!-- svelte-ignore a11y_label_has_associated_control -->
+                                <label
+                                    class="block text-xs text-slate-500 dark:text-slate-400 mb-1"
+                                    >Attributes</label
+                                >
+                                <input
+                                    type="text"
+                                    value={row.attributes}
+                                    oninput={(e) =>
+                                        updateGroupSearchRow(idx, {
+                                            attributes: e.currentTarget.value,
+                                        })}
+                                    placeholder="cn, uniqueMember, description"
+                                    class="w-full px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-accent-500"
+                                />
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+                            <div>
+                                <!-- svelte-ignore a11y_label_has_associated_control -->
+                                <label
+                                    class="block text-xs text-slate-500 dark:text-slate-400 mb-1"
+                                    >Name attr</label
+                                >
+                                <input
+                                    type="text"
+                                    value={row.name_attribute}
+                                    oninput={(e) =>
+                                        updateGroupSearchRow(idx, {
+                                            name_attribute:
+                                                e.currentTarget.value,
+                                        })}
+                                    placeholder="cn"
+                                    class="w-full px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-accent-500"
+                                />
+                            </div>
+                            <div>
+                                <!-- svelte-ignore a11y_label_has_associated_control -->
+                                <label
+                                    class="block text-xs text-slate-500 dark:text-slate-400 mb-1"
+                                    >Member attr</label
+                                >
+                                <input
+                                    type="text"
+                                    value={row.member_attribute}
+                                    oninput={(e) =>
+                                        updateGroupSearchRow(idx, {
+                                            member_attribute:
+                                                e.currentTarget.value,
+                                        })}
+                                    placeholder="uniqueMember"
+                                    class="w-full px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-accent-500"
+                                />
+                            </div>
+                            <div>
+                                <!-- svelte-ignore a11y_label_has_associated_control -->
+                                <label
+                                    class="block text-xs text-slate-500 dark:text-slate-400 mb-1"
+                                    >Member ID attr</label
+                                >
+                                <input
+                                    type="text"
+                                    value={row.member_uid_attribute}
+                                    oninput={(e) =>
+                                        updateGroupSearchRow(idx, {
+                                            member_uid_attribute:
+                                                e.currentTarget.value,
+                                        })}
+                                    placeholder="uid"
+                                    class="w-full px-2 py-1 border border-slate-300 rounded text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-accent-500"
+                                />
+                            </div>
+                        </div>
+                    </div>
+                {/each}
+                <button
+                    type="button"
+                    onclick={addGroupSearchRow}
+                    class="text-[11px] text-accent-700 hover:underline cursor-pointer"
+                    >+ Add group search</button
+                >
+            </fieldset>
+
             <!-- Attribute mapping -->
             <fieldset
                 class="border border-slate-200 dark:border-warm-700 rounded-md p-3 space-y-2"
@@ -805,9 +1017,9 @@
                 >
                 <p class="text-[11px] text-slate-500 dark:text-slate-400 -mt-1">
                     When a user's Groups attribute (e.g. memberOf) contains a
-                    value listed here, they're granted the selected permissions.
-                    Match is verbatim — for AD-style memberOf, paste the full
-                    group DN.
+                    value listed here, or a group search returns a matching
+                    group name, they're granted the selected permissions. Match
+                    is verbatim — for AD-style memberOf, paste the full group DN.
                 </p>
                 {#if permissions.length === 0}
                     <div

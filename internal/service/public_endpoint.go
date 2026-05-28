@@ -71,6 +71,11 @@ type PublicEndpoint struct {
 	// Auth controls how the endpoint authenticates incoming
 	// requests. Default Mode="none" (no auth — operator's choice).
 	Auth EndpointAuth `json:"auth"`
+	// TLS controls whether this endpoint listener accepts HTTPS. When
+	// enabled, it uses the server-managed certificate from the main
+	// Pika certificate manager. Existing endpoints with a missing block
+	// remain HTTP-only.
+	TLS EndpointTLS `json:"tls,omitempty"`
 	// RequestCheck is an optional declarative rule stage that runs
 	// AFTER auth and BEFORE the mode-specific shim. Rules can allow,
 	// block, or modify the request before it reaches the shim.
@@ -104,6 +109,10 @@ type PublicEndpoint struct {
 //   - "set_path"    — replaces the full URL path literally, then continues.
 //   - "replace_path" — regex-replaces the URL path, then continues.
 //
+// Newer rules may carry Actions instead of Then. Actions are run
+// in order; allow/block are terminal and skip any later actions.
+// Then is kept for old single-action settings.
+//
 // If no rule short-circuits with allow/block, the request falls
 // through to the shim (default-allow). This is the behaviour
 // operators expect from gateway rule lists like Traefik or NGINX:
@@ -131,6 +140,10 @@ type RequestRule struct {
 	When RequestMatch `json:"when"`
 	// Then is the action to take on match.
 	Then RequestAction `json:"then"`
+	// Actions is the ordered multi-action form. When non-empty it takes
+	// precedence over Then. Kept separate so persisted single-action
+	// rules continue to unmarshal and run unchanged.
+	Actions []RequestAction `json:"actions,omitempty"`
 }
 
 // RequestMatch is the AND-combined set of predicates a rule
@@ -197,6 +210,19 @@ type RequestAction struct {
 	// for Type="replace_path" it is the regexp replacement string
 	// (Go regexp syntax, e.g. /$1 or /$name).
 	Value string `json:"value,omitempty"`
+	// CaptureTransforms applies literal string replacements to
+	// selected regexp captures before Type="replace_path" expands
+	// Value. Capture may be a number ("1") or a named capture
+	// ("tail").
+	CaptureTransforms []CaptureTransform `json:"capture_transforms,omitempty"`
+}
+
+// CaptureTransform mutates one replace_path capture before the
+// action's replacement template is expanded.
+type CaptureTransform struct {
+	Capture string `json:"capture"`
+	Find    string `json:"find"`
+	Value   string `json:"value"`
 }
 
 // StaticCompat configures the plain config-data shim. The shim has
@@ -263,7 +289,7 @@ type EndpointAuth struct {
 	//                     files.read capability. Goes through the
 	//                     normal token storage path.
 	//   "static_token"  — match the request token (header configurable
-	//                     via HeaderName, default "Authorization") in
+	//                     via HeaderName, default "X-Pika-Token") in
 	//                     constant time against StaticTokens. Useful
 	//                     for clients like consul-template that only
 	//                     speak X-Consul-Token.
@@ -272,9 +298,14 @@ type EndpointAuth struct {
 	// Sealed at rest by internal/secret/settings_seal.go.
 	StaticTokens []string `json:"static_tokens,omitempty"`
 	// HeaderName is the request header to read the static token from.
-	// Defaults to "Authorization" — values prefixed with "Bearer " are
-	// also accepted. Common alternatives: "X-Consul-Token".
+	// Defaults to "X-Pika-Token". Common alternatives:
+	// "X-Consul-Token" or "Authorization" for clients that require it.
 	HeaderName string `json:"header_name,omitempty"`
+}
+
+type EndpointTLS struct {
+	Enabled   bool `json:"enabled,omitempty"`
+	AllowHTTP bool `json:"allow_http,omitempty"`
 }
 
 // Validate sanity-checks a PublicEndpoint. Returns a non-nil error
@@ -383,54 +414,28 @@ func (p *PublicEndpoint) Validate() error {
 			p.Name, p.Auth.Mode, ErrBadRequest)
 	}
 
+	if p.TLS.AllowHTTP && !p.TLS.Enabled {
+		return fmt.Errorf("public endpoint %q: tls.allow_http requires tls.enabled: %w",
+			p.Name, ErrBadRequest)
+	}
+
 	return nil
 }
 
 // validate sanity-checks a single rule. Returns an unwrapped
 // error; the caller wraps with ErrBadRequest + position context.
 func (r *RequestRule) validate() error {
-	// Action type must be known and any name/value/status fields
-	// it depends on must be populated.
-	switch r.Then.Type {
-	case "allow":
-		// nothing to require.
-	case "block":
-		if r.Then.Status != 0 && (r.Then.Status < 100 || r.Then.Status > 599) {
-			return fmt.Errorf("block status %d not a valid HTTP status", r.Then.Status)
+	actions := r.effectiveActions()
+	if len(actions) == 0 {
+		return fmt.Errorf("rule requires at least one action")
+	}
+	for i := range actions {
+		if err := validateRequestAction(&actions[i]); err != nil {
+			if len(r.Actions) > 0 {
+				return fmt.Errorf("actions[%d]: %w", i, err)
+			}
+			return err
 		}
-	case "set_header", "del_header":
-		if strings.TrimSpace(r.Then.Name) == "" {
-			return fmt.Errorf("%s action requires a header name", r.Then.Type)
-		}
-		if r.Then.Type == "set_header" && r.Then.Value == "" {
-			return fmt.Errorf("set_header requires a value (use del_header to remove)")
-		}
-	case "set_query", "del_query":
-		if strings.TrimSpace(r.Then.Name) == "" {
-			return fmt.Errorf("%s action requires a query parameter name", r.Then.Type)
-		}
-	case "set_path":
-		v := strings.TrimSpace(r.Then.Value)
-		if v == "" {
-			return fmt.Errorf("set_path requires a value")
-		}
-		if !strings.HasPrefix(v, "/") {
-			return fmt.Errorf("set_path value must start with /")
-		}
-	case "replace_path":
-		pattern := strings.TrimSpace(r.Then.Pattern)
-		if pattern == "" {
-			return fmt.Errorf("replace_path requires a regex pattern")
-		}
-		if _, err := regexp.Compile(pattern); err != nil {
-			return fmt.Errorf("replace_path invalid regex pattern: %v", err)
-		}
-		if r.Then.Value == "" {
-			return fmt.Errorf("replace_path requires a replacement value")
-		}
-	default:
-		return fmt.Errorf("unknown then.type %q (allowed: allow|block|set_header|del_header|set_query|del_query|set_path|replace_path)",
-			r.Then.Type)
 	}
 
 	// Matcher tuples that require Name must have it.
@@ -441,6 +446,114 @@ func (r *RequestRule) validate() error {
 		return fmt.Errorf("when.query_equals.name is required")
 	}
 	return nil
+}
+
+func (r *RequestRule) effectiveActions() []RequestAction {
+	if len(r.Actions) > 0 {
+		return r.Actions
+	}
+	if r.Then.Type == "" {
+		return nil
+	}
+	return []RequestAction{r.Then}
+}
+
+func validateRequestAction(a *RequestAction) error {
+	// Action type must be known and any name/value/status fields
+	// it depends on must be populated.
+	switch a.Type {
+	case "allow":
+		if len(a.CaptureTransforms) > 0 {
+			return fmt.Errorf("capture_transforms are only valid on replace_path actions")
+		}
+		// nothing to require.
+	case "block":
+		if len(a.CaptureTransforms) > 0 {
+			return fmt.Errorf("capture_transforms are only valid on replace_path actions")
+		}
+		if a.Status != 0 && (a.Status < 100 || a.Status > 599) {
+			return fmt.Errorf("block status %d not a valid HTTP status", a.Status)
+		}
+	case "set_header", "del_header":
+		if len(a.CaptureTransforms) > 0 {
+			return fmt.Errorf("capture_transforms are only valid on replace_path actions")
+		}
+		if strings.TrimSpace(a.Name) == "" {
+			return fmt.Errorf("%s action requires a header name", a.Type)
+		}
+		if a.Type == "set_header" && a.Value == "" {
+			return fmt.Errorf("set_header requires a value (use del_header to remove)")
+		}
+	case "set_query", "del_query":
+		if len(a.CaptureTransforms) > 0 {
+			return fmt.Errorf("capture_transforms are only valid on replace_path actions")
+		}
+		if strings.TrimSpace(a.Name) == "" {
+			return fmt.Errorf("%s action requires a query parameter name", a.Type)
+		}
+	case "set_path":
+		if len(a.CaptureTransforms) > 0 {
+			return fmt.Errorf("capture_transforms are only valid on replace_path actions")
+		}
+		v := strings.TrimSpace(a.Value)
+		if v == "" {
+			return fmt.Errorf("set_path requires a value")
+		}
+		if !strings.HasPrefix(v, "/") {
+			return fmt.Errorf("set_path value must start with /")
+		}
+	case "replace_path":
+		pattern := strings.TrimSpace(a.Pattern)
+		if pattern == "" {
+			return fmt.Errorf("replace_path requires a regex pattern")
+		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return fmt.Errorf("replace_path invalid regex pattern: %v", err)
+		}
+		if a.Value == "" {
+			return fmt.Errorf("replace_path requires a replacement value")
+		}
+		if err := validateCaptureTransforms(re, a.CaptureTransforms); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unknown then.type %q (allowed: allow|block|set_header|del_header|set_query|del_query|set_path|replace_path)",
+			a.Type)
+	}
+	return nil
+}
+
+func validateCaptureTransforms(re *regexp.Regexp, transforms []CaptureTransform) error {
+	if len(transforms) == 0 {
+		return nil
+	}
+	names := re.SubexpNames()
+	for i, tr := range transforms {
+		capture := strings.TrimSpace(tr.Capture)
+		if capture == "" {
+			return fmt.Errorf("capture_transforms[%d].capture is required", i)
+		}
+		if tr.Find == "" {
+			return fmt.Errorf("capture_transforms[%d].find is required", i)
+		}
+		if idx, ok := captureIndex(names, capture); !ok || idx >= len(names) {
+			return fmt.Errorf("capture_transforms[%d].capture %q does not exist in replace_path pattern", i, capture)
+		}
+	}
+	return nil
+}
+
+func captureIndex(names []string, capture string) (int, bool) {
+	if n, err := strconv.Atoi(capture); err == nil {
+		return n, n >= 0 && n < len(names)
+	}
+	for i, name := range names {
+		if i > 0 && name == capture {
+			return i, true
+		}
+	}
+	return -1, false
 }
 
 // ValidatePublicEndpoints checks a list of endpoints for both

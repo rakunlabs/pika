@@ -1,6 +1,6 @@
 # Endpoints
 
-Pika lets an operator open additional HTTP ports that expose configuration data either directly, from an External resource, or in a shape other tools already understand — so existing clients (consul-template, spring-cloud-config consumers, custom apps) can keep talking to pika without changing their code.
+Pika lets an operator open additional HTTP or HTTPS ports that expose configuration data either directly, from an External resource, or in a shape other tools already understand — so existing clients (consul-template, spring-cloud-config consumers, custom apps) can keep talking to pika without changing their code.
 
 Four modes are supported today:
 
@@ -11,7 +11,7 @@ Four modes are supported today:
 | `external` | Direct read from one configured External resource. `{base_path}/{path}` maps to provider path. |
 | `custom` | User-authored Go-template response modifier. Pika resolves the config, you shape the answer. |
 
-Each endpoint owns its own TCP listener (`host:port`) and its own auth setting. Listeners are reconciled live: every save in the **Settings → Endpoints** panel diffs the desired list against what's running and starts/stops sockets accordingly.
+Each endpoint owns its own TCP listener (`host:port`), TLS setting, and auth setting. Listeners are reconciled live: every save in the **Settings → Endpoints** panel diffs the desired list against what's running and starts/stops sockets accordingly.
 
 ## Request pipeline
 
@@ -36,6 +36,7 @@ Open **Settings → Endpoints**. Click **+ New endpoint** and fill in:
 | Listen host     | yes      | Default `0.0.0.0`. Use `127.0.0.1` to expose only on loopback.        |
 | Listen port     | yes      | Any free TCP port. Must not collide with the main pika port.          |
 | Base path       | yes      | URL prefix. Default `/`. Must start with `/` and have no trailing `/`.|
+| HTTPS           | no       | New UI-created endpoints default to HTTPS using Settings → Certificates. Existing endpoints without a TLS block remain HTTP-only. |
 | Mode            | yes      | `static`, `consul`, `external`, or `custom`.                           |
 | Auth            | yes      | `none`, `bearer_token`, or `static_token`. See below.                  |
 
@@ -47,7 +48,7 @@ Configurations are persisted in the singleton settings document; static tokens a
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `none`         | No authentication. The listener serves anyone who can reach it.                                                                              |
 | `bearer_token` | Requires `Authorization: Bearer <token>` matching any pika API token with the `files.read` capability. Same tokens used by `/data/*`.      |
-| `static_token` | Compares the configured header (default `Authorization`, also accepts `X-Consul-Token` etc.) in constant time against a small list of tokens. |
+| `static_token` | Compares the configured header (default `X-Pika-Token`; can be changed to `X-Consul-Token`, `Authorization`, etc.) in constant time against a small list of tokens. Send the raw token value, without `Bearer`. |
 
 Static tokens are sealed at rest — when you re-open an endpoint in the UI the field comes back empty; leaving it empty preserves the previously-stored tokens, an explicit empty list clears them.
 
@@ -55,15 +56,18 @@ Static tokens are sealed at rest — when you re-open an endpoint in the UI the 
 
 ## Request rules
 
-The request-rules stage runs after authentication and before the mode shim. It is an ordered list of declarative rules — no templates, no JSON to hand-author. The editor in **Settings → Endpoints** lets you add rows, pick a matcher and an action from dropdowns, and reorder with ↑/↓ buttons.
+The request-rules stage runs after authentication and before the mode shim. It is an ordered list of declarative rules — no templates, no JSON to hand-author. The editor in **Settings → Endpoints** lets you add rows, pick a matcher and one or more actions from dropdowns, and reorder rules with ↑/↓ buttons.
+
+Use **Test draft rules** in the editor to run the unsaved rule list through the backend evaluator. It accepts a method, path (including optional query string), and headers, then shows matched rules, actions, and the final request shape the shim would see.
 
 ### Evaluation
 
 Rules are walked top-to-bottom for every request:
 
 - A rule **matches** when every populated entry in its `when` block matches the current request (AND semantics). An empty `when` matches every request.
-- `allow` and `block` are **terminal** — they short-circuit evaluation. `block` writes the configured response; `allow` forwards to the shim immediately.
-- `set_header`, `del_header`, `set_query`, `del_query`, and `set_path` are **modify** actions — they mutate the request and let evaluation continue with the next rule. The shim sees the post-modify request.
+- Each matching rule can run one or more actions in order.
+- `allow` and `block` are **terminal** — they short-circuit evaluation. `block` writes the configured response; `allow` forwards to the shim immediately. Later actions in the same rule do not run.
+- `set_header`, `del_header`, `set_query`, `del_query`, `set_path`, and `replace_path` are **modify** actions — they mutate the request and let evaluation continue with the next action, then the next rule. The shim sees the post-modify request.
 - If no rule terminates, the request falls through to the shim (implicit default-allow). Same convention as a firewall whose tail is an implicit ACCEPT.
 
 A rule with `enabled: false` is skipped entirely, but kept in the list so an operator can flip it on/off without losing the configuration.
@@ -98,11 +102,13 @@ Header names are case-insensitive in the matcher (canonical form is used interna
 | `set_query`  | Set a query parameter. Continues evaluation.                                                          |
 | `del_query`  | Remove a query parameter. Continues evaluation.                                                       |
 | `set_path`   | Replace the whole URL path with a literal value. Must start with `/`. Not regex/capture based. Continues evaluation. |
-| `replace_path` | Regex-replace the URL path. Uses Go regexp syntax and `$1` / `$name` capture replacements. Continues evaluation. |
+| `replace_path` | Regex-replace the URL path. Uses Go regexp syntax and `$1` / `$name` capture replacements. Optional capture transforms can replace literal text inside a capture before expansion. Continues evaluation. |
 
 `set_path` is intentionally simple: it does not run a regex and it does not preserve an unmatched suffix. If a rule matches `/legacy/app`, then `set_path = /myapp/config` means the shim receives exactly `/myapp/config`.
 
-Use `replace_path` when you want capture groups. The regex runs against the whole current path, and the replacement becomes the new path. If the replacement does not start with `/`, Pika prefixes it.
+Use `replace_path` when you want capture groups. The regex runs against the whole current path, and the replacement becomes the new path. If the replacement does not start with `/`, Pika prefixes it. When text follows a capture directly, prefer `${1}` over `$1` so Go's regexp replacement parser does not treat the following characters as part of the capture name.
+
+Capture transforms are optional literal string replacements applied to a selected capture before the final replacement is expanded. The capture can be a number (`1`) or a named capture (`tail`); `find` must be non-empty and is not a regex.
 
 ### Example recipes
 
@@ -134,6 +140,30 @@ This is a full replacement: a request for `/v1/kv/legacy` reaches the shim as `/
 
 This keeps the suffix dynamically. A request for `/legacy/myapp/config` reaches the shim as `/myapp/config`. In static config-data mode with `base_path=/`, that resolves the same key as `/data/myapp/config`.
 
+**Convert a two-segment path to an underscore key**
+
+| # | enabled | when | then |
+| - | ------- | ---- | ---- |
+| 1 | yes | path starts with: `/` | replace_path — pattern `^/([^/]+)/([^/]+)$`, replacement `/${1}_${2}` |
+
+This turns `/myapp/config` into `/myapp_config`. In static config-data mode with `base_path=/`, that resolves `/data/myapp_config`.
+
+**Transform a captured suffix**
+
+| # | enabled | when | then |
+| - | ------- | ---- | ---- |
+| 1 | yes | path starts with: `/legacy/` | replace_path — pattern `^/legacy/(?P<tail>.*)$`, replacement `/legacy/${tail}`, transform capture `tail`: find `/`, replace `-` |
+
+This turns `/legacy/1/2/3/4/5/6` into `/legacy/1-2-3-4-5-6` in one action. The regex selects the suffix as `tail`; the capture transform edits only that captured text before `${tail}` is inserted into the replacement.
+
+**Chain multiple actions in one rule**
+
+| # | enabled | when | actions |
+| - | ------- | ---- | ------- |
+| 1 | yes | path starts with: `/legacy/` | 1. replace_path `^/legacy/(.*)$` → `/${1}`; 2. replace_path `([^/]+)/` → `${1}_` |
+
+This turns `/legacy/myapp/config` into `/myapp_config` in a single rule: first remove the legacy prefix, then replace every internal `/` after a segment with `_`. The actions run top-to-bottom; if one of them were `allow` or `block`, evaluation would stop there.
+
 **Admin override + default-deny**
 
 | # | enabled | when                              | then              |
@@ -160,7 +190,7 @@ curl http://localhost:9090/cfg/myapp/config
 behaves like:
 
 ```sh
-curl http://localhost:8080/data/myapp/config
+curl https://localhost:8080/data/myapp/config
 ```
 
 ### Query parameters

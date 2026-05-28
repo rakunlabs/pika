@@ -16,7 +16,7 @@ Pass the token via the `Authorization` header:
 
 ```sh
 curl -H "Authorization: Bearer pika_abc123..." \
-  http://localhost:8080/data/myapp/config
+  https://localhost:8080/data/myapp/config
 ```
 
 The token must have a scope that covers the requested path with the `read` operation. See [Tokens & scopes](./tokens-and-scopes).
@@ -38,15 +38,15 @@ For client tools that don't speak Bearer auth — or that already speak a differ
 ```sh
 # Latest version
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/data/myapp/config
+  https://localhost:8080/data/myapp/config
 
 # Pinned to integer version
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8080/data/myapp/config?version=3"
+  "https://localhost:8080/data/myapp/config?version=3"
 
 # Pinned to semver — pika picks the latest version satisfying ?version=
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8080/data/myapp/config?version=0.2.0"
+  "https://localhost:8080/data/myapp/config?version=0.2.0"
 ```
 
 See [Versions & variants](/guide/versions-variants) for how semver constraints are resolved.
@@ -56,15 +56,15 @@ See [Versions & variants](/guide/versions-variants) for how semver constraints a
 ```sh
 # Base
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/data/myapp/config
+  https://localhost:8080/data/myapp/config
 
 # Production variant
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8080/data/myapp/config?variant=prod"
+  "https://localhost:8080/data/myapp/config?variant=prod"
 
 # Combine variant + semver + format
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://localhost:8080/data/myapp/config?variant=staging&version=0.3.0&format=json"
+  "https://localhost:8080/data/myapp/config?variant=staging&version=0.3.0&format=json"
 ```
 
 ### Format conversion
@@ -94,13 +94,13 @@ Pika does **not** add `Cache-Control` headers — caching is the consumer's resp
 
 ```sh
 curl -I -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/data/myapp/config
+  https://localhost:8080/data/myapp/config
 # HTTP/1.1 200 OK
 # ETag: "v3"
 
 curl -H "Authorization: Bearer $TOKEN" \
   -H 'If-None-Match: "v3"' \
-  http://localhost:8080/data/myapp/config
+  https://localhost:8080/data/myapp/config
 # HTTP/1.1 304 Not Modified
 ```
 

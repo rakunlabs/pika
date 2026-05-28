@@ -86,6 +86,10 @@ type Settings struct {
 	Auth                *AuthSettings                `json:"auth,omitempty"`
 	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
+	// ServerTLS controls runtime transport policy for the main admin
+	// listener. The certificate itself stays on disk so HTTPS is
+	// available before the settings DB is unlocked.
+	ServerTLS *ServerTLSSettings `json:"server_tls,omitempty"`
 	// PublicEndpoints is the list of operator-defined public HTTP
 	// endpoints that expose pika's configuration data directly,
 	// through a compatibility shim (Consul KV), from an External
@@ -156,6 +160,7 @@ type PatchSettings struct {
 	Auth                *AuthSettings                `json:"auth,omitempty"`
 	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
+	ServerTLS           *ServerTLSSettings           `json:"server_tls,omitempty"`
 	// PublicEndpoints is a full-replace patch — pointer-to-slice so
 	// nil ("don't touch") is distinguishable from empty ("clear the
 	// list"). Matches the Hooks shape exactly.
@@ -168,6 +173,33 @@ const (
 	ActionKeySet    ActionKey = "set"
 	ActionKeyRemove ActionKey = "remove"
 )
+
+// ServerTLSSettings is the runtime policy for the main admin port.
+// Nil/zero means secure-by-default: HTTPS accepted, plaintext HTTP
+// rejected with 426. Operators can allow HTTP for trusted networks,
+// or explicitly disable HTTPS while keeping HTTP enabled.
+type ServerTLSSettings struct {
+	HTTPSDisabled    bool `json:"https_disabled,omitempty"`
+	PlainHTTPEnabled bool `json:"plain_http_enabled,omitempty"`
+}
+
+func EffectiveServerTLSSettings(s *ServerTLSSettings) ServerTLSSettings {
+	if s == nil {
+		return ServerTLSSettings{}
+	}
+	return *s
+}
+
+func (s ServerTLSSettings) HTTPSEnabled() bool {
+	return !s.HTTPSDisabled
+}
+
+func (s ServerTLSSettings) Validate() error {
+	if s.HTTPSDisabled && !s.PlainHTTPEnabled {
+		return fmt.Errorf("server_tls: cannot disable HTTPS unless plaintext HTTP is enabled: %w", ErrBadRequest)
+	}
+	return nil
+}
 
 func (s *Service) Settings(ctx context.Context) (*Settings, error) {
 	settings, err := s.store.Settings().Get(ctx)
@@ -257,6 +289,13 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 	// the same patch-update treatment for free.
 	if patch.Vault != nil {
 		settings.Vault = patch.Vault
+	}
+
+	if patch.ServerTLS != nil {
+		if err := patch.ServerTLS.Validate(); err != nil {
+			return err
+		}
+		settings.ServerTLS = patch.ServerTLS
 	}
 
 	// Handle public-endpoints update (if provided). Full-replace

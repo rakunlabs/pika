@@ -1,25 +1,24 @@
 package api
 
 import (
-	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
-	"math/big"
 	"net/http"
-	"time"
 
 	"github.com/rakunlabs/ada"
+	"github.com/rakunlabs/pika/internal/server/servertls"
+	"github.com/rakunlabs/pika/internal/service"
 )
 
 // tlsGenRequest is the optional JSON body for POST /api/v1/tls-generate.
 type tlsGenRequest struct {
 	// CommonName for the certificate subject. Default: "pika".
-	CommonName string `json:"common_name,omitempty"`
+	CommonName  string   `json:"common_name,omitempty"`
+	DNSNames    []string `json:"dns_names,omitempty"`
+	IPAddresses []string `json:"ip_addresses,omitempty"`
 	// ValidDays is the certificate validity in days. Default: 3650 (10 years).
 	ValidDays int `json:"valid_days,omitempty"`
 }
@@ -44,69 +43,90 @@ func (a *api) generateTLS(c *ada.Context) error {
 		req.ValidDays = 3650
 	}
 
-	certPEM, keyPEM, err := generateSelfSignedCert(req.CommonName, req.ValidDays)
+	certPEM, keyPEM, err := servertls.GenerateSelfSignedPEM(servertls.SelfSignedRequest{
+		CommonName:  req.CommonName,
+		DNSNames:    req.DNSNames,
+		IPAddresses: req.IPAddresses,
+		ValidDays:   req.ValidDays,
+	}, nil)
 	if err != nil {
 		return fmt.Errorf("generating TLS certificate: %w", err)
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(tlsGenResponse{
-		CertPEM: certPEM,
-		KeyPEM:  keyPEM,
+		CertPEM: string(certPEM),
+		KeyPEM:  string(keyPEM),
 	})
 }
 
-// generateSelfSignedCert creates a self-signed ECDSA P-256 certificate.
-func generateSelfSignedCert(commonName string, validDays int) (certPEM, keyPEM string, err error) {
-	// Generate ECDSA P-256 private key
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+type tlsStatusResponse struct {
+	ProcessEnabled   bool                        `json:"process_enabled"`
+	HTTPSEnabled     bool                        `json:"https_enabled"`
+	PlainHTTPEnabled bool                        `json:"plain_http_enabled"`
+	Certificate      servertls.CertificateStatus `json:"certificate"`
+}
+
+func (a *api) getTLSStatus(c *ada.Context) error {
+	var cert servertls.CertificateStatus
+	processEnabled := false
+	if a.tlsMgr != nil {
+		processEnabled = a.tlsMgr.ProcessEnabled()
+		st, err := a.tlsMgr.Status()
+		if err != nil {
+			return fmt.Errorf("read TLS certificate status: %w", err)
+		}
+		cert = st
+	}
+	settings, err := a.svc.Settings(c.Request.Context())
 	if err != nil {
-		return "", "", fmt.Errorf("generating private key: %w", err)
+		return err
 	}
-
-	// Serial number
-	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return "", "", fmt.Errorf("generating serial number: %w", err)
+	policy := service.EffectiveServerTLSSettings(nil)
+	if settings != nil {
+		policy = service.EffectiveServerTLSSettings(settings.ServerTLS)
 	}
-
-	// Certificate template
-	now := time.Now()
-	template := &x509.Certificate{
-		SerialNumber: serialNumber,
-		Subject: pkix.Name{
-			CommonName:   commonName,
-			Organization: []string{"Pika Self-Signed"},
-		},
-		NotBefore:             now,
-		NotAfter:              now.AddDate(0, 0, validDays),
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-	}
-
-	// Self-sign
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
-	if err != nil {
-		return "", "", fmt.Errorf("creating certificate: %w", err)
-	}
-
-	// Encode certificate PEM
-	certBlock := pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: certDER,
+	return c.SetStatus(http.StatusOK).SendJSON(tlsStatusResponse{
+		ProcessEnabled:   processEnabled,
+		HTTPSEnabled:     processEnabled && policy.HTTPSEnabled(),
+		PlainHTTPEnabled: !processEnabled || policy.PlainHTTPEnabled,
+		Certificate:      cert,
 	})
+}
 
-	// Encode private key PEM
-	keyDER, err := x509.MarshalECPrivateKey(privateKey)
-	if err != nil {
-		return "", "", fmt.Errorf("marshaling private key: %w", err)
+func (a *api) generateManagedTLS(c *ada.Context) error {
+	if a.tlsMgr == nil {
+		return fmt.Errorf("TLS manager is not configured: %w", service.ErrInternal)
 	}
-	keyBlock := pem.EncodeToMemory(&pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: keyDER,
-	})
+	var req servertls.SelfSignedRequest
+	_ = c.Bind(&req)
+	st, err := a.tlsMgr.GenerateSelfSigned(req)
+	if err != nil {
+		return fmt.Errorf("generate managed TLS certificate: %w", err)
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(st)
+}
 
-	return string(certBlock), string(keyBlock), nil
+type tlsManualRequest struct {
+	CertPEM string `json:"cert_pem"`
+	KeyPEM  string `json:"key_pem"`
+}
+
+func (a *api) uploadManagedTLS(c *ada.Context) error {
+	if a.tlsMgr == nil {
+		return fmt.Errorf("TLS manager is not configured: %w", service.ErrInternal)
+	}
+	var req tlsManualRequest
+	if err := c.Bind(&req); err != nil {
+		return fmt.Errorf("bind TLS certificate upload: %w: %w", err, service.ErrBadRequest)
+	}
+	if req.CertPEM == "" || req.KeyPEM == "" {
+		return fmt.Errorf("cert_pem and key_pem are required: %w", service.ErrBadRequest)
+	}
+	st, err := a.tlsMgr.WriteManual([]byte(req.CertPEM), []byte(req.KeyPEM))
+	if err != nil {
+		return fmt.Errorf("store managed TLS certificate: %w", err)
+	}
+	return c.SetStatus(http.StatusOK).SendJSON(st)
 }
 
 // sshKeyGenResponse contains the generated PEM-encoded SSH private key.

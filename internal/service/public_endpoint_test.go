@@ -266,6 +266,44 @@ func TestPublicEndpoint_Validate_RequestCheck(t *testing.T) {
 		t.Errorf("expected nil for replace_path rule, got %v", err)
 	}
 
+	// OK: regex path replacement with capture transform.
+	ep = base()
+	ep.RequestCheck = &RequestCheck{
+		Rules: []RequestRule{
+			{
+				Enabled: true,
+				Then: RequestAction{
+					Type:    "replace_path",
+					Pattern: `^/legacy/(?P<tail>.*)$`,
+					Value:   "/legacy/${tail}",
+					CaptureTransforms: []CaptureTransform{
+						{Capture: "tail", Find: "/", Value: "-"},
+					},
+				},
+			},
+		},
+	}
+	if err := ep.Validate(); err != nil {
+		t.Errorf("expected nil for replace_path capture transform, got %v", err)
+	}
+
+	// OK: multiple actions on a single rule.
+	ep = base()
+	ep.RequestCheck = &RequestCheck{
+		Rules: []RequestRule{
+			{
+				Enabled: true,
+				Actions: []RequestAction{
+					{Type: "set_query", Name: "variant", Value: "prod"},
+					{Type: "replace_path", Pattern: "^/([^/]+)/([^/]+)$", Value: "/${1}_${2}"},
+				},
+			},
+		},
+	}
+	if err := ep.Validate(); err != nil {
+		t.Errorf("expected nil for multi-action rule, got %v", err)
+	}
+
 	// Bad: invalid regex path replacement.
 	ep = base()
 	ep.RequestCheck = &RequestCheck{
@@ -282,6 +320,65 @@ func TestPublicEndpoint_Validate_RequestCheck(t *testing.T) {
 	}
 	if err := ep.Validate(); err == nil || !strings.Contains(err.Error(), "invalid regex") {
 		t.Errorf("expected invalid regex error, got %v", err)
+	}
+
+	// Bad: transform references a capture that does not exist.
+	ep = base()
+	ep.RequestCheck = &RequestCheck{
+		Rules: []RequestRule{
+			{
+				Enabled: true,
+				Then: RequestAction{
+					Type:    "replace_path",
+					Pattern: `^/legacy/(.*)$`,
+					Value:   "/legacy/${2}",
+					CaptureTransforms: []CaptureTransform{
+						{Capture: "2", Find: "/", Value: "-"},
+					},
+				},
+			},
+		},
+	}
+	if err := ep.Validate(); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("expected missing capture error, got %v", err)
+	}
+
+	// Bad: transform find string is empty.
+	ep = base()
+	ep.RequestCheck = &RequestCheck{
+		Rules: []RequestRule{
+			{
+				Enabled: true,
+				Then: RequestAction{
+					Type:    "replace_path",
+					Pattern: `^/legacy/(.*)$`,
+					Value:   "/legacy/${1}",
+					CaptureTransforms: []CaptureTransform{
+						{Capture: "1", Find: "", Value: "-"},
+					},
+				},
+			},
+		},
+	}
+	if err := ep.Validate(); err == nil || !strings.Contains(err.Error(), "find is required") {
+		t.Errorf("expected empty find error, got %v", err)
+	}
+
+	// Bad: capture transforms are only valid on replace_path.
+	ep = base()
+	ep.RequestCheck = &RequestCheck{
+		Rules: []RequestRule{
+			{
+				Enabled: true,
+				Then: RequestAction{
+					Type: "set_path", Value: "/x",
+					CaptureTransforms: []CaptureTransform{{Capture: "1", Find: "/", Value: "-"}},
+				},
+			},
+		},
+	}
+	if err := ep.Validate(); err == nil || !strings.Contains(err.Error(), "only valid on replace_path") {
+		t.Errorf("expected invalid capture_transforms action error, got %v", err)
 	}
 
 	// Bad: block status out of range

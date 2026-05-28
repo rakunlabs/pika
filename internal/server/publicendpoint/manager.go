@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/rakunlabs/pika/internal/external"
+	"github.com/rakunlabs/pika/internal/server/servertls"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -50,6 +51,8 @@ type EndpointStatus struct {
 	ListenPort int       `json:"listen_port"`
 	BasePath   string    `json:"base_path"`
 	Mode       string    `json:"mode"`
+	TLSEnabled bool      `json:"tls_enabled"`
+	AllowHTTP  bool      `json:"allow_http"`
 	Running    bool      `json:"running"`
 	BoundAddr  string    `json:"bound_addr,omitempty"`
 	LastError  string    `json:"last_error,omitempty"`
@@ -61,6 +64,7 @@ type EndpointStatus struct {
 type Manager struct {
 	svc    Service
 	logger *slog.Logger
+	tlsMgr *servertls.Manager
 
 	mu      sync.Mutex
 	current map[string]*runningEndpoint // ID -> running listener
@@ -81,13 +85,18 @@ type runningEndpoint struct {
 // New constructs a manager. ctx is the long-lived parent context
 // (typically the server's root) — each endpoint goroutine inherits a
 // child cancel from it so a top-level Shutdown drops every listener.
-func New(ctx context.Context, svc Service, logger *slog.Logger) *Manager {
+func New(ctx context.Context, svc Service, logger *slog.Logger, tlsMgr ...*servertls.Manager) *Manager {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	var mgr *servertls.Manager
+	if len(tlsMgr) > 0 {
+		mgr = tlsMgr[0]
 	}
 	return &Manager{
 		svc:     svc,
 		logger:  logger,
+		tlsMgr:  mgr,
 		current: make(map[string]*runningEndpoint),
 		last:    make(map[string]EndpointStatus),
 		appCtx:  ctx,
@@ -263,6 +272,22 @@ func (m *Manager) startLocked(ep service.PublicEndpoint) error {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	serveLn := ln
+	if ep.TLS.Enabled {
+		if m.tlsMgr == nil {
+			_ = ln.Close()
+			return fmt.Errorf("tls manager is not configured")
+		}
+		tlsConfig, err := m.tlsMgr.TLSConfig()
+		if err != nil {
+			_ = ln.Close()
+			return fmt.Errorf("configure tls: %w", err)
+		}
+		srv.TLSConfig = tlsConfig
+		serveLn = servertls.NewOptionalListener(ln, tlsConfig, func() servertls.Policy {
+			return servertls.Policy{HTTPS: true, PlainHTTP: ep.TLS.AllowHTTP}
+		})
+	}
 
 	run := &runningEndpoint{
 		cfg:       ep,
@@ -275,7 +300,7 @@ func (m *Manager) startLocked(ep service.PublicEndpoint) error {
 	m.last[ep.ID] = m.statusFromCfg(ep, true, run.boundAddr, "", run.startedAt)
 
 	go func(ep service.PublicEndpoint, run *runningEndpoint) {
-		err := run.srv.Serve(run.ln)
+		err := run.srv.Serve(serveLn)
 		// http.ErrServerClosed is the expected outcome of stopLocked.
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			m.logger.Error("public endpoint serve exited",
@@ -296,7 +321,8 @@ func (m *Manager) startLocked(ep service.PublicEndpoint) error {
 
 	m.logger.Info("public endpoint started",
 		"id", ep.ID, "name", ep.Name, "mode", ep.Mode,
-		"bind", run.boundAddr, "base_path", ep.BasePath)
+		"bind", run.boundAddr, "base_path", ep.BasePath,
+		"tls", ep.TLS.Enabled)
 	return nil
 }
 
@@ -342,6 +368,8 @@ func (m *Manager) statusFromCfg(ep service.PublicEndpoint, running bool, boundAd
 		ListenPort: ep.ListenPort,
 		BasePath:   bp,
 		Mode:       ep.Mode,
+		TLSEnabled: ep.TLS.Enabled,
+		AllowHTTP:  ep.TLS.AllowHTTP,
 		Running:    running,
 		BoundAddr:  boundAddr,
 		LastError:  lastErr,
@@ -358,7 +386,9 @@ func endpointMatchesRunning(want, have service.PublicEndpoint) bool {
 	if want.ListenHost != have.ListenHost ||
 		want.ListenPort != have.ListenPort ||
 		want.BasePath != have.BasePath ||
-		want.Mode != have.Mode {
+		want.Mode != have.Mode ||
+		want.TLS.Enabled != have.TLS.Enabled ||
+		want.TLS.AllowHTTP != have.TLS.AllowHTTP {
 		return false
 	}
 	if want.Auth.Mode != have.Auth.Mode ||
@@ -426,7 +456,47 @@ func ruleEqual(a, b service.RequestRule) bool {
 	if !matchEqual(a.When, b.When) {
 		return false
 	}
-	return a.Then == b.Then
+	if !actionEqual(a.Then, b.Then) {
+		return false
+	}
+	return actionSliceEqual(a.Actions, b.Actions)
+}
+
+func actionSliceEqual(a, b []service.RequestAction) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !actionEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func actionEqual(a, b service.RequestAction) bool {
+	if a.Type != b.Type ||
+		a.Status != b.Status ||
+		a.Body != b.Body ||
+		a.ContentType != b.ContentType ||
+		a.Name != b.Name ||
+		a.Pattern != b.Pattern ||
+		a.Value != b.Value {
+		return false
+	}
+	return captureTransformSliceEqual(a.CaptureTransforms, b.CaptureTransforms)
+}
+
+func captureTransformSliceEqual(a, b []service.CaptureTransform) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func matchEqual(a, b service.RequestMatch) bool {

@@ -38,10 +38,14 @@ Token capabilities for admin operations are different from path scopes used on `
 | `POST`                  | `/api/v1/key/unlock`                  | `settings.manage`      | Unlock the server after a restart by supplying the master key.       |
 | `POST`                  | `/api/v1/key/lock`                    | `settings.manage`      | Manually re-lock the server without restarting.                      |
 | `POST`                  | `/api/v1/key/rotate`                  | `settings.manage`      | Rotate the server encryption key (current → new).                    |
-| `POST`                  | `/api/v1/tls-generate`                | `settings.manage`      | Generate a TLS certificate / key pair.                               |
+| `GET`                   | `/api/v1/tls/status`                  | `settings.manage`      | Inspect active HTTPS policy and certificate expiry.                   |
+| `POST`                  | `/api/v1/tls/self-signed`             | `settings.manage`      | Generate and activate a managed self-signed certificate.              |
+| `PUT`                   | `/api/v1/tls/manual`                  | `settings.manage`      | Upload and activate a PEM certificate / key pair.                     |
+| `POST`                  | `/api/v1/tls-generate`                | `settings.manage`      | Generate a TLS certificate / key pair without activating it.          |
 | `POST`                  | `/api/v1/ssh-keygen`                  | `settings.manage`      | Generate an SSH key pair.                                            |
 | `GET`,`POST`            | `/api/v1/settings`                    | `settings.manage`      | Read / patch the entire settings document.                           |
 | `GET`                   | `/api/v1/cluster/status`              | `settings.manage`      | Runtime cluster role, quorum, leader and visible alan peers.         |
+| `POST`                  | `/api/v1/public-endpoints/test-rules` | `settings.manage`      | Dry-run draft Endpoints request rules and return a rule/action trace.|
 | `GET`,`POST`            | `/api/v1/backup[/info]`               | `settings.manage`      | Export / inspect / import a full backup archive.                     |
 | `GET`,`PUT`,`DELETE`    | `/api/v1/raw/{prefix}/{path}`         | `raw.read`/`write`     | Raw FS browsing (UI, session-auth side).                             |
 | `POST`                  | `/api/v1/raw-mkdir/{prefix}/{path}`   | `raw.write`            | Create a folder on a raw mount.                                      |

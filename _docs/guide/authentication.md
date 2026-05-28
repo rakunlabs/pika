@@ -47,7 +47,7 @@ Pass the token as a `Bearer` token:
 
 ```sh
 curl -H "Authorization: Bearer pika_..." \
-  http://localhost:8080/data/myapp/config
+  https://localhost:8080/data/myapp/config
 ```
 
 Token scope syntax and matching rules are documented in detail under [Tokens & scopes](/reference/tokens-and-scopes).
@@ -70,13 +70,17 @@ When any external strategy is enabled, pika uses a **session-first** approach:
 
 Local login always works — even when external auth is on. The `/api/v1/info` endpoint is always public so the SPA can boot and show the login screen regardless of the external strategy's redirect behaviour.
 
+For OAuth2/OIDC providers, configure the provider's Authorization URL and Token URL explicitly. Configure UserInfo URL when the provider exposes one; pika then reads identity claims from that endpoint with the upstream access token. Without UserInfo URL, pika falls back to token claims. The upstream access token is only used for that check and is revoked best-effort afterwards. pika then issues its own session token.
+
+OAuth2 providers are fail-closed by default: an incoming `(provider, subject)` must already be linked to a pika user, or match an existing verified email when email auto-linking is enabled. Enable **Auto-create users** on a provider if unknown identities should create external-only pika users at first login. Username selection for those users is `preferred_username`, then email local-part, then a subject-based fallback.
+
 ::: tip
 Strategies are hot-swapped via an [ada Slot](https://rakunlabs.github.io/ada/guide/runtime-reload.html). Toggling them on/off, changing the OIDC client secret, or adjusting LDAP filters does not require a restart.
 :::
 
 ## External permissions
 
-Externally-authenticated users don't get rows in the local `users` table. By default they have **no enforced permission checks** — pika trusts the upstream IdP / gateway.
+Externally-authenticated users can be linked to local `users` rows by user sync, verified email auto-linking, or OAuth2 auto-create. If no row is linked, they have **no enforced permission checks** beyond declarative role/scope mappings and the superadmin allowlist.
 
 Enable enforcement under **Settings → Authentication → Permissions**, then map external groups (or OAuth2 scopes) to pika capabilities:
 
@@ -95,14 +99,16 @@ For LDAP, pika can periodically reconcile local user metadata against the direct
 
 - Browse the configured `UserBaseDN` with `UserFilter`.
 - For each entry, create-or-update a local user (idempotent).
-- Apply group → permission mappings from the source's `GroupPermissions`.
+- Apply group → permission mappings from the source's `GroupPermissions`. Groups can come from a user attribute such as `memberOf`, or from separate group searches that read entries such as `cn + uniqueMember` and extract `uid` from member DNs.
 - Reconcile missing users per the source's `OnMissing` policy (`disable` by default, or `ignore`).
+
+LDAP login can also run this sync just-in-time. Enable **Auto-create users** on the LDAP strategy and point it at a User Sync source; first login for an unknown LDAP identity creates the external user and applies the same group-derived permissions as a full sync.
 
 User sync is configured under **Settings → Authentication → User sync**. You can also trigger a one-shot run via:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/api/v1/user-sync/run/<source-id>
+  https://localhost:8080/api/v1/user-sync/run/<source-id>
 ```
 
 …and inspect the last result with `GET /api/v1/user-sync/status`.

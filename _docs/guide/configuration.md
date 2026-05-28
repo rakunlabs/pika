@@ -2,8 +2,8 @@
 
 Pika has two layers of configuration:
 
-1. **Process-level config** — supplied at startup via environment variables or a YAML file. This covers things that must be known before the HTTP server is up: the listen port, the storage path, the cluster membership, and the encryption key.
-2. **Runtime settings** — stored in the database and edited from the **Settings** pages of the UI. This covers everything else: authentication strategies, external resources, hooks, public-port compatibility endpoints, and so on. Changes apply without restarting.
+1. **Process-level config** — supplied at startup via environment variables or a YAML file. This covers things that must be known before the server is up: the listen port, TLS file paths, the storage path, and cluster membership.
+2. **Runtime settings** — stored in the database and edited from the **Settings** pages of the UI. This covers everything else: certificate rotation, HTTP fallback policy, authentication strategies, external resources, hooks, public-port compatibility endpoints, and so on. Changes apply without restarting unless noted.
 
 This page documents the first layer.
 
@@ -14,8 +14,11 @@ The most common variables. All env vars use the `PIKA_` prefix and `_` for nesti
 | Variable                     | Default            | Description                                          |
 | ---------------------------- | ------------------ | ---------------------------------------------------- |
 | `PIKA_SERVER_HOST`           | _(all interfaces)_ | Bind address for the admin server.                   |
-| `PIKA_SERVER_PORT`           | `8080`             | Listen port (admin UI + authenticated `/data/*`).    |
+| `PIKA_SERVER_PORT`           | `8080`             | Listen port (HTTPS admin UI + authenticated `/data/*`). |
 | `PIKA_SERVER_BASE_PATH`      | `/`                | Base URL path — set when running behind a sub-path.  |
+| `PIKA_SERVER_TLS_ENABLED`    | `true`             | Enable HTTPS support on the main listener.           |
+| `PIKA_SERVER_TLS_CERT_FILE`  | `data/pika/tls/server.crt` | PEM certificate path.                       |
+| `PIKA_SERVER_TLS_KEY_FILE`   | `data/pika/tls/server.key` | PEM private key path.                       |
 | `PIKA_STORAGE_BW_PATH`       | `data/pika`        | Embedded BadgerDB directory.                         |
 | `PIKA_LOG_LEVEL`             | `info`             | `debug`, `info`, `warn`, or `error`.                 |
 | `PIKA_CLUSTER_ENABLED`       | `false`            | Enable clustering.                                   |
@@ -37,13 +40,17 @@ server:
   host: ""
   port: "8080"
   base_path: /
+  tls:
+    enabled: true
+    cert_file: /data/pika/tls/server.crt
+    key_file: /data/pika/tls/server.key
   auth:
     session_ttl: 24h
     cookie:
       name: pika_session
       domain: ""
       path: /
-      secure: true        # set true behind HTTPS
+      secure: true        # recommended for HTTPS deployments
       same_site: lax      # lax | strict | none
 
 storage:
@@ -79,9 +86,20 @@ telemetry:
 Most production deployments only set a handful of these. The Docker Compose example in [Installation](./installation) uses just `PIKA_LOG_LEVEL`. The at-rest encryption key is entered through the UI after every start; see [Encryption](./encryption).
 :::
 
+## HTTPS
+
+The main UI/API listener serves HTTPS by default. If no certificate exists at startup, Pika creates a self-signed ECDSA certificate under the storage directory and uses it immediately. Manage the active certificate from **Settings → Certificates**:
+
+- Generate a replacement self-signed certificate with custom DNS/IP SANs.
+- Upload a PEM certificate chain and matching private key.
+- Allow plaintext HTTP on the same main port when running behind a trusted TLS-terminating proxy.
+- Disable HTTPS from the UI only when plaintext HTTP is enabled, to avoid locking yourself out.
+
+Set `server.tls.enabled: false` only when you want the process to be HTTP-only from startup.
+
 ## Endpoints
 
-Pika can expose additional HTTP listeners that serve configuration data in operator-chosen wire shapes — either a Consul KV-compatible read API or a custom Go-template response. Each endpoint binds its own `host:port`, owns its own auth setting, can run an optional request-check stage, and is configured at runtime from **Settings → Endpoints**.
+Pika can expose additional listeners that serve configuration data in operator-chosen wire shapes — either a Consul KV-compatible read API or a custom Go-template response. Each endpoint binds its own `host:port`, owns its own auth setting, can run HTTPS using the managed certificate, can run an optional request-check stage, and is configured at runtime from **Settings → Endpoints**.
 
 See [Endpoints](/reference/compat) for the wire format, template variables, and authentication options.
 
@@ -94,7 +112,7 @@ server:
   auth:
     session_ttl: 24h
     cookie:
-      secure: true         # required when serving over HTTPS
+      secure: true         # recommended for HTTPS deployments
       same_site: lax       # use 'none' if your UI is on a different origin
 ```
 
@@ -107,7 +125,7 @@ server:
   base_path: /pika
 ```
 
-Pika rewrites internal links and SPA routing accordingly. Make sure your proxy forwards the original `Host` header.
+Pika rewrites internal links and SPA routing accordingly. Use a leading slash and no trailing slash; `/pika/` is normalized to `/pika`. If your proxy strips the prefix before forwarding to Pika, leave `server.base_path` unset. Make sure your proxy forwards the original `Host` header.
 
 ## CLI
 

@@ -5,7 +5,7 @@ import type {
 } from '@/lib/types/config';
 import { addToast } from '@/lib/store/toast.svelte';
 import { appStore } from '@/lib/store/store.svelte';
-import { basePath } from '@/lib/basepath';
+import { withBasePath } from '@/lib/basepath';
 import axios from 'axios';
 
 // Helper to decode base64 data (supports Unicode)
@@ -646,7 +646,7 @@ function createConfigStore() {
     const params = new URLSearchParams({ q: query.trim() });
     if (searchMode === 'name') params.set('mode', 'name');
 
-    const eventSource = new EventSource(`${basePath}/api/v1/search?${params.toString()}`);
+    const eventSource = new EventSource(withBasePath(`/api/v1/search?${params.toString()}`));
 
     // Handle abort — close the connection
     controller.signal.addEventListener('abort', () => {
@@ -758,6 +758,27 @@ function createConfigStore() {
     }
   }
 
+  async function saveServerTLSSettings(
+    patch: import('@/lib/types/config').ServerTLSSettings,
+  ): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', {
+        action: 'set',
+        server_tls: patch,
+      });
+      if (settings) {
+        settings = { ...settings, server_tls: patch };
+      } else {
+        settings = { server_tls: patch };
+      }
+      addToast('HTTPS settings saved', 'success');
+    } catch (error: any) {
+      const msg = error.response?.data?.message || 'Failed to save HTTPS settings';
+      addToast(msg, 'alert');
+      throw error;
+    }
+  }
+
   async function saveHooks(hooks: import('@/lib/types/config').Hook[]): Promise<void> {
     try {
       await axios.post('/api/v1/settings', {
@@ -817,7 +838,7 @@ function createConfigStore() {
     }
   }
 
-  // savePublicEndpoints persists the desired list of public-port
+  // savePublicEndpoints persists the desired list of extra listener
   // compatibility / custom-modifier endpoints. Full-replace
   // semantics: the backend takes the submitted array verbatim and
   // reconciles its live listeners against it (Hooks-style).
@@ -834,9 +855,9 @@ function createConfigStore() {
       } else {
         settings = { public_endpoints: endpoints };
       }
-      addToast('Public endpoints saved', 'success');
+      addToast('Endpoints saved', 'success');
     } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to save public endpoints';
+      const msg = error.response?.data?.message || 'Failed to save endpoints';
       addToast(msg, 'alert');
       throw error;
     }
@@ -870,6 +891,19 @@ function createConfigStore() {
     },
   ): Promise<import('@/lib/types/config').PublicEndpointTestResult> {
     const response = await axios.post(`/api/v1/public-endpoints/${id}/test`, req);
+    return response.data;
+  }
+
+  // testPublicEndpointRules dry-runs a draft request_check block
+  // through the backend's real Go evaluator. The endpoint does not
+  // need to be saved first, which keeps the modal edit loop safe.
+  async function testPublicEndpointRules(req: {
+    request_check: import('@/lib/types/config').RequestCheck;
+    method?: string;
+    path: string;
+    headers?: Record<string, string>;
+  }): Promise<import('@/lib/types/config').RequestRuleTestResult> {
+    const response = await axios.post('/api/v1/public-endpoints/test-rules', req);
     return response.data;
   }
 
@@ -1375,6 +1409,7 @@ function createConfigStore() {
     loadSettings,
     saveSettings,
     saveVaultSettings,
+    saveServerTLSSettings,
     saveHooks,
     saveEventLogSettings,
     saveUserSync,
@@ -1384,6 +1419,7 @@ function createConfigStore() {
     savePublicEndpoints,
     listPublicEndpointStatus,
     testPublicEndpoint,
+    testPublicEndpointRules,
     listExternalPaths,
     searchExternal,
     testExternal,

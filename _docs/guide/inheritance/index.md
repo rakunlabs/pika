@@ -96,5 +96,5 @@ The same data is available programmatically via:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/api/v1/render/myapp/config
+  https://localhost:8080/api/v1/render/myapp/config
 ```

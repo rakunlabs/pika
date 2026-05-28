@@ -107,13 +107,15 @@ func buildFixture() *service.Settings {
 			OAuth2: []service.OAuth2StrategySettings{
 				{
 					Name:         "google",
-					IssuerURL:    "https://accounts.google.com",
+					AuthURL:      "https://accounts.google.com/o/oauth2/v2/auth",
+					TokenURL:     "https://oauth2.googleapis.com/token",
 					ClientID:     "google-client-id",
 					ClientSecret: "google-client-secret",
 				},
 				{
 					Name:         "github",
-					IssuerURL:    "https://github.com",
+					AuthURL:      "https://github.com/login/oauth/authorize",
+					TokenURL:     "https://github.com/login/oauth/access_token",
 					ClientID:     "gh-client-id",
 					ClientSecret: "gh-client-secret",
 				},

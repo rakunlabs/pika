@@ -36,7 +36,7 @@ Every save bumps the version number (`1`, `2`, `3`, …). Old versions are kept 
 
 ```sh
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/data/myapp/config?version=3
+  https://localhost:8080/data/myapp/config?version=3
 ```
 
 Versions can also be **tagged with a semver constraint** (e.g. `>= 0.1.0`) so consumers can request a config that matches their own application version. See [Versions & variants](./versions-variants) for the details.

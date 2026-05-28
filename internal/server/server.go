@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
+	"net/http"
 
 	"github.com/rakunlabs/ada"
 
@@ -80,9 +80,16 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		server.Use(lockgate.Middleware(encStore.KeyManager(), cfg.Server.BasePath))
 	}
 
-	mData := server.Group(cfg.Server.BasePath)
-	m := server.Group(cfg.Server.BasePath)
-	mAuth := server.Group(cfg.Server.BasePath)
+	basePath := cfg.Server.BasePath
+	mData := server.Group(basePath)
+	m := server.Group(basePath)
+	mAuth := server.Group(basePath)
+	if basePath != "" {
+		server.GET("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("OK"))
+		})
+	}
 
 	// --- Authentication setup via authx.Manager ---
 
@@ -103,7 +110,7 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	mgr := authx.New(authx.Deps{
 		Svc:          svc,
 		SessionStore: authx.NewSessionStore(svc, cookieName(authSettings)),
-		BasePath:     cfg.Server.BasePath + "/",
+		BasePath:     authBasePath(basePath),
 		CookieName:   cookieName(authSettings),
 		// Version comes from build-time ldflags (cmd/pika/main.go),
 		// not from settings — so the login UI shows the real binary
@@ -123,10 +130,10 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	}
 	rlSettings = rlSettings.WithDefaults()
 	trustedProxies := authx.ParseCIDRs(rlSettings.TrustedProxyCIDRs)
-	mAuth.Use(authx.LoginGuard(rlSettings, trustedProxies))
+	mLogin := server.Group("", authx.LoginGuard(rlSettings, trustedProxies))
 
 	// Mount /login/* and /logout on the unprotected group.
-	mgr.Mount(mAuth)
+	mgr.Mount(mLogin)
 
 	// Protected group: require auth + resolve capabilities.
 	m.Use(mgr.Require(), mgr.CapMiddleware())
@@ -137,9 +144,16 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	// reload hook can reach into it; the initial Reload happens
 	// once the API is in place, mirroring the user-sync scheduler
 	// boot sequence.
-	peMgr := publicendpoint.New(ctx, svc, slog.Default())
+	tlsMgr := newTLSManager(cfg)
+	if cfg.Server.TLS.Enabled {
+		if err := tlsMgr.EnsureSelfSigned(); err != nil {
+			return fmt.Errorf("prepare TLS certificate: %w", err)
+		}
+	}
 
-	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, dispatcher, cl, peMgr); err != nil {
+	peMgr := publicendpoint.New(ctx, svc, slog.Default(), tlsMgr)
+
+	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, dispatcher, cl, peMgr, tlsMgr); err != nil {
 		return err
 	}
 
@@ -177,5 +191,12 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 		}
 	}
 
-	return server.StartWithContext(ctx, net.JoinHostPort(cfg.Server.Host, cfg.Server.Port))
+	return startAppServer(ctx, server, cfg, svc, tlsMgr)
+}
+
+func authBasePath(basePath string) string {
+	if basePath == "" {
+		return "/"
+	}
+	return basePath + "/"
 }
