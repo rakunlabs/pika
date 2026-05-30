@@ -24,11 +24,23 @@ docker run -d --name pika -v pika:/data -p 8080:8080 ghcr.io/rakunlabs/pika:late
 
 Open <https://localhost:8080>, accept the first-start self-signed certificate, create the initial admin account, and you have a working server.
 
-To consume a config, create a file in the UI, then mint an API token under **Settings → Tokens** and read it:
+![Initial admin setup screen](/screenshots/pika-first-run.png)
+
+To consume a config, create a file in the UI, then mint an API token under **Settings > Access Tokens** and read it:
 
 ```sh
 curl -H "Authorization: Bearer pika_..." https://localhost:8080/data/myapp/config
 ```
+
+## Web UI walkthrough
+
+After signing in, the **Configurations** page shows a file tree, a format-aware editor, and file settings in one workspace. The right panel exposes the resolved data endpoint, version history, variants, inheritance, and metadata for the open file.
+
+![Configuration editor with a YAML file open](/screenshots/pika-config-editor.png)
+
+For applications and automation, create scoped tokens under **Settings > Access Tokens**. A read-only scope such as `myapp/**` lets the token read every config below `myapp/` while keeping unrelated paths blocked.
+
+![Access token form with a read-only scope](/screenshots/pika-token-scopes.png)
 
 ## Where to go next
 

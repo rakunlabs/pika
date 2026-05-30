@@ -8,7 +8,9 @@ API tokens authenticate non-human consumers against `/data/*` (resolved configs)
 pika_<64-hex-characters>
 ```
 
-Tokens are minted under **Settings → Tokens**. They're shown once at creation time and stored hashed afterwards — copy them immediately.
+Tokens are minted under **Settings > Access Tokens**. They're shown once at creation time and stored hashed afterwards — copy them immediately.
+
+![Access token form with a read-only scope](/screenshots/pika-token-scopes.png)
 
 Pass tokens via the `Authorization` header:
 
