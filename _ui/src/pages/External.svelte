@@ -215,10 +215,25 @@
         selectedResource,
         prefix,
       );
-      pathTree = { ...pathTree, [prefix]: children || [] };
+      pathTree = { ...pathTree, [prefix]: sortChildren(prefix, children || []) };
     } finally {
       pathTreeLoading = { ...pathTreeLoading, [prefix]: false };
     }
+  }
+
+  // Order a prefix's children folders-first, then files, each group
+  // sorted alphabetically (numeric-aware, case-insensitive). isFolder
+  // needs the full path, so we recombine prefix + child for the test.
+  function sortChildren(prefix: string, children: string[]): string[] {
+    return [...children].sort((a, b) => {
+      const aFolder = isFolder(prefix + a);
+      const bFolder = isFolder(prefix + b);
+      if (aFolder !== bFolder) return aFolder ? -1 : 1;
+      return a.localeCompare(b, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+    });
   }
 
   // A node is a folder if its name ends with "/" (Vault/Consul/etcd

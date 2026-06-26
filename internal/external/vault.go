@@ -334,6 +334,13 @@ func (vc *VaultClient) ReadSecret(ctx context.Context, secretPath string) (map[s
 		// the token so the next call re-authenticates; if it persists the
 		// AppRole policy likely doesn't grant read on this exact path
 		// (KV v2 reads use "<mount>/data/<path>", not the bare mount).
+		slog.Warn("vault: permission denied (token authenticated but policy lacks access)",
+			"address", vc.address,
+			"operation", "read",
+			"method", http.MethodGet,
+			"path", secretPath,
+			"status", resp.StatusCode,
+			"response", string(respBody))
 		vc.mu.Lock()
 		vc.token = ""
 		vc.tokenExpAt = time.Time{}
@@ -402,11 +409,18 @@ func (vc *VaultClient) ListSecrets(ctx context.Context, listPath string) ([]stri
 	}
 
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		slog.Warn("vault: permission denied (token authenticated but policy lacks access)",
+			"address", vc.address,
+			"operation", "list",
+			"method", "LIST",
+			"path", listPath,
+			"status", resp.StatusCode,
+			"response", string(respBody))
 		vc.mu.Lock()
 		vc.token = ""
 		vc.tokenExpAt = time.Time{}
 		vc.mu.Unlock()
-		return nil, fmt.Errorf("vault returned HTTP %d on list: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("vault returned HTTP %d on list of %q (permission denied — KV v2 lists use <mount>/metadata/<path>): %s", resp.StatusCode, listPath, string(respBody))
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -477,11 +491,18 @@ func (vc *VaultClient) WriteSecret(ctx context.Context, secretPath string, body 
 	respBody, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		slog.Warn("vault: permission denied (token authenticated but policy lacks access)",
+			"address", vc.address,
+			"operation", "write",
+			"method", http.MethodPost,
+			"path", secretPath,
+			"status", resp.StatusCode,
+			"response", string(respBody))
 		vc.mu.Lock()
 		vc.token = ""
 		vc.tokenExpAt = time.Time{}
 		vc.mu.Unlock()
-		return fmt.Errorf("vault returned HTTP %d on write: %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("vault returned HTTP %d on write of %q: %s", resp.StatusCode, secretPath, string(respBody))
 	}
 	// 200 = KV v2 (returns metadata), 204 = KV v1 (no body).
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
@@ -521,11 +542,18 @@ func (vc *VaultClient) DeleteSecret(ctx context.Context, secretPath string) erro
 	respBody, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		slog.Warn("vault: permission denied (token authenticated but policy lacks access)",
+			"address", vc.address,
+			"operation", "delete",
+			"method", http.MethodDelete,
+			"path", secretPath,
+			"status", resp.StatusCode,
+			"response", string(respBody))
 		vc.mu.Lock()
 		vc.token = ""
 		vc.tokenExpAt = time.Time{}
 		vc.mu.Unlock()
-		return fmt.Errorf("vault returned HTTP %d on delete: %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("vault returned HTTP %d on delete of %q: %s", resp.StatusCode, secretPath, string(respBody))
 	}
 	// 204 = success, 404 = already gone (idempotent).
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
