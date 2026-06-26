@@ -107,6 +107,14 @@ export interface SearchResult {
 //  - 'name' : path matches only, no file contents are ever read (faster, safer)
 export type SearchMode = 'all' | 'name';
 
+// Outbound proxy selection for an external resource.
+//  - "environment": honour the server's HTTP_PROXY/HTTPS_PROXY/NO_PROXY.
+//  - "none":        force a direct connection, ignoring any env proxy.
+//  - "custom":      route through the explicit `proxy` URL.
+// Absent ≡ "environment" (or "custom" when only a legacy `proxy` URL
+// is present), matching the server's resolveProxyMode defaulting.
+export type ProxyMode = "environment" | "none" | "custom";
+
 // Vault AppRole authentication
 export interface VaultAppRole {
   role_id: string;
@@ -117,12 +125,16 @@ export interface VaultAppRole {
 // Vault external resource configuration
 export interface VaultConfig {
   address: string;
-  mount: string;         // KV secrets engine mount (e.g., "secret")
+  mount: string;         // KV secrets engine mount (e.g., "secret" or "finops/kv2")
+  // KV secrets-engine version (1 or 2). v2 builds "<mount>/data/<path>"
+  // (and "<mount>/metadata/<path>" for list/versions); v1 uses
+  // "<mount>/<path>" directly. Absent ≡ v2 (the server default).
+  kv_version?: number;
   token?: string;
   app_role?: VaultAppRole;
-  // Optional outbound proxy URL. Empty falls back to the
-  // HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment variables.
+  // Outbound proxy URL (used when proxy_mode is "custom").
   proxy?: string;
+  proxy_mode?: ProxyMode;
 }
 
 // Kubernetes external resource configuration.
@@ -130,14 +142,16 @@ export interface VaultConfig {
 export interface KubernetesConfig {
   kubeconfig?: string;          // path to kubeconfig file on the pika server
   kubeconfig_content?: string;  // full kubeconfig YAML, pasted directly
-  proxy?: string;               // optional outbound proxy URL (empty = env proxy)
+  proxy?: string;               // outbound proxy URL (used when proxy_mode = "custom")
+  proxy_mode?: ProxyMode;
 }
 
 // Consul external resource configuration
 export interface ConsulConfig {
   address: string;
   token?: string;
-  proxy?: string;  // optional outbound proxy URL (empty = env proxy)
+  proxy?: string;
+  proxy_mode?: ProxyMode;
 }
 
 // etcd external resource configuration
@@ -145,7 +159,8 @@ export interface EtcdConfig {
   address: string;
   username?: string;
   password?: string;
-  proxy?: string;  // optional outbound proxy URL (empty = env proxy)
+  proxy?: string;
+  proxy_mode?: ProxyMode;
 }
 
 // AWS external resource configuration (Secrets Manager or SSM)
@@ -154,7 +169,8 @@ export interface AWSConfig {
   access_key: string;
   secret_key: string;
   service: string;  // "secretsmanager" or "ssm"
-  proxy?: string;   // optional outbound proxy URL (empty = env proxy)
+  proxy?: string;
+  proxy_mode?: ProxyMode;
 }
 
 // GCP Secret Manager external resource configuration.
@@ -174,8 +190,9 @@ export interface GCPConfig {
   // HTTP Content-Type applied by raw mode. Empty ≡ server default
   // ("application/yaml"). Ignored when raw_value is false.
   content_type?: string;
-  // Optional outbound proxy URL (empty = env proxy).
+  // Outbound proxy URL (used when proxy_mode is "custom").
   proxy?: string;
+  proxy_mode?: ProxyMode;
 }
 
 // GCP Parameter Manager external resource configuration. Location
@@ -184,7 +201,8 @@ export interface GCPConfig {
 export interface GCPParameterConfig {
   service_account_json: string;
   location?: string;
-  proxy?: string;  // optional outbound proxy URL (empty = env proxy)
+  proxy?: string;
+  proxy_mode?: ProxyMode;
 }
 
 // Azure Key Vault external resource configuration
@@ -193,7 +211,8 @@ export interface AzureConfig {
   tenant_id: string;
   client_id: string;
   client_secret: string;
-  proxy?: string;  // optional outbound proxy URL (empty = env proxy)
+  proxy?: string;
+  proxy_mode?: ProxyMode;
 }
 
 // External resource for inheritance

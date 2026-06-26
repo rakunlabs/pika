@@ -32,12 +32,11 @@ type VaultClient struct {
 }
 
 // NewVaultClient creates a new Vault client for the given address.
-// proxy is an optional outbound proxy URL; empty uses the environment
-// proxy (see newHTTPClient).
-func NewVaultClient(address, proxy string) *VaultClient {
+// proxyMode/proxy control outbound proxy selection (see newHTTPClient).
+func NewVaultClient(address, proxyMode, proxy string) *VaultClient {
 	return &VaultClient{
 		address:    strings.TrimRight(address, "/"),
-		httpClient: newHTTPClient(proxy, nil),
+		httpClient: newHTTPClient(proxyMode, proxy, nil),
 	}
 }
 
@@ -331,12 +330,15 @@ func (vc *VaultClient) ReadSecret(ctx context.Context, secretPath string) (map[s
 	}
 
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
-		// Token may have been revoked — clear it so next call re-authenticates
+		// 401/403 = permission denied or an invalid/expired token. Clear
+		// the token so the next call re-authenticates; if it persists the
+		// AppRole policy likely doesn't grant read on this exact path
+		// (KV v2 reads use "<mount>/data/<path>", not the bare mount).
 		vc.mu.Lock()
 		vc.token = ""
 		vc.tokenExpAt = time.Time{}
 		vc.mu.Unlock()
-		return nil, fmt.Errorf("vault returned HTTP %d (token may be expired): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("vault returned HTTP %d for %q (permission denied — verify the AppRole policy grants read on this path; KV v2 reads use <mount>/data/<path>): %s", resp.StatusCode, secretPath, string(respBody))
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
@@ -727,7 +729,7 @@ func (p *VaultProvider) Validate() error {
 			return fmt.Errorf("vault: app_role.role_id and app_role.secret_id are required")
 		}
 	}
-	if err := validateProxy(p.Config.Proxy); err != nil {
+	if err := validateProxyConfig(p.Config.ProxyMode, p.Config.Proxy); err != nil {
 		return fmt.Errorf("vault: %w", err)
 	}
 	return nil
@@ -736,14 +738,7 @@ func (p *VaultProvider) Validate() error {
 func (p *VaultProvider) Fetch(ctx context.Context, path string) ([]byte, error) {
 	client := p.Deps.VaultClient(ctx, p.Config)
 
-	mount := p.Config.Mount
-	var secretPath string
-	if path != "" {
-		secretPath = strings.TrimRight(mount, "/") + "/" + strings.TrimLeft(path, "/")
-	} else {
-		secretPath = mount
-	}
-
+	secretPath := p.dataPath(path)
 	data, err := client.ReadSecret(ctx, secretPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading vault secret at %q: %w", secretPath, err)
@@ -756,31 +751,12 @@ func (p *VaultProvider) Fetch(ctx context.Context, path string) ([]byte, error) 
 	return jsonBytes, nil
 }
 
-// List enumerates secrets under the mount, trying KV v2 metadata first
-// and falling back to KV v1 layout. The two-tier strategy mirrors the
-// pre-refactor behaviour so existing installs see no change.
+// List enumerates secrets under the mount. The path layout is driven by
+// the configured KV version (no probing): v2 lists "<mount>/metadata/",
+// v1 lists "<mount>/" directly.
 func (p *VaultProvider) List(ctx context.Context, prefix string) ([]string, error) {
 	client := p.Deps.VaultClient(ctx, p.Config)
-	mount := p.Config.Mount
-
-	listPath := strings.TrimRight(mount, "/") + "/metadata/"
-	if prefix != "" {
-		listPath += strings.TrimLeft(prefix, "/")
-	}
-
-	keys, err := client.ListSecrets(ctx, listPath)
-	if err != nil {
-		// Retry as KV v1 (direct mount, no /metadata/ segment).
-		listPath = strings.TrimRight(mount, "/") + "/"
-		if prefix != "" {
-			listPath += strings.TrimLeft(prefix, "/")
-		}
-		keys, err = client.ListSecrets(ctx, listPath)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return keys, nil
+	return client.ListSecrets(ctx, p.listPath(prefix))
 }
 
 func (p *VaultProvider) Test(ctx context.Context) TestResult {
@@ -795,24 +771,28 @@ func (p *VaultProvider) Test(ctx context.Context) TestResult {
 	return TestResult{OK: true, Message: msg, Sample: capSample(paths, 10)}
 }
 
-// kvDataPath assembles the Vault API path for a single secret. KV v2
-// secrets live under /data/, v1 secrets directly under the mount. We
-// try v2 first by default — operators on v1 mounts will see the read
-// fail with a not-found and the browser falls back to the v1 layout
-// transparently via Fetch (which already handles the discrepancy).
-func (p *VaultProvider) kvDataPath(path string) string {
+// dataPath assembles the Vault API path for reading/writing a single
+// secret. KV v2 secrets live under "<mount>/data/<path>"; KV v1 secrets
+// sit directly under the mount. The KV version comes from the resource
+// config (Vault.KVVersion) — there is no probing or fallback.
+func (p *VaultProvider) dataPath(path string) string {
 	mount := strings.TrimRight(p.Config.Mount, "/")
-	if path == "" {
-		return mount + "/data"
+	if p.Config.IsKVv2() {
+		if path == "" {
+			return mount + "/data"
+		}
+		return mount + "/data/" + strings.TrimLeft(path, "/")
 	}
-	return mount + "/data/" + strings.TrimLeft(path, "/")
+	if path == "" {
+		return mount
+	}
+	return mount + "/" + strings.TrimLeft(path, "/")
 }
 
-// kvMetadataPath is the metadata endpoint for KV v2 (version history
-// and destructive delete-all). v1 has no equivalent — callers should
-// branch on Capabilities (or just accept the not-found that comes
-// back if they call this against a v1 mount).
-func (p *VaultProvider) kvMetadataPath(path string) string {
+// metadataPath is the KV v2 metadata endpoint (version history and
+// destructive delete-all). Only meaningful on v2 mounts; callers gate
+// on Vault.IsKVv2 before using it.
+func (p *VaultProvider) metadataPath(path string) string {
 	mount := strings.TrimRight(p.Config.Mount, "/")
 	if path == "" {
 		return mount + "/metadata"
@@ -820,24 +800,25 @@ func (p *VaultProvider) kvMetadataPath(path string) string {
 	return mount + "/metadata/" + strings.TrimLeft(path, "/")
 }
 
-// Read returns the latest version of a secret as an Entry. We try the
-// KV v2 /data/ path first; if it 404s we retry against the bare mount
-// path (KV v1). This is consistent with what Fetch does internally
-// and lets the browser work against both KV layouts without asking
-// the operator to declare it.
+// listPath is the LIST endpoint: "<mount>/metadata/<prefix>" for KV v2,
+// "<mount>/<prefix>" for KV v1.
+func (p *VaultProvider) listPath(prefix string) string {
+	mount := strings.TrimRight(p.Config.Mount, "/")
+	base := mount + "/"
+	if p.Config.IsKVv2() {
+		base = mount + "/metadata/"
+	}
+	if prefix != "" {
+		base += strings.TrimLeft(prefix, "/")
+	}
+	return base
+}
+
+// Read returns the latest version of a secret as an Entry. The path
+// layout is determined by the configured KV version (no fallback).
 func (p *VaultProvider) Read(ctx context.Context, path string) (*Entry, error) {
 	client := p.Deps.VaultClient(ctx, p.Config)
-	// Try KV v2 layout first.
-	data, err := client.ReadSecret(ctx, p.kvDataPath(path))
-	if err != nil && strings.Contains(err.Error(), "not found") {
-		// Fall back to KV v1 (no /data/ segment).
-		mount := strings.TrimRight(p.Config.Mount, "/")
-		v1Path := mount
-		if path != "" {
-			v1Path = mount + "/" + strings.TrimLeft(path, "/")
-		}
-		data, err = client.ReadSecret(ctx, v1Path)
-	}
+	data, err := client.ReadSecret(ctx, p.dataPath(path))
 	if err != nil {
 		return nil, err
 	}
@@ -845,59 +826,38 @@ func (p *VaultProvider) Read(ctx context.Context, path string) (*Entry, error) {
 	return &Entry{Data: data, Raw: raw, ContentType: "application/json"}, nil
 }
 
-// Write puts a new value at the path. The KV v2 API requires the body
-// to be wrapped as {"data": {...}}; v1 takes the map at the top level.
-// We try v2 first; on 404/400 we retry as v1. Vault returns 404 when
-// the *path* doesn't exist; for v1 mounts the first write actually
-// returns 204 so the v2 attempt's 404 is the right signal.
+// Write puts a new value at the path. KV v2 requires the body wrapped as
+// {"data": {...}} and posts to "<mount>/data/<path>"; KV v1 posts the
+// raw map to "<mount>/<path>". The version comes from config (no probing).
 func (p *VaultProvider) Write(ctx context.Context, path string, data map[string]any) error {
 	client := p.Deps.VaultClient(ctx, p.Config)
-
-	// KV v2 attempt.
-	v2Body := map[string]any{"data": data}
-	if err := client.WriteSecret(ctx, p.kvDataPath(path), v2Body); err == nil {
-		return nil
-	} else if !strings.Contains(err.Error(), "HTTP 404") && !strings.Contains(err.Error(), "HTTP 405") {
-		// Real error (auth/perm/etc.) — surface it.
-		return err
+	if p.Config.IsKVv2() {
+		return client.WriteSecret(ctx, p.dataPath(path), map[string]any{"data": data})
 	}
-
-	// KV v1 fallback.
-	mount := strings.TrimRight(p.Config.Mount, "/")
-	v1Path := mount + "/" + strings.TrimLeft(path, "/")
-	return client.WriteSecret(ctx, v1Path, data)
+	return client.WriteSecret(ctx, p.dataPath(path), data)
 }
 
-// Delete soft-deletes the latest version under KV v2 (use /metadata/
-// to destroy all versions) and outright removes under v1. We attempt
-// v2 first, fall through to v1 on the same not-found signal Write
-// uses.
+// Delete removes a secret. On KV v2 a DELETE to "<mount>/data/<path>"
+// soft-deletes the latest version (use /metadata/ to destroy all
+// versions); on KV v1 it removes the key outright. dataPath returns the
+// bare mount path for v1, so a single call covers both.
 func (p *VaultProvider) Delete(ctx context.Context, path string) error {
 	client := p.Deps.VaultClient(ctx, p.Config)
-
-	// v2: DELETE /data/ soft-deletes latest version.
-	if err := client.DeleteSecret(ctx, p.kvDataPath(path)); err == nil {
-		return nil
-	} else if !strings.Contains(err.Error(), "HTTP 404") && !strings.Contains(err.Error(), "HTTP 405") {
-		return err
-	}
-
-	// v1 fallback.
-	mount := strings.TrimRight(p.Config.Mount, "/")
-	v1Path := mount + "/" + strings.TrimLeft(path, "/")
-	return client.DeleteSecret(ctx, v1Path)
+	return client.DeleteSecret(ctx, p.dataPath(path))
 }
 
-// ListVersions returns the version history for a KV v2 path. On KV v1
-// the metadata endpoint doesn't exist (404) — we translate that into
-// an empty slice so the browser doesn't show a spurious error; the SPA
-// then renders the entry as a single, unversioned record.
+// ListVersions returns the version history for a KV v2 path. Version
+// history is a v2-only concept, so v1 mounts return no versions (the SPA
+// then renders the entry as a single, unversioned record). A 404 on v2
+// (secret has no metadata yet) is likewise treated as "no versions".
 func (p *VaultProvider) ListVersions(ctx context.Context, path string) ([]Version, error) {
+	if !p.Config.IsKVv2() {
+		return nil, nil
+	}
 	client := p.Deps.VaultClient(ctx, p.Config)
-	raws, err := client.ListVersions(ctx, p.kvMetadataPath(path))
+	raws, err := client.ListVersions(ctx, p.metadataPath(path))
 	if err != nil {
-		// 404 from a v1 mount: not an error, just no versions.
-		if strings.Contains(err.Error(), "HTTP 404") || strings.Contains(err.Error(), "HTTP 405") {
+		if strings.Contains(err.Error(), "HTTP 404") {
 			return nil, nil
 		}
 		return nil, err
@@ -915,14 +875,17 @@ func (p *VaultProvider) ListVersions(ctx context.Context, path string) ([]Versio
 }
 
 // ReadVersion fetches a specific historical version. Only meaningful
-// for KV v2; on v1 the underlying call 404s and we surface the error.
+// for KV v2 mounts; v1 has no version history.
 func (p *VaultProvider) ReadVersion(ctx context.Context, path string, version string) (*Entry, error) {
+	if !p.Config.IsKVv2() {
+		return nil, fmt.Errorf("vault: version history is only available on KV v2 mounts")
+	}
 	var ver int
 	if _, err := fmt.Sscanf(version, "%d", &ver); err != nil {
 		return nil, fmt.Errorf("invalid vault version %q: %w", version, err)
 	}
 	client := p.Deps.VaultClient(ctx, p.Config)
-	data, err := client.ReadSecretVersion(ctx, p.kvDataPath(path), ver)
+	data, err := client.ReadSecretVersion(ctx, p.dataPath(path), ver)
 	if err != nil {
 		return nil, err
 	}

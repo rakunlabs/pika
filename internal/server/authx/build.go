@@ -113,7 +113,7 @@ func buildStrategies(d Deps, s *service.AuthSettings, onRegister func()) ([]stra
 	// pika doesn't see the user's IdP password, so adding pika-side
 	// TOTP on top would just inconvenience users without improving
 	// security (the user could just enroll TOTP at the IdP instead).
-	oa2, err := BuildOAuth2(s.OAuth2)
+	oa2, err := BuildOAuth2(s.OAuth2, d.BasePath)
 	if err != nil {
 		return nil, err
 	}

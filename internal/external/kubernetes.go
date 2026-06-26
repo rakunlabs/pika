@@ -45,24 +45,24 @@ type KubeClient struct {
 //  3. otherwise             — use in-cluster config (service account token).
 func NewKubeClient(cfg *Kubernetes) (*KubeClient, error) {
 	if cfg == nil {
-		return newKubeClientInCluster("")
+		return newKubeClientInCluster("", "")
 	}
 	if cfg.KubeconfigContent != "" {
-		return newKubeClientFromKubeconfigBytes([]byte(cfg.KubeconfigContent), cfg.Proxy)
+		return newKubeClientFromKubeconfigBytes([]byte(cfg.KubeconfigContent), cfg.ProxyMode, cfg.Proxy)
 	}
 	if cfg.Kubeconfig != "" {
 		data, err := os.ReadFile(cfg.Kubeconfig)
 		if err != nil {
 			return nil, fmt.Errorf("kubernetes: reading kubeconfig %q: %w", cfg.Kubeconfig, err)
 		}
-		return newKubeClientFromKubeconfigBytes(data, cfg.Proxy)
+		return newKubeClientFromKubeconfigBytes(data, cfg.ProxyMode, cfg.Proxy)
 	}
-	return newKubeClientInCluster(cfg.Proxy)
+	return newKubeClientInCluster(cfg.ProxyMode, cfg.Proxy)
 }
 
 // newKubeClientInCluster creates a client using the service account token and CA cert
 // mounted inside a Kubernetes pod.
-func newKubeClientInCluster(proxy string) (*KubeClient, error) {
+func newKubeClientInCluster(proxyMode, proxy string) (*KubeClient, error) {
 	host := os.Getenv(kubeServiceHostEnv)
 	port := os.Getenv(kubeServicePortEnv)
 	if host == "" || port == "" {
@@ -83,7 +83,7 @@ func newKubeClientInCluster(proxy string) (*KubeClient, error) {
 
 	return &KubeClient{
 		host:       apiHost,
-		httpClient: newHTTPClient(proxy, tlsConfig),
+		httpClient: newHTTPClient(proxyMode, proxy, tlsConfig),
 		token:      string(token),
 		tokenPath:  inClusterTokenPath,
 	}, nil
@@ -126,7 +126,7 @@ type kubeConfigContext struct {
 
 // newKubeClientFromKubeconfigBytes creates a client by parsing a kubeconfig YAML
 // document supplied directly as bytes (read from a file, pasted in the UI, etc.).
-func newKubeClientFromKubeconfigBytes(data []byte, proxy string) (*KubeClient, error) {
+func newKubeClientFromKubeconfigBytes(data []byte, proxyMode, proxy string) (*KubeClient, error) {
 	var cfg kubeConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("kubernetes: parsing kubeconfig: %w", err)
@@ -225,7 +225,7 @@ func newKubeClientFromKubeconfigBytes(data []byte, proxy string) (*KubeClient, e
 	return &KubeClient{
 		host:       strings.TrimRight(server, "/"),
 		token:      token,
-		httpClient: newHTTPClient(proxy, tlsConfig),
+		httpClient: newHTTPClient(proxyMode, proxy, tlsConfig),
 	}, nil
 }
 
@@ -609,7 +609,7 @@ func (p *KubernetesProvider) Validate() error {
 	if p.Config.Kubeconfig != "" && strings.TrimSpace(p.Config.Kubeconfig) == "" {
 		return fmt.Errorf("kubernetes: kubeconfig path cannot be whitespace-only")
 	}
-	if err := validateProxy(p.Config.Proxy); err != nil {
+	if err := validateProxyConfig(p.Config.ProxyMode, p.Config.Proxy); err != nil {
 		return fmt.Errorf("kubernetes: %w", err)
 	}
 	return nil

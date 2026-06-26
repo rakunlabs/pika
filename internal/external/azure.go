@@ -23,11 +23,13 @@ type Azure struct {
 	// ClientSecret is the Azure AD client secret.
 	ClientSecret string `json:"client_secret"`
 
-	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used
-	// for all requests to Azure (AD token endpoint and Key Vault).
-	// Empty falls back to the HTTP_PROXY / HTTPS_PROXY / NO_PROXY
-	// environment variables.
+	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used for
+	// requests to Azure (AD token endpoint and Key Vault). Used when
+	// ProxyMode is "custom".
 	Proxy string `json:"proxy,omitempty"`
+	// ProxyMode selects how the outbound proxy is chosen: "environment"
+	// (default), "none" (force direct), or "custom" (use Proxy).
+	ProxyMode string `json:"proxy_mode,omitempty"`
 }
 
 // AzureKeyVaultClient is a minimal HTTP client for Azure Key Vault.
@@ -44,15 +46,14 @@ type AzureKeyVaultClient struct {
 }
 
 // NewAzureKeyVaultClient creates a new Azure Key Vault client.
-// proxy is an optional outbound proxy URL; empty uses the environment
-// proxy (see newHTTPClient).
-func NewAzureKeyVaultClient(vaultURL, tenantID, clientID, clientSecret, proxy string) *AzureKeyVaultClient {
+// proxyMode/proxy control outbound proxy selection (see newHTTPClient).
+func NewAzureKeyVaultClient(vaultURL, tenantID, clientID, clientSecret, proxyMode, proxy string) *AzureKeyVaultClient {
 	return &AzureKeyVaultClient{
 		vaultURL:     strings.TrimRight(vaultURL, "/"),
 		tenantID:     tenantID,
 		clientID:     clientID,
 		clientSecret: clientSecret,
-		httpClient:   newHTTPClient(proxy, nil),
+		httpClient:   newHTTPClient(proxyMode, proxy, nil),
 	}
 }
 
@@ -286,7 +287,7 @@ func (p *AzureProvider) Validate() error {
 	if strings.TrimSpace(p.Config.TenantID) == "" || strings.TrimSpace(p.Config.ClientID) == "" || strings.TrimSpace(p.Config.ClientSecret) == "" {
 		return fmt.Errorf("azure: tenant_id, client_id and client_secret are required")
 	}
-	if err := validateProxy(p.Config.Proxy); err != nil {
+	if err := validateProxyConfig(p.Config.ProxyMode, p.Config.Proxy); err != nil {
 		return fmt.Errorf("azure: %w", err)
 	}
 	return nil

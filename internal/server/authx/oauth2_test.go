@@ -3,6 +3,7 @@ package authx
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -35,7 +36,7 @@ func TestBuildOAuth2ManualEndpointsAvoidDiscovery(t *testing.T) {
 			ClientID:    "client-id",
 			Scopes:      []string{"openid", "profile"},
 		},
-	})
+	}, "/")
 	if err != nil {
 		t.Fatalf("BuildOAuth2: %v", err)
 	}
@@ -71,12 +72,50 @@ func TestBuildOAuth2SkipsIncompleteManualProvider(t *testing.T) {
 			AuthURL:  "https://idp.example/oauth/authorize",
 			ClientID: "client-id",
 		},
-	})
+	}, "/")
 	if err != nil {
 		t.Fatalf("BuildOAuth2: %v", err)
 	}
 	if got := len(authenticators); got != 0 {
 		t.Fatalf("authenticators len=%d, want 0", got)
+	}
+}
+
+// TestBuildOAuth2RedirectURIIncludesBasePath is the regression guard for the
+// base_path bug: a strategy built via BuildOAuth2 (the path taken by both Boot
+// and Manager.Reload) must emit a redirect_uri that carries the server base
+// path and matches the mounted "{base}/login/callback/{strategy}" route —
+// without relying on ada's Mount-time SetCallbackBasePath, which Reload skips.
+func TestBuildOAuth2RedirectURIIncludesBasePath(t *testing.T) {
+	authenticators, err := BuildOAuth2([]service.OAuth2StrategySettings{
+		{
+			Name:     "gitlab",
+			AuthURL:  "https://idp.example/oauth/authorize",
+			TokenURL: "https://idp.example/oauth/token",
+			ClientID: "client-id",
+		},
+	}, "/pika/")
+	if err != nil {
+		t.Fatalf("BuildOAuth2: %v", err)
+	}
+	if got := len(authenticators); got != 1 {
+		t.Fatalf("authenticators len=%d, want 1", got)
+	}
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "http://pika.example/pika/login/gitlab", nil)
+	if _, _, err := authenticators[0].Login(rr, req); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	loc, err := url.Parse(rr.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse Location %q: %v", rr.Header().Get("Location"), err)
+	}
+	redirectURI := loc.Query().Get("redirect_uri")
+	const want = "http://pika.example/pika/login/callback/gitlab"
+	if redirectURI != want {
+		t.Fatalf("redirect_uri = %q, want %q", redirectURI, want)
 	}
 }
 
@@ -88,7 +127,7 @@ func TestBuildOAuth2PasswordFlowOnlyRequiresTokenURL(t *testing.T) {
 			ClientID:     "client-id",
 			PasswordFlow: true,
 		},
-	})
+	}, "/")
 	if err != nil {
 		t.Fatalf("BuildOAuth2: %v", err)
 	}

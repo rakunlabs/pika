@@ -26,10 +26,12 @@ type AWS struct {
 	// Service is "secretsmanager" or "ssm".
 	Service string `json:"service"` // "secretsmanager" or "ssm"
 
-	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used
-	// for all requests to AWS. Empty falls back to the HTTP_PROXY /
-	// HTTPS_PROXY / NO_PROXY environment variables.
+	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used for
+	// requests to AWS. Used when ProxyMode is "custom".
 	Proxy string `json:"proxy,omitempty"`
+	// ProxyMode selects how the outbound proxy is chosen: "environment"
+	// (default), "none" (force direct), or "custom" (use Proxy).
+	ProxyMode string `json:"proxy_mode,omitempty"`
 }
 
 // AWSClient is a minimal HTTP client for AWS services using Sigv4 signing.
@@ -41,14 +43,13 @@ type AWSClient struct {
 }
 
 // NewAWSClient creates a new AWS client.
-// proxy is an optional outbound proxy URL; empty uses the environment
-// proxy (see newHTTPClient).
-func NewAWSClient(region, accessKey, secretKey, proxy string) *AWSClient {
+// proxyMode/proxy control outbound proxy selection (see newHTTPClient).
+func NewAWSClient(region, accessKey, secretKey, proxyMode, proxy string) *AWSClient {
 	return &AWSClient{
 		region:     region,
 		accessKey:  accessKey,
 		secretKey:  secretKey,
-		httpClient: newHTTPClient(proxy, nil),
+		httpClient: newHTTPClient(proxyMode, proxy, nil),
 	}
 }
 
@@ -317,14 +318,14 @@ func (p *AWSProvider) Validate() error {
 	default:
 		return fmt.Errorf("aws: service must be \"secretsmanager\" or \"ssm\", got %q", p.Config.Service)
 	}
-	if err := validateProxy(p.Config.Proxy); err != nil {
+	if err := validateProxyConfig(p.Config.ProxyMode, p.Config.Proxy); err != nil {
 		return fmt.Errorf("aws: %w", err)
 	}
 	return nil
 }
 
 func (p *AWSProvider) Fetch(ctx context.Context, path string) ([]byte, error) {
-	client := NewAWSClient(p.Config.Region, p.Config.AccessKey, p.Config.SecretKey, p.Config.Proxy)
+	client := NewAWSClient(p.Config.Region, p.Config.AccessKey, p.Config.SecretKey, p.Config.ProxyMode, p.Config.Proxy)
 
 	var data map[string]any
 	var err error
@@ -340,7 +341,7 @@ func (p *AWSProvider) Fetch(ctx context.Context, path string) ([]byte, error) {
 }
 
 func (p *AWSProvider) List(ctx context.Context, prefix string) ([]string, error) {
-	client := NewAWSClient(p.Config.Region, p.Config.AccessKey, p.Config.SecretKey, p.Config.Proxy)
+	client := NewAWSClient(p.Config.Region, p.Config.AccessKey, p.Config.SecretKey, p.Config.ProxyMode, p.Config.Proxy)
 	if p.Config.Service == "ssm" {
 		return client.ListSSMParameters(ctx, prefix)
 	}
@@ -364,7 +365,7 @@ func (p *AWSProvider) Test(ctx context.Context) TestResult {
 }
 
 func (p *AWSProvider) Read(ctx context.Context, path string) (*Entry, error) {
-	client := NewAWSClient(p.Config.Region, p.Config.AccessKey, p.Config.SecretKey, p.Config.Proxy)
+	client := NewAWSClient(p.Config.Region, p.Config.AccessKey, p.Config.SecretKey, p.Config.ProxyMode, p.Config.Proxy)
 	var data map[string]any
 	var err error
 	if p.Config.Service == "ssm" {

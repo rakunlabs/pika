@@ -92,7 +92,7 @@ type gcpListParameterVersionsResponse struct {
 // NewGCPParameterManagerClient creates a new GCP Parameter Manager
 // client from a service account JSON key. Location defaults to
 // "global" when empty.
-func NewGCPParameterManagerClient(serviceAccountJSON, location, proxy string) (*GCPParameterManagerClient, error) {
+func NewGCPParameterManagerClient(serviceAccountJSON, location, proxyMode, proxy string) (*GCPParameterManagerClient, error) {
 	var key gcpServiceAccountKey
 	if err := json.Unmarshal([]byte(serviceAccountJSON), &key); err != nil {
 		return nil, fmt.Errorf("gcp-parameter: parsing service account JSON: %w", err)
@@ -130,7 +130,7 @@ func NewGCPParameterManagerClient(serviceAccountJSON, location, proxy string) (*
 		clientEmail: key.ClientEmail,
 		privateKey:  privateKey,
 		tokenURI:    key.TokenURI,
-		httpClient:  newHTTPClient(proxy, nil),
+		httpClient:  newHTTPClient(proxyMode, proxy, nil),
 	}, nil
 }
 
@@ -611,7 +611,7 @@ func (p *GCPParameterProvider) Validate() error {
 	if _, ok := probe["project_id"]; !ok {
 		return fmt.Errorf("gcp-parameter: service_account_json missing project_id")
 	}
-	if err := validateProxy(p.Config.Proxy); err != nil {
+	if err := validateProxyConfig(p.Config.ProxyMode, p.Config.Proxy); err != nil {
 		return fmt.Errorf("gcp-parameter: %w", err)
 	}
 	return nil

@@ -14,7 +14,7 @@
           Play,
           Loader2,
      } from "lucide-svelte";
-     import type { ExternalResource } from "@/lib/types/config";
+     import type { ExternalResource, ProxyMode } from "@/lib/types/config";
      import ExternalResourceEditor from "@/lib/components/external/ExternalResourceEditor.svelte";
      import { backdropClose } from "@/lib/actions/backdropClose";
 
@@ -61,6 +61,7 @@
      }
      let newExtVaultAddr = $state("");
      let newExtVaultMount = $state("secret");
+     let newExtVaultKVVersion = $state<1 | 2>(2);
      let newExtVaultRoleId = $state("");
      let newExtVaultSecretId = $state("");
      let newExtVaultAppRolePath = $state("approle");
@@ -100,8 +101,10 @@
      let newExtAzureTenantId = $state("");
      let newExtAzureClientId = $state("");
      let newExtAzureClientSecret = $state("");
-     // Outbound proxy — shared by every backend (empty = env proxy).
-     let newExtProxy = $state("");
+     // Outbound proxy — shared by every backend. HTTP supports only a
+     // URL (env-or-custom); the others add an env / direct / custom mode.
+     let newExtProxyMode = $state<ProxyMode>("environment");
+     let newExtProxyUrl = $state("");
 
      const settings = $derived(configStore.settings);
      const externalResources = $derived(
@@ -159,6 +162,7 @@
                resource.vault = {
                     address: newExtVaultAddr.trim(),
                     mount: newExtVaultMount.trim(),
+                    kv_version: newExtVaultKVVersion,
                     app_role: {
                          role_id: newExtVaultRoleId.trim(),
                          secret_id: newExtVaultSecretId.trim(),
@@ -278,21 +282,35 @@
                 };
           }
 
-          // Outbound proxy is supported by every backend; attach it to
-          // whichever sub-config was built. Persisted only when set.
-          const newExtProxyVal = newExtProxy.trim();
-          if (newExtProxyVal) {
-               const cfg =
-                    resource.http ??
-                    resource.vault ??
+          // Outbound proxy. HTTP carries only an env-or-custom URL; the
+          // other backends carry a proxy_mode. Keep the wire shape minimal.
+          const newExtProxyVal = newExtProxyUrl.trim();
+          if (resource.http) {
+               if (newExtProxyVal) resource.http.proxy = newExtProxyVal;
+          } else {
+               const cfg = (resource.vault ??
                     resource.kubernetes ??
                     resource.consul ??
                     resource.etcd ??
                     resource.aws ??
                     resource.gcp ??
                     resource.gcp_parameter ??
-                    resource.azure;
-               if (cfg) (cfg as { proxy?: string }).proxy = newExtProxyVal;
+                    resource.azure) as
+                    | { proxy?: string; proxy_mode?: ProxyMode }
+                    | undefined;
+               if (cfg) {
+                    if (newExtProxyMode === "none") {
+                         cfg.proxy_mode = "none";
+                    } else if (newExtProxyMode === "custom") {
+                         if (!newExtProxyVal) {
+                              addToast("Custom proxy requires a URL", "alert");
+                              return;
+                         }
+                         cfg.proxy_mode = "custom";
+                         cfg.proxy = newExtProxyVal;
+                    }
+                    // "environment" → leave unset (server default).
+               }
           }
 
           try {
@@ -309,6 +327,7 @@
                newExtHttpHeaders = [];
                newExtVaultAddr = "";
                newExtVaultMount = "secret";
+               newExtVaultKVVersion = 2;
                newExtVaultRoleId = "";
                newExtVaultSecretId = "";
                newExtVaultAppRolePath = "approle";
@@ -333,7 +352,8 @@
                newExtAzureTenantId = "";
                newExtAzureClientId = "";
                newExtAzureClientSecret = "";
-               newExtProxy = "";
+               newExtProxyMode = "environment";
+               newExtProxyUrl = "";
           } catch (error) {
                addToast("Failed to add external resource", "alert");
           }
@@ -679,23 +699,46 @@
                               placeholder="secret"
                               class="w-full px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
                          />
-                         <p
-                              class="mt-1 text-[11px] text-slate-400 dark:text-slate-500"
-                         >
-                              KV secrets engine mount path. Secret paths are
-                              specified per-inheritance entry.
-                         </p>
-                    </div>
+                          <p
+                               class="mt-1 text-[11px] text-slate-400 dark:text-slate-500"
+                          >
+                               KV secrets engine mount path (e.g. "secret" or
+                               "finops/kv2"). Secret paths are specified
+                               per-inheritance entry.
+                          </p>
+                     </div>
+                     <div class="mb-4">
+                          <label
+                               for="ext-vault-kv-version"
+                               class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"
+                               >KV version</label
+                          >
+                          <select
+                               id="ext-vault-kv-version"
+                               bind:value={newExtVaultKVVersion}
+                               class="w-full px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+                          >
+                               <option value={2}>v2 (data/ &amp; metadata/)</option>
+                               <option value={1}>v1 (direct mount)</option>
+                          </select>
+                          <p
+                               class="mt-1 text-[11px] text-slate-400 dark:text-slate-500"
+                          >
+                               v2 reads &lt;mount&gt;/data/&lt;path&gt; and lists
+                               &lt;mount&gt;/metadata/&lt;path&gt;; v1 uses
+                               &lt;mount&gt;/&lt;path&gt;. Must match your mount.
+                          </p>
+                     </div>
 
-                    <div
-                         class="mb-3 pt-2 border-t border-slate-100 dark:border-warm-700"
-                    >
-                         <p
-                              class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2"
-                         >
-                              AppRole Authentication
-                         </p>
-                    </div>
+                     <div
+                          class="mb-3 pt-2 border-t border-slate-100 dark:border-warm-700"
+                     >
+                          <p
+                               class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2"
+                          >
+                               AppRole Authentication
+                          </p>
+                     </div>
 
                     <div class="mb-4">
                          <label
@@ -1233,24 +1276,48 @@
                      </div>
                 {/if}
 
-                <!-- Outbound proxy — shared by every backend (empty = env proxy). -->
+                <!-- Outbound proxy — shared by every backend. HTTP supports
+                     only a URL (env-or-custom); the others add a mode. -->
                 <div>
                      <label
-                          for="ext-proxy"
+                          for="ext-proxy-mode"
                           class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"
                           >Proxy <span class="font-normal">(optional)</span></label
                      >
-                     <input
-                          id="ext-proxy"
-                          type="text"
-                          bind:value={newExtProxy}
-                          placeholder="http://proxy.example.com:8080"
-                          class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                     />
+                     {#if newExtType !== "http"}
+                          <select
+                               id="ext-proxy-mode"
+                               bind:value={newExtProxyMode}
+                               class="w-full px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+                          >
+                               <option value="environment"
+                                    >Environment (HTTP_PROXY / NO_PROXY)</option
+                               >
+                               <option value="none"
+                                    >Direct — ignore environment proxy</option
+                               >
+                               <option value="custom">Custom proxy URL</option>
+                          </select>
+                     {/if}
+                     {#if newExtType === "http" || newExtProxyMode === "custom"}
+                          <input
+                               id="ext-proxy-url"
+                               type="text"
+                               bind:value={newExtProxyUrl}
+                               placeholder="http://proxy.example.com:8080"
+                               class="w-full mt-2 px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+                          />
+                     {/if}
                      <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          Outbound proxy for requests to this resource. Leave empty
-                          to use the server's HTTP_PROXY / HTTPS_PROXY / NO_PROXY
-                          environment. Supports http, https, and socks5 URLs.
+                          {#if newExtType === "http"}
+                               Outbound proxy URL for requests to this resource.
+                               Leave empty to use the server's HTTP_PROXY /
+                               HTTPS_PROXY / NO_PROXY environment.
+                          {:else}
+                               Choose how this resource reaches its target. Direct
+                               forces a connection that ignores any environment
+                               proxy. Supports http, https, and socks5 URLs.
+                          {/if}
                      </p>
                 </div>
 

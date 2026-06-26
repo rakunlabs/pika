@@ -156,9 +156,9 @@ func kubeClientCacheKey(k8s *external.Kubernetes) string {
 	if k8s == nil {
 		return "in-cluster"
 	}
-	// Suffix the proxy so the same kubeconfig routed through different
-	// proxies maps to distinct cached clients.
-	proxySuffix := "|" + k8s.Proxy
+	// Suffix the proxy mode + URL so the same kubeconfig routed through
+	// different proxies maps to distinct cached clients.
+	proxySuffix := "|" + k8s.ProxyMode + "|" + k8s.Proxy
 	if k8s.KubeconfigContent != "" {
 		sum := sha256.Sum256([]byte(k8s.KubeconfigContent))
 		return "inline:" + hex.EncodeToString(sum[:]) + proxySuffix
@@ -202,9 +202,10 @@ func (s *Service) getKubeClient(k8s *external.Kubernetes) (*external.KubeClient,
 // If the client doesn't exist yet, it creates one, configures authentication,
 // and starts background token renewal.
 func (s *Service) getVaultClient(ctx context.Context, vault *external.Vault) *external.VaultClient {
-	// Cache key includes the proxy so two resources that share a Vault
-	// address but route through different proxies get distinct clients.
-	cacheKey := vault.Address + "|" + vault.Proxy
+	// Cache key includes the proxy mode + URL so two resources that share
+	// a Vault address but route through different proxies get distinct
+	// clients.
+	cacheKey := vault.Address + "|" + vault.ProxyMode + "|" + vault.Proxy
 
 	s.vaultMu.RLock()
 	client, exists := s.vaultClients[cacheKey]
@@ -222,7 +223,7 @@ func (s *Service) getVaultClient(ctx context.Context, vault *external.Vault) *ex
 		return client
 	}
 
-	client = external.NewVaultClient(vault.Address, vault.Proxy)
+	client = external.NewVaultClient(vault.Address, vault.ProxyMode, vault.Proxy)
 
 	// Configure authentication
 	if vault.AppRole != nil {
@@ -248,8 +249,9 @@ func (s *Service) getVaultClient(ctx context.Context, vault *external.Vault) *ex
 // getGCPClient returns a cached or new GCP Secret Manager client.
 func (s *Service) getGCPClient(gcp *external.GCP) (*external.GCPSecretManagerClient, error) {
 	// Cache key is the full JSON (contains project_id) plus the proxy
-	// so resources sharing credentials but different proxies stay apart.
-	key := gcp.ServiceAccountJSON + "|" + gcp.Proxy
+	// mode + URL so resources sharing credentials but different proxies
+	// stay apart.
+	key := gcp.ServiceAccountJSON + "|" + gcp.ProxyMode + "|" + gcp.Proxy
 
 	s.gcpMu.RLock()
 	client, exists := s.gcpClients[key]
@@ -266,7 +268,7 @@ func (s *Service) getGCPClient(gcp *external.GCP) (*external.GCPSecretManagerCli
 		return client, nil
 	}
 
-	client, err := external.NewGCPSecretManagerClient(gcp.ServiceAccountJSON, gcp.Proxy)
+	client, err := external.NewGCPSecretManagerClient(gcp.ServiceAccountJSON, gcp.ProxyMode, gcp.Proxy)
 	if err != nil {
 		return nil, err
 	}
@@ -282,7 +284,7 @@ func (s *Service) getGCPClient(gcp *external.GCP) (*external.GCPSecretManagerCli
 // location for every call.
 func (s *Service) getGCPParameterClient(g *external.GCPParameter) (*external.GCPParameterManagerClient, error) {
 	location := g.GetLocation()
-	key := g.ServiceAccountJSON + "|" + location + "|" + g.Proxy
+	key := g.ServiceAccountJSON + "|" + location + "|" + g.ProxyMode + "|" + g.Proxy
 
 	s.gcpParamMu.RLock()
 	client, exists := s.gcpParamClients[key]
@@ -299,7 +301,7 @@ func (s *Service) getGCPParameterClient(g *external.GCPParameter) (*external.GCP
 		return client, nil
 	}
 
-	client, err := external.NewGCPParameterManagerClient(g.ServiceAccountJSON, location, g.Proxy)
+	client, err := external.NewGCPParameterManagerClient(g.ServiceAccountJSON, location, g.ProxyMode, g.Proxy)
 	if err != nil {
 		return nil, err
 	}
@@ -310,9 +312,9 @@ func (s *Service) getGCPParameterClient(g *external.GCPParameter) (*external.GCP
 
 // getAzureClient returns a cached or new Azure Key Vault client.
 func (s *Service) getAzureClient(azure *external.Azure) *external.AzureKeyVaultClient {
-	// Cache key includes the proxy so the same vault URL routed through
-	// different proxies yields distinct clients.
-	cacheKey := azure.VaultURL + "|" + azure.Proxy
+	// Cache key includes the proxy mode + URL so the same vault URL
+	// routed through different proxies yields distinct clients.
+	cacheKey := azure.VaultURL + "|" + azure.ProxyMode + "|" + azure.Proxy
 
 	s.azureMu.RLock()
 	client, exists := s.azureClients[cacheKey]
@@ -329,7 +331,7 @@ func (s *Service) getAzureClient(azure *external.Azure) *external.AzureKeyVaultC
 		return client
 	}
 
-	client = external.NewAzureKeyVaultClient(azure.VaultURL, azure.TenantID, azure.ClientID, azure.ClientSecret, azure.Proxy)
+	client = external.NewAzureKeyVaultClient(azure.VaultURL, azure.TenantID, azure.ClientID, azure.ClientSecret, azure.ProxyMode, azure.Proxy)
 	s.azureClients[cacheKey] = client
 	return client
 }

@@ -26,7 +26,7 @@
     CheckCircle2,
     Loader2,
   } from "lucide-svelte";
-  import type { ExternalResource } from "@/lib/types/config";
+  import type { ExternalResource, ProxyMode } from "@/lib/types/config";
 
   type Mode = "view" | "edit" | "create";
   type ResourceKind =
@@ -97,6 +97,10 @@
   // Vault
   let vaultAddr = $state(snapResource.vault?.address ?? "");
   let vaultMount = $state(snapResource.vault?.mount ?? "secret");
+  // KV engine version. Absent ≡ v2 (server default); render as "2".
+  let vaultKVVersion = $state<1 | 2>(
+    snapResource.vault?.kv_version === 1 ? 1 : 2,
+  );
   let vaultRoleId = $state(snapResource.vault?.app_role?.role_id ?? "");
   let vaultSecretId = $state(snapResource.vault?.app_role?.secret_id ?? "");
   let vaultAppRolePath = $state(
@@ -159,19 +163,32 @@
   let azureClientSecret = $state(snapResource.azure?.client_secret ?? "");
 
   // Outbound proxy — shared across every backend. Seeded from whichever
-  // sub-config the resource currently carries. Empty means "use the
-  // server's HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment".
-  let proxy = $state(
+  // sub-config the resource currently carries. `proxyMode` controls
+  // env / direct / custom; `proxyUrl` holds the custom URL.
+  const seedProxyUrl =
     snapResource.http?.proxy ??
-      snapResource.vault?.proxy ??
-      snapResource.kubernetes?.proxy ??
-      snapResource.consul?.proxy ??
-      snapResource.etcd?.proxy ??
-      snapResource.aws?.proxy ??
-      snapResource.gcp?.proxy ??
-      snapResource.gcp_parameter?.proxy ??
-      snapResource.azure?.proxy ??
-      "",
+    snapResource.vault?.proxy ??
+    snapResource.kubernetes?.proxy ??
+    snapResource.consul?.proxy ??
+    snapResource.etcd?.proxy ??
+    snapResource.aws?.proxy ??
+    snapResource.gcp?.proxy ??
+    snapResource.gcp_parameter?.proxy ??
+    snapResource.azure?.proxy ??
+    "";
+  const seedProxyMode: ProxyMode | undefined =
+    snapResource.vault?.proxy_mode ??
+    snapResource.kubernetes?.proxy_mode ??
+    snapResource.consul?.proxy_mode ??
+    snapResource.etcd?.proxy_mode ??
+    snapResource.aws?.proxy_mode ??
+    snapResource.gcp?.proxy_mode ??
+    snapResource.gcp_parameter?.proxy_mode ??
+    snapResource.azure?.proxy_mode;
+  let proxyUrl = $state(seedProxyUrl);
+  // Backward compat: a bare URL with no explicit mode implies "custom".
+  let proxyMode = $state<ProxyMode>(
+    seedProxyMode ?? (seedProxyUrl.trim() ? "custom" : "environment"),
   );
 
   // ── Test connection state ─────────────────────────────────────────────
@@ -265,6 +282,7 @@
       r.vault = {
         address: vaultAddr.trim(),
         mount: vaultMount.trim(),
+        kv_version: vaultKVVersion,
         app_role: {
           role_id: vaultRoleId.trim(),
           secret_id: vaultSecretId.trim(),
@@ -380,22 +398,37 @@
       };
     }
 
-    // Outbound proxy is supported by every backend; attach it to
-    // whichever sub-config this form produced. Only persisted when set
-    // so resources without a proxy keep a minimal wire shape.
-    const proxyVal = proxy.trim();
-    if (proxyVal) {
-      const cfg =
-        r.http ??
-        r.vault ??
+    // Outbound proxy. HTTP only supports an env-or-custom URL (the
+    // `ok` client has no "force direct" switch); the other backends
+    // carry a proxy_mode. Attach to whichever sub-config was built and
+    // keep the wire shape minimal (omit defaults).
+    const url = proxyUrl.trim();
+    if (r.http) {
+      if (url) r.http.proxy = url;
+    } else {
+      const cfg = (r.vault ??
         r.kubernetes ??
         r.consul ??
         r.etcd ??
         r.aws ??
         r.gcp ??
         r.gcp_parameter ??
-        r.azure;
-      if (cfg) (cfg as { proxy?: string }).proxy = proxyVal;
+        r.azure) as
+        | { proxy?: string; proxy_mode?: ProxyMode }
+        | undefined;
+      if (cfg) {
+        if (proxyMode === "none") {
+          cfg.proxy_mode = "none";
+        } else if (proxyMode === "custom") {
+          if (!url) {
+            addToast("Custom proxy requires a URL", "alert");
+            return null;
+          }
+          cfg.proxy_mode = "custom";
+          cfg.proxy = url;
+        }
+        // "environment" → leave both unset (server default).
+      }
     }
     return r;
   }
@@ -779,6 +812,35 @@
             />
           {/if}
         </div>
+      </div>
+
+      <div class="mb-4">
+        <span
+          class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"
+          >KV version</span
+        >
+        {#if isReadOnly}
+          <div
+            class="px-3 py-2 text-sm font-mono text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md"
+          >
+            {vaultKVVersion === 1 ? "v1" : "v2"}
+          </div>
+        {:else}
+          <select
+            bind:value={vaultKVVersion}
+            class="w-full px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+          >
+            <option value={2}>v2 (data/ &amp; metadata/)</option>
+            <option value={1}>v1 (direct mount)</option>
+          </select>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            Pick the KV secrets-engine version. v2 reads
+            <code>&lt;mount&gt;/data/&lt;path&gt;</code> and lists
+            <code>&lt;mount&gt;/metadata/&lt;path&gt;</code>; v1 uses
+            <code>&lt;mount&gt;/&lt;path&gt;</code> directly. Must match your
+            mount.
+          </p>
+        {/if}
       </div>
 
       <div class="pt-2 border-t border-slate-100 dark:border-warm-700 mb-3">
@@ -1391,8 +1453,8 @@
       </div>
     {/if}
 
-    <!-- Outbound proxy — shared by every backend. Empty falls back to the
-         server's HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment. -->
+    <!-- Outbound proxy — shared by every backend. HTTP supports only a
+         URL (env-or-custom); the others add an env / direct / custom mode. -->
     <div class="mt-6 pt-4 border-t border-slate-100 dark:border-warm-700">
       <span
         class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"
@@ -1402,19 +1464,42 @@
         <div
           class="px-3 py-2 text-sm font-mono text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md"
         >
-          {proxy || "—"}
+          {#if formType !== "http" && proxyMode === "none"}
+            Direct (no proxy)
+          {:else if (formType === "http" ? proxyUrl : proxyMode === "custom" && proxyUrl)}
+            {proxyUrl}
+          {:else}
+            Environment default
+          {/if}
         </div>
       {:else}
-        <input
-          type="text"
-          bind:value={proxy}
-          placeholder="http://proxy.example.com:8080"
-          class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-        />
+        {#if formType !== "http"}
+          <select
+            bind:value={proxyMode}
+            class="w-full px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+          >
+            <option value="environment">Environment (HTTP_PROXY / NO_PROXY)</option>
+            <option value="none">Direct — ignore environment proxy</option>
+            <option value="custom">Custom proxy URL</option>
+          </select>
+        {/if}
+        {#if formType === "http" || proxyMode === "custom"}
+          <input
+            type="text"
+            bind:value={proxyUrl}
+            placeholder="http://proxy.example.com:8080"
+            class="w-full mt-2 px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+          />
+        {/if}
         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-          Outbound proxy for requests to this resource. Leave empty to use the
-          server's HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment. Supports
-          http, https, and socks5 URLs.
+          {#if formType === "http"}
+            Outbound proxy URL for requests to this resource. Leave empty to use
+            the server's HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment.
+          {:else}
+            Choose how this resource reaches its target. <strong>Direct</strong>
+            forces a connection that ignores any environment proxy. Supports
+            http, https, and socks5 URLs.
+          {/if}
         </p>
       {/if}
     </div>

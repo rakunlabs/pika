@@ -58,10 +58,12 @@ type GCP struct {
 	// RawValue is false (the legacy wrapper always serves JSON).
 	ContentType string `json:"content_type,omitempty"`
 
-	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used
-	// for all requests to GCP Secret Manager. Empty falls back to the
-	// HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment variables.
+	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used for
+	// requests to GCP Secret Manager. Used when ProxyMode is "custom".
 	Proxy string `json:"proxy,omitempty"`
+	// ProxyMode selects how the outbound proxy is chosen: "environment"
+	// (default), "none" (force direct), or "custom" (use Proxy).
+	ProxyMode string `json:"proxy_mode,omitempty"`
 }
 
 // GetRawValue reports whether GCPProvider.Read should return the raw
@@ -103,10 +105,12 @@ type GCPParameter struct {
 	// Defaults to "global" when empty.
 	Location string `json:"location,omitempty"`
 
-	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used
-	// for all requests to GCP Parameter Manager. Empty falls back to
-	// the HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment variables.
+	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used for
+	// requests to GCP Parameter Manager. Used when ProxyMode is "custom".
 	Proxy string `json:"proxy,omitempty"`
+	// ProxyMode selects how the outbound proxy is chosen: "environment"
+	// (default), "none" (force direct), or "custom" (use Proxy).
+	ProxyMode string `json:"proxy_mode,omitempty"`
 }
 
 // GetLocation returns the configured location, defaulting to "global".
@@ -131,17 +135,30 @@ type Kubernetes struct {
 	// Useful for managing the credentials entirely from the UI without writing a file.
 	KubeconfigContent string `json:"kubeconfig_content,omitempty"`
 
-	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used
-	// for all requests to the Kubernetes API. Empty falls back to the
-	// HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment variables.
+	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used for
+	// requests to the Kubernetes API. Used when ProxyMode is "custom".
 	Proxy string `json:"proxy,omitempty"`
+	// ProxyMode selects how the outbound proxy is chosen: "environment"
+	// (default), "none" (force direct), or "custom" (use Proxy).
+	ProxyMode string `json:"proxy_mode,omitempty"`
 }
 
 type Vault struct {
 	// Address is the Vault server URL (e.g., "https://vault.example.com").
 	Address string `json:"address"`
-	// Mount is the KV secrets engine mount path (e.g., "secret").
+	// Mount is the KV secrets engine mount path (e.g., "secret" or
+	// "finops/kv2").
 	Mount string `json:"mount"`
+
+	// KVVersion selects the KV secrets-engine version (1 or 2). It
+	// determines how secret paths are built and removes the previous
+	// v2-then-v1 probing:
+	//   - v2: reads/writes use "<mount>/data/<path>"; list and version
+	//     history use "<mount>/metadata/<path>".
+	//   - v1: everything uses "<mount>/<path>" directly.
+	// Unset (0) defaults to v2, the modern Vault default. Set it to 1
+	// explicitly for legacy KV v1 mounts.
+	KVVersion int `json:"kv_version,omitempty"`
 
 	// AppRole holds AppRole authentication credentials.
 	AppRole *VaultAppRole `json:"app_role,omitempty"`
@@ -149,9 +166,24 @@ type Vault struct {
 	Token string `json:"token,omitempty"`
 
 	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used
-	// for all requests to this Vault. Empty falls back to the
-	// HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment variables.
+	// for all requests to this Vault. Used when ProxyMode is "custom"
+	// (or empty + a URL, for backward compatibility).
 	Proxy string `json:"proxy,omitempty"`
+	// ProxyMode selects how the outbound proxy is chosen: "environment"
+	// (default — honour HTTP_PROXY/HTTPS_PROXY/NO_PROXY), "none" (force
+	// a direct connection, ignoring the environment), or "custom" (use
+	// Proxy). Empty defaults to environment, or custom when Proxy is set.
+	ProxyMode string `json:"proxy_mode,omitempty"`
+}
+
+// IsKVv2 reports whether the KV engine is version 2. Unset (0) — and any
+// value other than 1 — defaults to v2, the modern Vault default. A nil
+// receiver also returns true so callers don't need a separate guard.
+func (v *Vault) IsKVv2() bool {
+	if v == nil {
+		return true
+	}
+	return v.KVVersion != 1
 }
 
 type VaultAppRole struct {
