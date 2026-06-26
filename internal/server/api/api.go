@@ -446,9 +446,30 @@ func (a *api) getSettings(c *ada.Context) error {
 	// user is literally using right now.
 	if settings != nil {
 		settings.Auth = settings.Auth.WithEffectiveDefaults()
+		// Never ship stored auth secrets to the browser. Replace each with a
+		// boolean "is set" indicator so the SPA can render "leave blank to
+		// keep" / offer an explicit clear without ever holding the value.
+		maskAuthSecrets(settings.Auth)
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(settings)
+}
+
+// maskAuthSecrets strips stored auth secrets from a settings response,
+// replacing OAuth2 client secrets with the ClientSecretSet indicator and
+// blanking the LDAP bind password. Operates on the per-request settings copy
+// returned by Settings(), so it never mutates stored state.
+func maskAuthSecrets(a *service.AuthSettings) {
+	if a == nil {
+		return
+	}
+	for i := range a.OAuth2 {
+		a.OAuth2[i].ClientSecretSet = a.OAuth2[i].ClientSecret != ""
+		a.OAuth2[i].ClientSecret = ""
+	}
+	if a.LDAP != nil {
+		a.LDAP.BindPassword = ""
+	}
 }
 
 func (a *api) getClusterStatus(c *ada.Context) error {
@@ -476,7 +497,15 @@ func (a *api) postSettings(c *ada.Context) error {
 	// If auth settings were updated, reload the auth manager.
 	// TODO: detect cookie/issuer changes and set restart_required in response.
 	if patchSettings.Auth != nil && a.mgr != nil {
-		if err := a.mgr.Reload(c.Request.Context(), patchSettings.Auth); err != nil {
+		// Reload from the freshly-persisted settings, not the request payload:
+		// PatchSettings may have filled in kept secrets, and the seal layer
+		// blanks the in-memory copy during persistence. Re-reading goes
+		// through the decrypt path so live strategies get real secret values.
+		reloadAuth := patchSettings.Auth
+		if persisted, rerr := a.svc.Settings(c.Request.Context()); rerr == nil && persisted != nil && persisted.Auth != nil {
+			reloadAuth = persisted.Auth
+		}
+		if err := a.mgr.Reload(c.Request.Context(), reloadAuth); err != nil {
 			return fmt.Errorf("auth reload failed: %w", err)
 		}
 	}
@@ -503,6 +532,13 @@ func (a *api) postSettings(c *ada.Context) error {
 				slog.Warn("public endpoints reload reported issues", "error", rerr)
 			}
 		}
+	}
+
+	// Don't echo secrets back to the browser. PatchSettings may have merged
+	// kept secrets into the payload (and on the no-encryption path the seal
+	// layer won't have blanked them), so mask before returning the echo.
+	if patchSettings.Auth != nil {
+		maskAuthSecrets(patchSettings.Auth)
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(patchSettings)

@@ -89,6 +89,38 @@ func (s *Service) ListPermissions(ctx context.Context) ([]Permission, error) {
 	return s.store.Permissions().List(ctx)
 }
 
+// PermissionsByKeys returns the permission bundles whose Key appears in the
+// given list. Lookup is by the human-assignable Key (not the internal ID).
+// Unknown keys are skipped — a dangling reference (e.g. an external role
+// mapping pointing at a deleted permission) silently grants nothing rather
+// than erroring, keeping the request fail-closed. Order and duplicates of the
+// input are irrelevant; the result contains each matching bundle once.
+func (s *Service) PermissionsByKeys(ctx context.Context, keys []string) ([]Permission, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	want := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		if k != "" {
+			want[k] = struct{}{}
+		}
+	}
+	if len(want) == 0 {
+		return nil, nil
+	}
+	all, err := s.store.Permissions().List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Permission, 0, len(want))
+	for _, p := range all {
+		if _, ok := want[p.Key]; ok {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
 // UpdatePermission updates a permission's properties.
 func (s *Service) UpdatePermission(ctx context.Context, id string, req *UpdatePermissionRequest) error {
 	perm, err := s.store.Permissions().Get(ctx, id)
@@ -329,6 +361,74 @@ func (s *Service) ResolveUserCapabilityPatterns(ctx context.Context, userID stri
 	}
 
 	return out, nil
+}
+
+// CapabilitiesFromBundles flattens a set of permission bundles into the
+// effective capability keys and the per-key path patterns scoping them.
+//
+// Patterns use the same union semantics as ResolveUserCapabilityPatterns: a
+// key granted without patterns by ANY bundle is unrestricted (and omitted
+// from the returned map); only keys scoped by every granting bundle carry the
+// union of their patterns. The returned pattern map is nil when no key is
+// scoped — callers (and CapabilityPatterns.Allows) treat nil/empty as
+// "unrestricted".
+//
+// This is the shared union used both for a user's DB-assigned bundles and for
+// bundles referenced by external role/scope mappings, so the two sources merge
+// consistently when combined into one slice.
+func CapabilitiesFromBundles(perms []Permission) ([]string, map[string][]string) {
+	seen := make(map[string]struct{})
+	keys := make([]string, 0)
+	for _, p := range perms {
+		for _, k := range p.Keys {
+			if _, dup := seen[k]; dup {
+				continue
+			}
+			seen[k] = struct{}{}
+			keys = append(keys, k)
+		}
+	}
+
+	// Pass 1: a key is unrestricted if some granting bundle lists it with no
+	// patterns.
+	unrestricted := make(map[string]bool)
+	for _, p := range perms {
+		for _, k := range p.Keys {
+			if len(p.KeyPatterns[k]) == 0 {
+				unrestricted[k] = true
+			}
+		}
+	}
+
+	// Pass 2: union the patterns of keys that are always scoped. Patterns for
+	// keys not actually granted by any bundle are ignored.
+	patterns := make(map[string][]string)
+	for _, p := range perms {
+		for k, pats := range p.KeyPatterns {
+			if _, granted := seen[k]; !granted {
+				continue
+			}
+			if unrestricted[k] || len(pats) == 0 {
+				continue
+			}
+			has := make(map[string]struct{}, len(patterns[k]))
+			for _, existing := range patterns[k] {
+				has[existing] = struct{}{}
+			}
+			for _, pat := range pats {
+				if _, dup := has[pat]; dup {
+					continue
+				}
+				has[pat] = struct{}{}
+				patterns[k] = append(patterns[k], pat)
+			}
+		}
+	}
+
+	if len(patterns) == 0 {
+		return keys, nil
+	}
+	return keys, patterns
 }
 
 // CheckPermission checks if a user has a specific capability key.

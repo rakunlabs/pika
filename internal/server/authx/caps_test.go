@@ -35,20 +35,55 @@ func TestCapResolver_SuperadminAllCaps(t *testing.T) {
 	}
 }
 
+// TestCapResolver_RoleMapping verifies that an external role name maps to a
+// pika Permission bundle Key, and the bundle's capability keys are expanded
+// into the effective set. The mapping VALUE is a bundle Key ("editor"), not a
+// raw capability key.
 func TestCapResolver_RoleMapping(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	if _, err := svc.CreatePermission(ctx, &service.CreatePermissionRequest{
+		Key:  "editor",
+		Name: "Editor",
+		Keys: []string{service.CapFilesRead, service.CapFilesWrite},
+	}); err != nil {
+		t.Fatalf("create perm: %v", err)
+	}
+
 	cr := &CapResolver{
-		svc: nil,
+		svc: svc,
 		settings: service.CapabilityMapping{
-			RoleMapping: map[string][]string{"editor": {"files.read", "files.write"}},
+			RoleMapping: map[string][]string{"pika-editor": {"editor"}},
+		},
+	}
+	got, _, _, _ := cr.resolve(ctx, &identity.Identity{
+		Subject:  "bob",
+		Provider: "header",
+		Roles:    []string{"pika-editor"},
+	})
+	if len(got) != 2 || !got.Has(service.CapFilesRead) || !got.Has(service.CapFilesWrite) {
+		t.Errorf("role mapping: %v", got)
+	}
+}
+
+// TestCapResolver_RoleMappingUnknownBundle confirms a role pointing at a
+// non-existent (deleted/renamed) bundle key grants nothing — fail-closed.
+func TestCapResolver_RoleMappingUnknownBundle(t *testing.T) {
+	svc := newTestService(t)
+	cr := &CapResolver{
+		svc: svc,
+		settings: service.CapabilityMapping{
+			RoleMapping: map[string][]string{"pika-editor": {"does-not-exist"}},
 		},
 	}
 	got, _, _, _ := cr.resolve(context.Background(), &identity.Identity{
 		Subject:  "bob",
 		Provider: "header",
-		Roles:    []string{"editor"},
+		Roles:    []string{"pika-editor"},
 	})
-	if len(got) != 2 || !got.Has("files.read") {
-		t.Errorf("role mapping: %v", got)
+	if len(got) != 0 {
+		t.Errorf("dangling bundle key should grant nothing, got %v", got)
 	}
 }
 
@@ -261,13 +296,22 @@ func TestCapResolver_ExternalUnionsRoleMapping(t *testing.T) {
 	})
 	_ = svc.SetUserPermissions(ctx, info.ID, []string{perm.ID})
 
+	// Bundle referenced by the external role mapping (value is a bundle Key).
+	if _, err := svc.CreatePermission(ctx, &service.CreatePermissionRequest{
+		Key:  "writer",
+		Name: "Writer",
+		Keys: []string{service.CapFilesWrite},
+	}); err != nil {
+		t.Fatalf("create writer perm: %v", err)
+	}
+
 	cr := &CapResolver{svc: svc, settings: service.CapabilityMapping{
-		RoleMapping: map[string][]string{"writer": {service.CapFilesWrite}},
+		RoleMapping: map[string][]string{"writer-role": {"writer"}},
 	}}
 	got, _, _, _ := cr.resolve(ctx, &identity.Identity{
 		Subject:  "sub-99",
 		Provider: "google",
-		Roles:    []string{"writer"},
+		Roles:    []string{"writer-role"},
 		Claims:   map[string]any{PikaUserIDClaim: info.ID},
 	})
 	if !got.Has(service.CapFilesRead) {

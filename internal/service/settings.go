@@ -273,8 +273,17 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 		settings.ForwardAuth = patch.ForwardAuth
 	}
 
-	// Handle auth settings update (if provided)
+	// Handle auth settings update (if provided).
+	//
+	// OAuth2 client secrets and the LDAP bind password get special treatment:
+	// the SPA never re-sends a stored secret (it can't read it back — see
+	// getSettings masking), so an empty secret on an incoming entry means
+	// "keep what's stored", not "wipe it". Without this, any settings save
+	// that didn't re-type every secret would silently blank them — which
+	// surfaces downstream as the IdP rejecting the (now empty) client secret
+	// at login. See preserveAuthSecrets for the keep/clear rules.
 	if patch.Auth != nil {
+		preserveAuthSecrets(settings.Auth, patch.Auth)
 		settings.Auth = patch.Auth
 	}
 
@@ -350,6 +359,58 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 	}
 
 	return s.UpdateSettings(ctx, settings)
+}
+
+// preserveAuthSecrets carries write-once auth secrets from the currently
+// stored settings (old) into the incoming patch when the caller left them
+// blank, implementing the "leave blank to keep" contract the SPA advertises.
+// It also strips the transient request/response flags so they never reach
+// storage.
+//
+// OAuth2 client secrets are matched by provider Name (not slice index) because
+// the UI may reorder or remove entries between loads. Rules per incoming entry:
+//   - non-empty ClientSecret      → operator typed a new value; use it
+//   - ClearClientSecret == true   → deliberate wipe; leave it empty
+//   - empty ClientSecret          → keep the stored value for that Name
+//
+// The LDAP bind password follows the same keep-on-blank rule (the SPA only
+// sends it when the operator types a new one).
+func preserveAuthSecrets(old, incoming *AuthSettings) {
+	if incoming == nil {
+		return
+	}
+
+	var stored map[string]string
+	if old != nil && len(old.OAuth2) > 0 {
+		stored = make(map[string]string, len(old.OAuth2))
+		for _, e := range old.OAuth2 {
+			if e.ClientSecret != "" {
+				stored[e.Name] = e.ClientSecret
+			}
+		}
+	}
+	for i := range incoming.OAuth2 {
+		e := &incoming.OAuth2[i]
+		clear := e.ClearClientSecret
+		// Never persist the transient flags.
+		e.ClearClientSecret = false
+		e.ClientSecretSet = false
+		switch {
+		case e.ClientSecret != "":
+			// New secret supplied — keep as-is.
+		case clear:
+			// Explicit wipe — leave empty.
+		default:
+			if prev, ok := stored[e.Name]; ok {
+				e.ClientSecret = prev
+			}
+		}
+	}
+
+	if incoming.LDAP != nil && incoming.LDAP.BindPassword == "" &&
+		old != nil && old.LDAP != nil && old.LDAP.BindPassword != "" {
+		incoming.LDAP.BindPassword = old.LDAP.BindPassword
+	}
 }
 
 // newPublicEndpointID mints a 16-byte hex identifier for a fresh

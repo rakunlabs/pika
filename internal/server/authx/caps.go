@@ -66,10 +66,12 @@ func (r *CapResolver) Middleware() ada.MiddlewareFunc {
 //     is_superadmin column on users (full set), else per-user
 //     permission bundle grants.
 //  3. Declarative RoleMapping[id.Roles] / ScopeMapping[id.Scopes] —
-//     useful for granting external users baseline caps without
-//     creating per-user DB rows. These are unrestricted (no path
-//     scoping); any key granted here strips its pattern from the DB
-//     patterns map so the broader grant wins.
+//     useful for granting external users permissions without creating
+//     per-user DB rows. The mapped VALUES are pika Permission bundle
+//     Keys (not raw capability keys): each is expanded to the bundle's
+//     capability keys and path patterns, then unioned with the user's
+//     DB-assigned bundles through the same "unrestricted-wins" rule.
+//     An unknown/deleted bundle key grants nothing (fail-closed).
 //
 // If the Identity carries no PikaUserIDClaim (e.g. a request that
 // arrived before SessionStore.Save ran, or a non-session strategy
@@ -91,18 +93,6 @@ func (r *CapResolver) resolve(ctx context.Context, id *identity.Identity) (servi
 		}
 	}
 
-	seen := make(map[string]struct{})
-	var out []string
-	add := func(keys []string) {
-		for _, k := range keys {
-			if _, dup := seen[k]; dup {
-				continue
-			}
-			seen[k] = struct{}{}
-			out = append(out, k)
-		}
-	}
-
 	// 1. Superadmin allowlist — operator-controlled escape hatch. We
 	// short-circuit to the full known-key set; no patterns because
 	// superadmins are unrestricted by definition.
@@ -112,53 +102,58 @@ func (r *CapResolver) resolve(ctx context.Context, id *identity.Identity) (servi
 		}
 	}
 
-	// 2. DB-backed permissions for the resolved user. The is_superadmin
-	// shortcut on the users row produces the full known-key set; else
-	// we union the per-user permission grants.
-	var patterns map[string][]string
-	if user != nil {
-		if user.IsSuperadmin {
-			return service.Capabilities(service.KnownCapabilityKeys()), username, userID, nil
+	// 2. The is_superadmin column on the users row also produces the
+	// full known-key set, regardless of identity provider.
+	if user != nil && user.IsSuperadmin {
+		return service.Capabilities(service.KnownCapabilityKeys()), username, userID, nil
+	}
+
+	// Gather every permission bundle that applies to this request:
+	//   - the user's DB-assigned bundles (admin UI), and
+	//   - bundles referenced by external role/scope mappings.
+	// Combining them into one slice lets CapabilitiesFromBundles union
+	// capability keys AND path patterns with a single, consistent
+	// "unrestricted-wins" rule — a role-mapped unrestricted grant
+	// correctly widens a DB pattern-scoped grant for the same key.
+	var bundles []service.Permission
+	if r.svc != nil && user != nil {
+		if ub, err := r.svc.GetUserPermissions(ctx, user.ID); err == nil {
+			bundles = append(bundles, ub...)
 		}
-		if keys, _, _, err := r.svc.ResolveUserCapabilityKeysByID(ctx, user.ID); err == nil {
-			add(keys)
-		}
-		if pats, err := r.svc.ResolveUserCapabilityPatterns(ctx, user.ID); err == nil {
-			patterns = pats
+	}
+	if r.svc != nil && (len(id.Roles) > 0 || len(id.Scopes) > 0) {
+		if rb, err := r.svc.PermissionsByKeys(ctx, r.mappedPermissionKeys(id)); err == nil {
+			bundles = append(bundles, rb...)
 		}
 	}
 
-	// 3. Declarative role / scope mapping — useful for giving external
-	// users permissions without creating per-user rows in the admin UI.
-	// Caps from this source are unrestricted (we have nowhere to attach
-	// patterns in the role/scope mapping config), which means: a user
-	// who happens to also be in a mapped role for the same key as a
-	// pattern-scoped permission gets unrestricted access. This matches
-	// the additive semantics — declared mappings widen, never narrow.
-	if len(id.Roles) > 0 || len(id.Scopes) > 0 {
-		widened := make(map[string]struct{})
-		for _, role := range id.Roles {
-			ks := r.settings.RoleMapping[role]
-			add(ks)
-			for _, k := range ks {
-				widened[k] = struct{}{}
+	keys, patterns := service.CapabilitiesFromBundles(bundles)
+	return service.Capabilities(keys), username, userID, patterns
+}
+
+// mappedPermissionKeys collects the pika Permission bundle Keys an identity
+// is entitled to through its roles and scopes, deduplicated. The values stored
+// in RoleMapping/ScopeMapping are bundle Keys; resolve() expands them.
+func (r *CapResolver) mappedPermissionKeys(id *identity.Identity) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	collect := func(ks []string) {
+		for _, k := range ks {
+			if k == "" {
+				continue
 			}
-		}
-		for _, sc := range id.Scopes {
-			ks := r.settings.ScopeMapping[sc]
-			add(ks)
-			for _, k := range ks {
-				widened[k] = struct{}{}
+			if _, dup := seen[k]; dup {
+				continue
 			}
-		}
-		// Strip patterns for any key that role/scope mapping just granted
-		// unrestricted — preserves the "broad grant wins" union rule.
-		if len(patterns) > 0 && len(widened) > 0 {
-			for k := range widened {
-				delete(patterns, k)
-			}
+			seen[k] = struct{}{}
+			out = append(out, k)
 		}
 	}
-
-	return service.Capabilities(out), username, userID, patterns
+	for _, role := range id.Roles {
+		collect(r.settings.RoleMapping[role])
+	}
+	for _, sc := range id.Scopes {
+		collect(r.settings.ScopeMapping[sc])
+	}
+	return out
 }

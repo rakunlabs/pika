@@ -186,12 +186,23 @@ type OAuth2StrategySettings struct {
 	UserInfoURL string `json:"userinfo_url,omitempty"`
 	// IssuerURL is retained for existing OIDC-discovery based settings.
 	// New providers should set AuthURL and TokenURL explicitly instead.
-	IssuerURL    string   `json:"issuer_url,omitempty"`
-	ClientID     string   `json:"client_id,omitempty"`
-	ClientSecret string   `json:"client_secret,omitempty"`
-	Scopes       []string `json:"scopes,omitempty"`
-	DisablePKCE  bool     `json:"disable_pkce,omitempty"`
-	PasswordFlow bool     `json:"password_flow,omitempty"`
+	IssuerURL    string `json:"issuer_url,omitempty"`
+	ClientID     string `json:"client_id,omitempty"`
+	ClientSecret string `json:"client_secret,omitempty"`
+	// ClientSecretSet is a read-only indicator the API emits on GET so the
+	// SPA can tell "a secret is stored" apart from "no secret" without ever
+	// receiving the secret value itself. It is never persisted: the API sets
+	// it on the response copy, and PatchSettings forces it false before store.
+	ClientSecretSet bool `json:"client_secret_set,omitempty"`
+	// ClearClientSecret is a write-only request flag. Because the SPA can't
+	// read a stored secret back, an empty ClientSecret on save means "keep the
+	// existing one" (see PatchSettings). Setting this flag opts that single
+	// provider out so the operator can deliberately blank the secret. It is
+	// never persisted.
+	ClearClientSecret bool     `json:"clear_client_secret,omitempty"`
+	Scopes            []string `json:"scopes,omitempty"`
+	DisablePKCE       bool     `json:"disable_pkce,omitempty"`
+	PasswordFlow      bool     `json:"password_flow,omitempty"`
 	// AutoCreateUser allows this OAuth2 provider to materialize unknown
 	// external identities into local external-only users during login. When
 	// false (default), login only binds to an existing user/link.
@@ -299,6 +310,20 @@ type PasskeyStrategySettings struct {
 	ChallengeTTL     time.Duration `json:"challenge_ttl,omitempty"`
 }
 
+// CapabilityMapping declares how external identities (OAuth2, LDAP, Header)
+// gain pika capabilities without a per-user DB row.
+//
+// RoleMapping/ScopeMapping keys are the external role/scope names as they
+// appear on the identity (e.g. an OAuth2 `roles` claim value). Their VALUES
+// are pika Permission bundle Keys — each is expanded at request time to the
+// bundle's capability keys and path patterns (see CapResolver.resolve and
+// Service.CapabilitiesFromBundles). A value that doesn't match any existing
+// bundle Key grants nothing (fail-closed), so renaming/deleting a bundle
+// quietly revokes the external grant rather than erroring.
+//
+// Note: prior versions stored raw capability keys here. After the switch to
+// bundle Keys, legacy capability-key values no longer match a bundle and must
+// be re-pointed at a Permission via the settings UI.
 type CapabilityMapping struct {
 	Superadmins  []string            `json:"superadmins,omitempty"`
 	RoleMapping  map[string][]string `json:"role_mapping,omitempty"`
