@@ -158,6 +158,22 @@
   let azureClientId = $state(snapResource.azure?.client_id ?? "");
   let azureClientSecret = $state(snapResource.azure?.client_secret ?? "");
 
+  // Outbound proxy — shared across every backend. Seeded from whichever
+  // sub-config the resource currently carries. Empty means "use the
+  // server's HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment".
+  let proxy = $state(
+    snapResource.http?.proxy ??
+      snapResource.vault?.proxy ??
+      snapResource.kubernetes?.proxy ??
+      snapResource.consul?.proxy ??
+      snapResource.etcd?.proxy ??
+      snapResource.aws?.proxy ??
+      snapResource.gcp?.proxy ??
+      snapResource.gcp_parameter?.proxy ??
+      snapResource.azure?.proxy ??
+      "",
+  );
+
   // ── Test connection state ─────────────────────────────────────────────
   let testing = $state(false);
   let testResult = $state<{
@@ -362,6 +378,24 @@
         client_id: azureClientId.trim(),
         client_secret: azureClientSecret.trim(),
       };
+    }
+
+    // Outbound proxy is supported by every backend; attach it to
+    // whichever sub-config this form produced. Only persisted when set
+    // so resources without a proxy keep a minimal wire shape.
+    const proxyVal = proxy.trim();
+    if (proxyVal) {
+      const cfg =
+        r.http ??
+        r.vault ??
+        r.kubernetes ??
+        r.consul ??
+        r.etcd ??
+        r.aws ??
+        r.gcp ??
+        r.gcp_parameter ??
+        r.azure;
+      if (cfg) (cfg as { proxy?: string }).proxy = proxyVal;
     }
     return r;
   }
@@ -1356,6 +1390,34 @@
         </div>
       </div>
     {/if}
+
+    <!-- Outbound proxy — shared by every backend. Empty falls back to the
+         server's HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment. -->
+    <div class="mt-6 pt-4 border-t border-slate-100 dark:border-warm-700">
+      <span
+        class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"
+        >Proxy <span class="font-normal normal-case">(optional)</span></span
+      >
+      {#if isReadOnly}
+        <div
+          class="px-3 py-2 text-sm font-mono text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md"
+        >
+          {proxy || "—"}
+        </div>
+      {:else}
+        <input
+          type="text"
+          bind:value={proxy}
+          placeholder="http://proxy.example.com:8080"
+          class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+        />
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          Outbound proxy for requests to this resource. Leave empty to use the
+          server's HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment. Supports
+          http, https, and socks5 URLs.
+        </p>
+      {/if}
+    </div>
 
     {#if mode !== "create"}
       <div class="mt-6 pt-4 border-t border-slate-100 dark:border-warm-700">

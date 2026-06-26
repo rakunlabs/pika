@@ -57,6 +57,11 @@ type GCP struct {
 	// parse them correctly without a manual override. Ignored when
 	// RawValue is false (the legacy wrapper always serves JSON).
 	ContentType string `json:"content_type,omitempty"`
+
+	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used
+	// for all requests to GCP Secret Manager. Empty falls back to the
+	// HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment variables.
+	Proxy string `json:"proxy,omitempty"`
 }
 
 // GetRawValue reports whether GCPProvider.Read should return the raw
@@ -97,6 +102,11 @@ type GCPParameter struct {
 	// Location is the GCP location to query (e.g. "global", "us-central1").
 	// Defaults to "global" when empty.
 	Location string `json:"location,omitempty"`
+
+	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used
+	// for all requests to GCP Parameter Manager. Empty falls back to
+	// the HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment variables.
+	Proxy string `json:"proxy,omitempty"`
 }
 
 // GetLocation returns the configured location, defaulting to "global".
@@ -120,6 +130,11 @@ type Kubernetes struct {
 	// KubeconfigContent is the full YAML content of a kubeconfig, pasted directly.
 	// Useful for managing the credentials entirely from the UI without writing a file.
 	KubeconfigContent string `json:"kubeconfig_content,omitempty"`
+
+	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used
+	// for all requests to the Kubernetes API. Empty falls back to the
+	// HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment variables.
+	Proxy string `json:"proxy,omitempty"`
 }
 
 type Vault struct {
@@ -132,6 +147,11 @@ type Vault struct {
 	AppRole *VaultAppRole `json:"app_role,omitempty"`
 	// Token is a direct Vault token (optional fallback, not recommended for production).
 	Token string `json:"token,omitempty"`
+
+	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used
+	// for all requests to this Vault. Empty falls back to the
+	// HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment variables.
+	Proxy string `json:"proxy,omitempty"`
 }
 
 type VaultAppRole struct {

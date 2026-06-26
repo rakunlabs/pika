@@ -91,6 +91,10 @@ func run(ctx context.Context) error {
 	// Initialize service
 	svc := service.New(storeWrap)
 	svc.SetKeyManager(mgr)
+	// Hand the service a server-lifetime context so background workers
+	// (e.g. Vault AppRole token renewal) survive past the request that
+	// first triggers them and are cancelled cleanly on shutdown.
+	svc.SetRootContext(ctx)
 
 	// Bootstrap-time hint: if the verifier is already on disk, mark
 	// the manager as initialized so the lockgate engages and the SPA

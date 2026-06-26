@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // Consul configures a Consul KV external resource.
@@ -18,6 +17,11 @@ type Consul struct {
 	Address string `json:"address"`
 	// Token is the Consul ACL token (optional).
 	Token string `json:"token,omitempty"`
+
+	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used
+	// for all requests to Consul. Empty falls back to the HTTP_PROXY /
+	// HTTPS_PROXY / NO_PROXY environment variables.
+	Proxy string `json:"proxy,omitempty"`
 }
 
 // ConsulClient is a minimal HTTP client for HashiCorp Consul KV.
@@ -28,13 +32,13 @@ type ConsulClient struct {
 }
 
 // NewConsulClient creates a new Consul KV client.
-func NewConsulClient(address, token string) *ConsulClient {
+// proxy is an optional outbound proxy URL; empty uses the environment
+// proxy (see newHTTPClient).
+func NewConsulClient(address, token, proxy string) *ConsulClient {
 	return &ConsulClient{
-		address: strings.TrimRight(address, "/"),
-		token:   token,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		address:    strings.TrimRight(address, "/"),
+		token:      token,
+		httpClient: newHTTPClient(proxy, nil),
 	}
 }
 
@@ -225,11 +229,14 @@ func (p *ConsulProvider) Validate() error {
 	if strings.TrimSpace(p.Config.Address) == "" {
 		return fmt.Errorf("consul: address is required")
 	}
+	if err := validateProxy(p.Config.Proxy); err != nil {
+		return fmt.Errorf("consul: %w", err)
+	}
 	return nil
 }
 
 func (p *ConsulProvider) Fetch(ctx context.Context, path string) ([]byte, error) {
-	client := NewConsulClient(p.Config.Address, p.Config.Token)
+	client := NewConsulClient(p.Config.Address, p.Config.Token, p.Config.Proxy)
 	data, err := client.ReadSecret(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("reading consul key at %q: %w", path, err)
@@ -238,7 +245,7 @@ func (p *ConsulProvider) Fetch(ctx context.Context, path string) ([]byte, error)
 }
 
 func (p *ConsulProvider) List(ctx context.Context, prefix string) ([]string, error) {
-	client := NewConsulClient(p.Config.Address, p.Config.Token)
+	client := NewConsulClient(p.Config.Address, p.Config.Token, p.Config.Proxy)
 	return client.ListSecrets(ctx, prefix)
 }
 
@@ -259,7 +266,7 @@ func (p *ConsulProvider) Test(ctx context.Context) TestResult {
 // strings; we wrap that as an Entry so the browser sees a uniform
 // shape across all backends.
 func (p *ConsulProvider) Read(ctx context.Context, path string) (*Entry, error) {
-	client := NewConsulClient(p.Config.Address, p.Config.Token)
+	client := NewConsulClient(p.Config.Address, p.Config.Token, p.Config.Proxy)
 	data, err := client.ReadSecret(ctx, path)
 	if err != nil {
 		return nil, err
@@ -273,7 +280,7 @@ func (p *ConsulProvider) Read(ctx context.Context, path string) (*Entry, error) 
 // Otherwise we serialise the whole map as JSON — symmetric with what
 // Read does on the way back.
 func (p *ConsulProvider) Write(ctx context.Context, path string, data map[string]any) error {
-	client := NewConsulClient(p.Config.Address, p.Config.Token)
+	client := NewConsulClient(p.Config.Address, p.Config.Token, p.Config.Proxy)
 	var payload []byte
 	if v, ok := data["value"]; ok && len(data) == 1 {
 		if s, ok := v.(string); ok {
@@ -293,7 +300,7 @@ func (p *ConsulProvider) Write(ctx context.Context, path string, data map[string
 }
 
 func (p *ConsulProvider) Delete(ctx context.Context, path string) error {
-	client := NewConsulClient(p.Config.Address, p.Config.Token)
+	client := NewConsulClient(p.Config.Address, p.Config.Token, p.Config.Proxy)
 	return client.DeleteKey(ctx, path)
 }
 

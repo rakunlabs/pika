@@ -68,6 +68,15 @@ type Service struct {
 	// HTTP layer reads its state via GetKeyStatus to decide between
 	// the unlock screen and the normal app shell.
 	keyManager *keymgr.Manager
+
+	// rootCtx is a server-lifetime context set once at boot via
+	// SetRootContext. It is handed to background goroutines that must
+	// outlive any single request — currently the Vault AppRole token
+	// renewal loop (see getVaultClient → StartRenewal). Without this,
+	// renewal would bind to the first request's context and stop when
+	// that request completes, forcing a fresh AppRole login on every
+	// token TTL instead of cheaply extending the existing lease.
+	rootCtx context.Context
 }
 
 func New(store Storage) *Service {
@@ -85,6 +94,14 @@ func New(store Storage) *Service {
 // Used by the session store for DB-backed session persistence.
 func (s *Service) SessionStorage() SessionStorage {
 	return s.store.Sessions()
+}
+
+// SetRootContext stores a server-lifetime context used by background
+// goroutines that must outlive individual requests (e.g. Vault token
+// renewal). Call once at boot, before serving traffic, with the
+// context that is cancelled on server shutdown.
+func (s *Service) SetRootContext(ctx context.Context) {
+	s.rootCtx = ctx
 }
 
 // SetHookDispatcher sets the hook dispatcher for emitting config events.
@@ -139,14 +156,17 @@ func kubeClientCacheKey(k8s *external.Kubernetes) string {
 	if k8s == nil {
 		return "in-cluster"
 	}
+	// Suffix the proxy so the same kubeconfig routed through different
+	// proxies maps to distinct cached clients.
+	proxySuffix := "|" + k8s.Proxy
 	if k8s.KubeconfigContent != "" {
 		sum := sha256.Sum256([]byte(k8s.KubeconfigContent))
-		return "inline:" + hex.EncodeToString(sum[:])
+		return "inline:" + hex.EncodeToString(sum[:]) + proxySuffix
 	}
 	if k8s.Kubeconfig != "" {
-		return "path:" + k8s.Kubeconfig
+		return "path:" + k8s.Kubeconfig + proxySuffix
 	}
-	return "in-cluster"
+	return "in-cluster" + proxySuffix
 }
 
 // getKubeClient returns a cached or new KubeClient for the given Kubernetes config.
@@ -182,8 +202,12 @@ func (s *Service) getKubeClient(k8s *external.Kubernetes) (*external.KubeClient,
 // If the client doesn't exist yet, it creates one, configures authentication,
 // and starts background token renewal.
 func (s *Service) getVaultClient(ctx context.Context, vault *external.Vault) *external.VaultClient {
+	// Cache key includes the proxy so two resources that share a Vault
+	// address but route through different proxies get distinct clients.
+	cacheKey := vault.Address + "|" + vault.Proxy
+
 	s.vaultMu.RLock()
-	client, exists := s.vaultClients[vault.Address]
+	client, exists := s.vaultClients[cacheKey]
 	s.vaultMu.RUnlock()
 
 	if exists {
@@ -194,28 +218,38 @@ func (s *Service) getVaultClient(ctx context.Context, vault *external.Vault) *ex
 	defer s.vaultMu.Unlock()
 
 	// Double-check after acquiring write lock
-	if client, exists = s.vaultClients[vault.Address]; exists {
+	if client, exists = s.vaultClients[cacheKey]; exists {
 		return client
 	}
 
-	client = external.NewVaultClient(vault.Address)
+	client = external.NewVaultClient(vault.Address, vault.Proxy)
 
 	// Configure authentication
 	if vault.AppRole != nil {
 		client.SetAppRole(vault.AppRole)
-		// Enable background token renewal for AppRole-based auth
-		client.StartRenewal(ctx)
+		// Enable background token renewal for AppRole-based auth.
+		// The renewal goroutine must outlive the request that first
+		// created this client, so bind it to the server-lifetime
+		// context rather than the per-request ctx. Fall back to the
+		// request ctx only when no root context was set (e.g. tests).
+		renewCtx := s.rootCtx
+		if renewCtx == nil {
+			renewCtx = ctx
+		}
+		client.StartRenewal(renewCtx)
 	} else if vault.Token != "" {
 		client.SetToken(vault.Token)
 	}
 
-	s.vaultClients[vault.Address] = client
+	s.vaultClients[cacheKey] = client
 	return client
 }
 
 // getGCPClient returns a cached or new GCP Secret Manager client.
 func (s *Service) getGCPClient(gcp *external.GCP) (*external.GCPSecretManagerClient, error) {
-	key := gcp.ServiceAccountJSON // use the full JSON as cache key (contains project_id)
+	// Cache key is the full JSON (contains project_id) plus the proxy
+	// so resources sharing credentials but different proxies stay apart.
+	key := gcp.ServiceAccountJSON + "|" + gcp.Proxy
 
 	s.gcpMu.RLock()
 	client, exists := s.gcpClients[key]
@@ -232,7 +266,7 @@ func (s *Service) getGCPClient(gcp *external.GCP) (*external.GCPSecretManagerCli
 		return client, nil
 	}
 
-	client, err := external.NewGCPSecretManagerClient(gcp.ServiceAccountJSON)
+	client, err := external.NewGCPSecretManagerClient(gcp.ServiceAccountJSON, gcp.Proxy)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +282,7 @@ func (s *Service) getGCPClient(gcp *external.GCP) (*external.GCPSecretManagerCli
 // location for every call.
 func (s *Service) getGCPParameterClient(g *external.GCPParameter) (*external.GCPParameterManagerClient, error) {
 	location := g.GetLocation()
-	key := g.ServiceAccountJSON + "|" + location
+	key := g.ServiceAccountJSON + "|" + location + "|" + g.Proxy
 
 	s.gcpParamMu.RLock()
 	client, exists := s.gcpParamClients[key]
@@ -265,7 +299,7 @@ func (s *Service) getGCPParameterClient(g *external.GCPParameter) (*external.GCP
 		return client, nil
 	}
 
-	client, err := external.NewGCPParameterManagerClient(g.ServiceAccountJSON, location)
+	client, err := external.NewGCPParameterManagerClient(g.ServiceAccountJSON, location, g.Proxy)
 	if err != nil {
 		return nil, err
 	}
@@ -276,8 +310,12 @@ func (s *Service) getGCPParameterClient(g *external.GCPParameter) (*external.GCP
 
 // getAzureClient returns a cached or new Azure Key Vault client.
 func (s *Service) getAzureClient(azure *external.Azure) *external.AzureKeyVaultClient {
+	// Cache key includes the proxy so the same vault URL routed through
+	// different proxies yields distinct clients.
+	cacheKey := azure.VaultURL + "|" + azure.Proxy
+
 	s.azureMu.RLock()
-	client, exists := s.azureClients[azure.VaultURL]
+	client, exists := s.azureClients[cacheKey]
 	s.azureMu.RUnlock()
 
 	if exists {
@@ -287,11 +325,11 @@ func (s *Service) getAzureClient(azure *external.Azure) *external.AzureKeyVaultC
 	s.azureMu.Lock()
 	defer s.azureMu.Unlock()
 
-	if client, exists = s.azureClients[azure.VaultURL]; exists {
+	if client, exists = s.azureClients[cacheKey]; exists {
 		return client
 	}
 
-	client = external.NewAzureKeyVaultClient(azure.VaultURL, azure.TenantID, azure.ClientID, azure.ClientSecret)
-	s.azureClients[azure.VaultURL] = client
+	client = external.NewAzureKeyVaultClient(azure.VaultURL, azure.TenantID, azure.ClientID, azure.ClientSecret, azure.Proxy)
+	s.azureClients[cacheKey] = client
 	return client
 }

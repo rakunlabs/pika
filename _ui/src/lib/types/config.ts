@@ -120,6 +120,9 @@ export interface VaultConfig {
   mount: string;         // KV secrets engine mount (e.g., "secret")
   token?: string;
   app_role?: VaultAppRole;
+  // Optional outbound proxy URL. Empty falls back to the
+  // HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment variables.
+  proxy?: string;
 }
 
 // Kubernetes external resource configuration.
@@ -127,12 +130,14 @@ export interface VaultConfig {
 export interface KubernetesConfig {
   kubeconfig?: string;          // path to kubeconfig file on the pika server
   kubeconfig_content?: string;  // full kubeconfig YAML, pasted directly
+  proxy?: string;               // optional outbound proxy URL (empty = env proxy)
 }
 
 // Consul external resource configuration
 export interface ConsulConfig {
   address: string;
   token?: string;
+  proxy?: string;  // optional outbound proxy URL (empty = env proxy)
 }
 
 // etcd external resource configuration
@@ -140,6 +145,7 @@ export interface EtcdConfig {
   address: string;
   username?: string;
   password?: string;
+  proxy?: string;  // optional outbound proxy URL (empty = env proxy)
 }
 
 // AWS external resource configuration (Secrets Manager or SSM)
@@ -148,6 +154,7 @@ export interface AWSConfig {
   access_key: string;
   secret_key: string;
   service: string;  // "secretsmanager" or "ssm"
+  proxy?: string;   // optional outbound proxy URL (empty = env proxy)
 }
 
 // GCP Secret Manager external resource configuration.
@@ -167,6 +174,8 @@ export interface GCPConfig {
   // HTTP Content-Type applied by raw mode. Empty ≡ server default
   // ("application/yaml"). Ignored when raw_value is false.
   content_type?: string;
+  // Optional outbound proxy URL (empty = env proxy).
+  proxy?: string;
 }
 
 // GCP Parameter Manager external resource configuration. Location
@@ -175,6 +184,7 @@ export interface GCPConfig {
 export interface GCPParameterConfig {
   service_account_json: string;
   location?: string;
+  proxy?: string;  // optional outbound proxy URL (empty = env proxy)
 }
 
 // Azure Key Vault external resource configuration
@@ -183,6 +193,7 @@ export interface AzureConfig {
   tenant_id: string;
   client_id: string;
   client_secret: string;
+  proxy?: string;  // optional outbound proxy URL (empty = env proxy)
 }
 
 // External resource for inheritance
@@ -192,6 +203,9 @@ export interface ExternalResource {
     // Custom headers applied to every request. Backed by ok.Config.Header
     // (map[string][]string) so a single key can have multiple values.
     header?: Record<string, string[]>;
+    // Optional outbound proxy URL. Backed by ok.Config.Proxy; empty
+    // falls back to the HTTP_PROXY / HTTPS_PROXY / NO_PROXY env vars.
+    proxy?: string;
   };
   vault?: VaultConfig;
   kubernetes?: KubernetesConfig;

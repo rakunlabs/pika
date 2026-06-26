@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // Etcd configures an etcd external resource.
@@ -20,6 +19,11 @@ type Etcd struct {
 	Username string `json:"username,omitempty"`
 	// Password for basic auth (optional).
 	Password string `json:"password,omitempty"`
+
+	// Proxy is an optional outbound HTTP/HTTPS/SOCKS5 proxy URL used
+	// for all requests to etcd. Empty falls back to the HTTP_PROXY /
+	// HTTPS_PROXY / NO_PROXY environment variables.
+	Proxy string `json:"proxy,omitempty"`
 }
 
 // EtcdClient is a minimal HTTP client for etcd v3 via gRPC-gateway REST API.
@@ -31,14 +35,14 @@ type EtcdClient struct {
 }
 
 // NewEtcdClient creates a new etcd client.
-func NewEtcdClient(address, username, password string) *EtcdClient {
+// proxy is an optional outbound proxy URL; empty uses the environment
+// proxy (see newHTTPClient).
+func NewEtcdClient(address, username, password, proxy string) *EtcdClient {
 	return &EtcdClient{
-		address:  strings.TrimRight(address, "/"),
-		username: username,
-		password: password,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		address:    strings.TrimRight(address, "/"),
+		username:   username,
+		password:   password,
+		httpClient: newHTTPClient(proxy, nil),
 	}
 }
 
@@ -248,11 +252,14 @@ func (p *EtcdProvider) Validate() error {
 	if strings.TrimSpace(p.Config.Address) == "" {
 		return fmt.Errorf("etcd: address is required")
 	}
+	if err := validateProxy(p.Config.Proxy); err != nil {
+		return fmt.Errorf("etcd: %w", err)
+	}
 	return nil
 }
 
 func (p *EtcdProvider) Fetch(ctx context.Context, path string) ([]byte, error) {
-	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password)
+	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password, p.Config.Proxy)
 	data, err := client.ReadSecret(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("reading etcd key at %q: %w", path, err)
@@ -261,7 +268,7 @@ func (p *EtcdProvider) Fetch(ctx context.Context, path string) ([]byte, error) {
 }
 
 func (p *EtcdProvider) List(ctx context.Context, prefix string) ([]string, error) {
-	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password)
+	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password, p.Config.Proxy)
 	return client.ListSecrets(ctx, prefix)
 }
 
@@ -279,7 +286,7 @@ func (p *EtcdProvider) Test(ctx context.Context) TestResult {
 
 // Read returns the parsed value at key. Mirrors ConsulProvider.Read.
 func (p *EtcdProvider) Read(ctx context.Context, path string) (*Entry, error) {
-	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password)
+	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password, p.Config.Proxy)
 	data, err := client.ReadSecret(ctx, path)
 	if err != nil {
 		return nil, err
@@ -291,7 +298,7 @@ func (p *EtcdProvider) Read(ctx context.Context, path string) (*Entry, error) {
 // Write — same value convention as ConsulProvider.Write: a single
 // "value" key is stored verbatim, anything richer is JSON-encoded.
 func (p *EtcdProvider) Write(ctx context.Context, path string, data map[string]any) error {
-	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password)
+	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password, p.Config.Proxy)
 	var payload []byte
 	if v, ok := data["value"]; ok && len(data) == 1 {
 		if s, ok := v.(string); ok {
@@ -311,7 +318,7 @@ func (p *EtcdProvider) Write(ctx context.Context, path string, data map[string]a
 }
 
 func (p *EtcdProvider) Delete(ctx context.Context, path string) error {
-	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password)
+	client := NewEtcdClient(p.Config.Address, p.Config.Username, p.Config.Password, p.Config.Proxy)
 	return client.DeleteKey(ctx, path)
 }
 

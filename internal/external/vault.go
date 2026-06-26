@@ -32,12 +32,12 @@ type VaultClient struct {
 }
 
 // NewVaultClient creates a new Vault client for the given address.
-func NewVaultClient(address string) *VaultClient {
+// proxy is an optional outbound proxy URL; empty uses the environment
+// proxy (see newHTTPClient).
+func NewVaultClient(address, proxy string) *VaultClient {
 	return &VaultClient{
-		address: strings.TrimRight(address, "/"),
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		address:    strings.TrimRight(address, "/"),
+		httpClient: newHTTPClient(proxy, nil),
 	}
 }
 
@@ -726,6 +726,9 @@ func (p *VaultProvider) Validate() error {
 		if strings.TrimSpace(p.Config.AppRole.RoleID) == "" || strings.TrimSpace(p.Config.AppRole.SecretID) == "" {
 			return fmt.Errorf("vault: app_role.role_id and app_role.secret_id are required")
 		}
+	}
+	if err := validateProxy(p.Config.Proxy); err != nil {
+		return fmt.Errorf("vault: %w", err)
 	}
 	return nil
 }

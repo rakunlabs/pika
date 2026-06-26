@@ -100,6 +100,8 @@
      let newExtAzureTenantId = $state("");
      let newExtAzureClientId = $state("");
      let newExtAzureClientSecret = $state("");
+     // Outbound proxy — shared by every backend (empty = env proxy).
+     let newExtProxy = $state("");
 
      const settings = $derived(configStore.settings);
      const externalResources = $derived(
@@ -268,12 +270,29 @@
                     );
                     return;
                }
-               resource.azure = {
-                    vault_url: newExtAzureVaultUrl.trim(),
-                    tenant_id: newExtAzureTenantId.trim(),
-                    client_id: newExtAzureClientId.trim(),
-                    client_secret: newExtAzureClientSecret.trim(),
-               };
+                resource.azure = {
+                     vault_url: newExtAzureVaultUrl.trim(),
+                     tenant_id: newExtAzureTenantId.trim(),
+                     client_id: newExtAzureClientId.trim(),
+                     client_secret: newExtAzureClientSecret.trim(),
+                };
+          }
+
+          // Outbound proxy is supported by every backend; attach it to
+          // whichever sub-config was built. Persisted only when set.
+          const newExtProxyVal = newExtProxy.trim();
+          if (newExtProxyVal) {
+               const cfg =
+                    resource.http ??
+                    resource.vault ??
+                    resource.kubernetes ??
+                    resource.consul ??
+                    resource.etcd ??
+                    resource.aws ??
+                    resource.gcp ??
+                    resource.gcp_parameter ??
+                    resource.azure;
+               if (cfg) (cfg as { proxy?: string }).proxy = newExtProxyVal;
           }
 
           try {
@@ -314,6 +333,7 @@
                newExtAzureTenantId = "";
                newExtAzureClientId = "";
                newExtAzureClientSecret = "";
+               newExtProxy = "";
           } catch (error) {
                addToast("Failed to add external resource", "alert");
           }
@@ -1209,17 +1229,38 @@
                                    placeholder="Client secret"
                                    class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
                               />
-                         </div>
-                    </div>
-               {/if}
+                          </div>
+                     </div>
+                {/if}
 
-               <div class="flex justify-end gap-2">
-                    <button
-                         class="px-3 py-2 text-sm text-slate-600 dark:text-slate-300 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md hover:bg-slate-50 dark:bg-warm-900 transition-colors cursor-pointer"
-                         onclick={() => (showAddExternal = false)}
-                    >
-                         Cancel
-                    </button>
+                <!-- Outbound proxy — shared by every backend (empty = env proxy). -->
+                <div>
+                     <label
+                          for="ext-proxy"
+                          class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"
+                          >Proxy <span class="font-normal">(optional)</span></label
+                     >
+                     <input
+                          id="ext-proxy"
+                          type="text"
+                          bind:value={newExtProxy}
+                          placeholder="http://proxy.example.com:8080"
+                          class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+                     />
+                     <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                          Outbound proxy for requests to this resource. Leave empty
+                          to use the server's HTTP_PROXY / HTTPS_PROXY / NO_PROXY
+                          environment. Supports http, https, and socks5 URLs.
+                     </p>
+                </div>
+
+                <div class="flex justify-end gap-2">
+                     <button
+                          class="px-3 py-2 text-sm text-slate-600 dark:text-slate-300 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md hover:bg-slate-50 dark:bg-warm-900 transition-colors cursor-pointer"
+                          onclick={() => (showAddExternal = false)}
+                     >
+                          Cancel
+                     </button>
                     <button
                          class="px-3 py-2 text-sm text-white bg-accent-600 rounded-md hover:bg-accent-700 transition-colors cursor-pointer"
                          onclick={handleAddExternal}

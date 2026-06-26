@@ -65,7 +65,9 @@ type gcpListSecretsResponse struct {
 }
 
 // NewGCPSecretManagerClient creates a new GCP Secret Manager client from a service account JSON key.
-func NewGCPSecretManagerClient(serviceAccountJSON string) (*GCPSecretManagerClient, error) {
+// proxy is an optional outbound proxy URL; empty uses the environment
+// proxy (see newHTTPClient).
+func NewGCPSecretManagerClient(serviceAccountJSON, proxy string) (*GCPSecretManagerClient, error) {
 	var key gcpServiceAccountKey
 	if err := json.Unmarshal([]byte(serviceAccountJSON), &key); err != nil {
 		return nil, fmt.Errorf("gcp: parsing service account JSON: %w", err)
@@ -102,9 +104,7 @@ func NewGCPSecretManagerClient(serviceAccountJSON string) (*GCPSecretManagerClie
 		clientEmail: key.ClientEmail,
 		privateKey:  privateKey,
 		tokenURI:    key.TokenURI,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		httpClient:  newHTTPClient(proxy, nil),
 	}, nil
 }
 
@@ -463,6 +463,9 @@ func (p *GCPProvider) Validate() error {
 	}
 	if _, ok := probe["project_id"]; !ok {
 		return fmt.Errorf("gcp: service_account_json missing project_id")
+	}
+	if err := validateProxy(p.Config.Proxy); err != nil {
+		return fmt.Errorf("gcp: %w", err)
 	}
 	return nil
 }
