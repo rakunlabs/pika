@@ -269,6 +269,38 @@ func (s *Service) UnlinkUserIdentity(ctx context.Context, identityID string) err
 	return s.store.UserIdentities().Delete(ctx, identityID)
 }
 
+// ListUserIdentities returns every external identity linked to a user
+// (OAuth2/LDAP/Header). Empty for a pure local-password user. Used by the
+// admin UI to show "linked accounts" and distinguish external users.
+func (s *Service) ListUserIdentities(ctx context.Context, userID string) ([]UserIdentity, error) {
+	return s.store.UserIdentities().ListByUserID(ctx, userID)
+}
+
+// GetUserDeniedCapabilities returns the per-user deny overlay.
+func (s *Service) GetUserDeniedCapabilities(ctx context.Context, userID string) ([]string, error) {
+	return s.store.Permissions().GetUserDeniedCapabilities(ctx, userID)
+}
+
+// SetUserDeniedCapabilities replaces the per-user deny overlay. Unknown
+// capability keys are dropped so the overlay can only ever reference the
+// real capability vocabulary (KnownCapabilityKeys).
+func (s *Service) SetUserDeniedCapabilities(ctx context.Context, userID string, keys []string) error {
+	if _, err := s.store.Users().Get(ctx, userID); err != nil {
+		return err
+	}
+	known := make(map[string]struct{}, len(KnownCapabilities))
+	for _, k := range KnownCapabilityKeys() {
+		known[k] = struct{}{}
+	}
+	clean := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if _, ok := known[k]; ok {
+			clean = append(clean, k)
+		}
+	}
+	return s.store.Permissions().SetUserDeniedCapabilities(ctx, userID, clean)
+}
+
 // chooseExternalUsername picks a non-colliding username for a freshly-
 // provisioned external user. Preference order:
 //  1. Provider-asserted preferred_username / display hint (in.Username)

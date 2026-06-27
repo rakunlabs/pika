@@ -9,16 +9,16 @@ require (
 	github.com/go-ldap/ldap/v3 v3.4.13
 	github.com/goccy/go-yaml v1.19.2
 	github.com/nats-io/nats.go v1.50.0
-	github.com/rakunlabs/ada v0.4.4
-	github.com/rakunlabs/ada/handler/folder v0.4.4
-	github.com/rakunlabs/ada/middleware/auth v0.4.4
-	github.com/rakunlabs/ada/middleware/cors v0.4.4
-	github.com/rakunlabs/ada/middleware/log v0.4.4
-	github.com/rakunlabs/ada/middleware/ratelimit v0.4.4
-	github.com/rakunlabs/ada/middleware/recover v0.4.4
-	github.com/rakunlabs/ada/middleware/requestid v0.4.4
-	github.com/rakunlabs/ada/middleware/server v0.4.4
-	github.com/rakunlabs/ada/middleware/telemetry v0.4.4
+	github.com/rakunlabs/ada v0.4.5
+	github.com/rakunlabs/ada/handler/folder v0.4.5
+	github.com/rakunlabs/ada/middleware/auth v0.4.5
+	github.com/rakunlabs/ada/middleware/cors v0.4.5
+	github.com/rakunlabs/ada/middleware/log v0.4.5
+	github.com/rakunlabs/ada/middleware/ratelimit v0.4.5
+	github.com/rakunlabs/ada/middleware/recover v0.4.5
+	github.com/rakunlabs/ada/middleware/requestid v0.4.5
+	github.com/rakunlabs/ada/middleware/server v0.4.5
+	github.com/rakunlabs/ada/middleware/telemetry v0.4.5
 	github.com/rakunlabs/alan v0.5.0
 	github.com/rakunlabs/bw v0.3.0
 	github.com/rakunlabs/chu v0.4.7

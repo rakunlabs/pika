@@ -56,6 +56,7 @@
     ExternalEntry,
     ExternalVersion,
   } from "@/lib/types/config";
+  import jsYaml from "js-yaml";
 
   // ── Page state ────────────────────────────────────────────────────
   let booted = $state(false);
@@ -108,19 +109,29 @@
   let entryLoading = $state(false);
   let entryError = $state<string | null>(null);
 
-  // Edit state. We mirror entry.data into a flat key/value array so
-  // the user can add/remove rows without struggling with object key
-  // mutation. saveEntry() collapses it back to an object on write.
-  //
-  // For wrapper backends (isWrapperBackend === true) we use
-  // `singleValueDraft` instead: one editable string that gets
-  // wrapped in `{value: ...}` on save. Both states coexist so the
-  // user can toggle between resources of different kinds without
-  // losing draft text in the active editor.
+  // Edit state. Every backend now edits through ONE full-document
+  // editor (`singleValueDraft`), regardless of kind:
+  //   • Wrapper backends (Consul/etcd/HTTP/GCP) store the raw string
+  //     verbatim under the synthetic `value` key.
+  //   • Structured backends (Vault/Kubernetes) edit the WHOLE secret
+  //     as a single JSON (or YAML) document — saveEntry() parses it
+  //     back to the key/value map the backend stores. js-yaml reads
+  //     JSON too, so a YAML edit is transparently converted to the
+  //     JSON map Vault persists.
   let editing = $state(false);
   let saving = $state(false);
-  let editRows = $state<Array<{ key: string; value: string }>>([]);
   let singleValueDraft = $state("");
+
+  // Current syntax-validation error reported by the active editor (or
+  // null). Bound from ExternalValueEditor; drives the save-time confirm
+  // gate the way the Configurations editor lints before writing.
+  let editorLintError = $state<string | null>(null);
+
+  // Configurations-style save-time lint gate. For wrapper backends a
+  // syntax error is advisory (the raw string is still storable), so the
+  // first Save warns and a second Save within the timeout confirms.
+  let pendingSaveConfirm = $state(false);
+  let pendingSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
   // ── Search state ─────────────────────────────────────────────────
   // Search runs against the currently selected resource. We keep the
@@ -196,8 +207,8 @@
     entry = null;
     entryError = null;
     editing = false;
-    editRows = [];
     singleValueDraft = "";
+    pendingSaveConfirm = false;
     // Reset search so picking a new resource doesn't leave stale
     // results from the previous one in the panel.
     searchInput = "";
@@ -275,7 +286,8 @@
     if (!selectedResource) return;
     selectedPath = path;
     editing = false;
-    editRows = [];
+    singleValueDraft = "";
+    pendingSaveConfirm = false;
     entryError = null;
     activeVersion = "";
     versions = [];
@@ -329,34 +341,90 @@
           : typeof raw === "string"
             ? raw
             : JSON.stringify(raw, null, 2);
-      editRows = [];
-    } else if (!entry?.data) {
-      editRows = [{ key: "", value: "" }];
-      singleValueDraft = "";
     } else {
-      // Coerce each value to a string for the editor. Objects are
-      // pretty-printed; primitives become their literal form.
-      editRows = Object.entries(entry.data).map(([k, v]) => ({
-        key: k,
-        value: typeof v === "string" ? v : JSON.stringify(v, null, 2),
-      }));
-      singleValueDraft = "";
+      // Structured backend (Vault/K8s): edit the WHOLE secret as one
+      // JSON document. This matches the read view (a single JSON pane)
+      // and how the secret actually lives in the backend, instead of
+      // fragmenting it into a row-per-key form.
+      singleValueDraft = entry?.data ? JSON.stringify(entry.data, null, 2) : "{}";
     }
+    pendingSaveConfirm = false;
     editing = true;
   }
 
   function cancelEdit() {
     editing = false;
-    editRows = [];
     singleValueDraft = "";
+    pendingSaveConfirm = false;
   }
 
-  function addEditRow() {
-    editRows = [...editRows, { key: "", value: "" }];
+  // Reset the pending save-confirm whenever the draft changes — any edit
+  // invalidates a prior "press Save again" prompt (mirrors the
+  // Configurations editor's handleChange).
+  function onDraftChange(v: string) {
+    singleValueDraft = v;
+    if (pendingSaveConfirm) {
+      pendingSaveConfirm = false;
+      clearTimeout(pendingSaveTimer);
+    }
   }
 
-  function removeEditRow(i: number) {
-    editRows = editRows.filter((_, idx) => idx !== i);
+  // Build the write payload for the active backend, applying the
+  // save-time lint gate. Returns the data object to write, or undefined
+  // when the save must be aborted (a toast/confirm was already raised).
+  // Shared by saveEntry() and createEntry() so both honour the same
+  // validation contract the server expects (consul.go:275, vault.go).
+  function buildSaveData(): Record<string, unknown> | undefined {
+    if (isWrapperBackend) {
+      // Wrapper backend: ship the raw string verbatim under "value".
+      // A syntax error in the chosen format is advisory (the string is
+      // still storable), so we warn once and let a second Save confirm —
+      // the Configurations editor's "press Save again" behaviour.
+      if (editorLintError && !pendingSaveConfirm) {
+        pendingSaveConfirm = true;
+        addToast(
+          "Value has syntax errors — press Save again to confirm",
+          "warn",
+        );
+        clearTimeout(pendingSaveTimer);
+        pendingSaveTimer = setTimeout(() => {
+          pendingSaveConfirm = false;
+        }, 5000);
+        return undefined;
+      }
+      pendingSaveConfirm = false;
+      clearTimeout(pendingSaveTimer);
+      return { value: singleValueDraft };
+    }
+    // Structured backend (Vault/K8s): the whole secret is one document.
+    // Parse it back to an object — js-yaml reads JSON too, so a YAML edit
+    // is transparently converted to the JSON map the backend stores.
+    // Invalid input can't be serialized into a structured write, so it
+    // hard-blocks here rather than falling through to a "save anyway".
+    const parsed = parseStructuredDraft(singleValueDraft);
+    if (parsed === null) {
+      addToast("Invalid JSON/YAML — the secret must be an object", "alert");
+      return undefined;
+    }
+    return parsed;
+  }
+
+  // Parse a structured-backend draft (JSON or YAML) into the key/value
+  // map the backend stores. Returns null when the text doesn't parse to
+  // a plain object (arrays and scalars aren't valid secret maps).
+  function parseStructuredDraft(draft: string): Record<string, unknown> | null {
+    const trimmed = draft.trim();
+    if (!trimmed) return {};
+    let parsed: unknown;
+    try {
+      parsed = jsYaml.load(trimmed);
+    } catch {
+      return null;
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as Record<string, unknown>;
   }
 
   async function saveEntry() {
@@ -365,38 +433,8 @@
       addToast("Missing external.write permission", "alert");
       return;
     }
-    // Build the data object differently for wrapper vs. structured
-    // backends — the SPA-side shape has to match what the provider
-    // contract on the server expects (consul.go:275, vault.go:Write).
-    let data: Record<string, unknown>;
-    if (isWrapperBackend) {
-      // Wrapper backend: ship the raw string verbatim under "value".
-      // The backend stores it byte-for-byte; no client-side JSON
-      // re-parsing because the user may have explicitly chosen TEXT
-      // format and "true" should not become a boolean on the wire.
-      data = { value: singleValueDraft };
-    } else {
-      // Structured backend: collect the rows, parse object-valued
-      // cells back to JSON so a `{"foo": "bar"}` paste round-trips
-      // as a real object (not a stringified one).
-      data = {};
-      for (const row of editRows) {
-        const key = row.key.trim();
-        if (!key) continue;
-        let value: unknown = row.value;
-        try {
-          const parsed = JSON.parse(row.value);
-          // Only accept JSON when it parses to a container — protects
-          // single words like "true" from being coerced to a boolean.
-          if (typeof parsed === "object" && parsed !== null) {
-            value = parsed;
-          }
-        } catch {
-          /* not JSON, keep as string */
-        }
-        data[key] = value;
-      }
-    }
+    const data = buildSaveData();
+    if (data === undefined) return;
 
     saving = true;
     try {
@@ -513,16 +551,12 @@
   function startCompose() {
     composing = true;
     newPath = "";
-    // Seed the right scratch state for the active backend. Wrapper
-    // backends get an empty single-editor draft; structured backends
-    // get one blank k/v row to start with.
-    if (isWrapperBackend) {
-      singleValueDraft = "";
-      editRows = [];
-    } else {
-      editRows = [{ key: "", value: "" }];
-      singleValueDraft = "";
-    }
+    // Seed the single-editor draft for the active backend: wrapper
+    // backends start blank (raw value); structured backends start with
+    // an empty JSON object so the editor lints as JSON from the first
+    // keystroke.
+    singleValueDraft = isWrapperBackend ? "" : "{}";
+    pendingSaveConfirm = false;
     selectedPath = null;
     entry = null;
   }
@@ -530,8 +564,8 @@
   function cancelCompose() {
     composing = false;
     newPath = "";
-    editRows = [];
     singleValueDraft = "";
+    pendingSaveConfirm = false;
   }
 
   async function createEntry() {
@@ -545,26 +579,10 @@
       addToast("Path is required", "alert");
       return;
     }
-    // Same wrapper-vs-structured payload split as saveEntry — see
-    // the comment there for why we can't unify the two paths.
-    let data: Record<string, unknown>;
-    if (isWrapperBackend) {
-      data = { value: singleValueDraft };
-    } else {
-      data = {};
-      for (const row of editRows) {
-        const key = row.key.trim();
-        if (!key) continue;
-        let value: unknown = row.value;
-        try {
-          const parsed = JSON.parse(row.value);
-          if (typeof parsed === "object" && parsed !== null) value = parsed;
-        } catch {
-          /* keep string */
-        }
-        data[key] = value;
-      }
-    }
+    // Reuse the shared payload builder so create and save honour the
+    // same parse/lint contract (see buildSaveData).
+    const data = buildSaveData();
+    if (data === undefined) return;
     saving = true;
     try {
       await configStore.writeExternalEntry(selectedResource, path, data);
@@ -1117,8 +1135,8 @@
               <X size={12} /> Cancel
             </button>
           </div>
-          <div class="flex-1 overflow-y-auto px-5 py-4">
-            <div class="mb-4">
+          <div class="flex-1 min-h-0 flex flex-col">
+            <div class="px-5 pt-4 pb-3 shrink-0">
               <label
                 class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"
                 for="new-path">Path</label
@@ -1135,7 +1153,7 @@
                 class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
               />
             </div>
-            {@render keyValueEditor()}
+            {@render valueEditor()}
           </div>
         {:else if !selectedPath}
           <div
@@ -1324,18 +1342,12 @@
                 </div>
               </div>
             {:else if editing}
-              {#if isWrapperBackend}
-                <!-- Wrapper backend (Consul/etcd/HTTP/GCP fallback):
-                     full-bleed single editor with format selector +
-                     beautify, identical chrome to the entry viewer. -->
-                {@render singleValueEditor()}
-              {:else}
-                <!-- Structured backend (Vault/K8s): multi-row k/v with
-                     its own padding and scroller. -->
-                <div class="flex-1 min-h-0 overflow-y-auto px-5 py-4">
-                  {@render keyValueEditor()}
-                </div>
-              {/if}
+              <!-- Every backend edits through one full-bleed document
+                   editor. Wrapper backends (Consul/etcd/HTTP/GCP) store
+                   the raw string; structured backends (Vault/K8s) edit
+                   the whole secret as JSON/YAML. Both get format
+                   controls, beautify, and inline linting. -->
+              {@render valueEditor()}
             {:else if entry}
               {@render entryViewer(entry)}
             {/if}
@@ -1426,83 +1438,34 @@
   </div>
 {/snippet}
 
-{#snippet singleValueEditor()}
-  <!-- Wrapper-backend edit surface. ONE editor, full-bleed, format
-       selector + beautify in the toolbar. The chosen format only
-       affects highlighting/linting — the backend stores the raw
-       string verbatim (consul.go:275 detects the `{value: <string>}`
-       shape and bypasses JSON marshaling), so format selection is
-       purely a UX hint for the user.
+{#snippet valueEditor()}
+  <!-- Unified edit surface for every backend. ONE editor, full-bleed,
+       with format selector + beautify + inline linting in the toolbar.
 
-       `bind:value` on the editor uses Svelte 5's two-way prop binding
-       so handleBeautify inside the component can mutate the value
-       and the local `singleValueDraft` stays in sync without an
-       extra onchange handler. -->
+       Wrapper backends (Consul/etcd/HTTP/GCP): the chosen format only
+       affects highlighting/linting — the backend stores the raw string
+       verbatim (consul.go:275 detects the `{value: <string>}` shape and
+       bypasses JSON marshaling), so format selection is a UX hint and a
+       syntax error is advisory (gated by the save-time confirm).
+
+       Structured backends (Vault/K8s): the editor holds the WHOLE secret
+       as one JSON/YAML document. saveEntry() parses it back to the
+       key/value map the backend stores; because js-yaml reads JSON too,
+       a YAML edit is converted to the JSON map Vault persists.
+
+       We drive value via `onchange` (not `bind:value`) because
+       AppCodeMirror relays edits one-way through its onchange callback —
+       a bare bind wouldn't capture typing. `editorLintError` flows back
+       up via the bindable so the save flow can gate on syntax errors. -->
   <div class="flex-1 min-h-0 flex flex-col">
     <ExternalValueEditor
-      bind:value={singleValueDraft}
+      value={singleValueDraft}
+      onchange={onDraftChange}
+      bind:lintError={editorLintError}
       showFormatControls={true}
-      placeholder="Enter value (plain text, JSON, YAML, …)"
+      placeholder={isWrapperBackend
+        ? "Enter value (plain text, JSON, YAML, …)"
+        : "Edit the whole secret as JSON or YAML — stored as JSON"}
     />
-  </div>
-{/snippet}
-
-{#snippet keyValueEditor()}
-  <div class="space-y-2">
-    <div class="flex items-center justify-between mb-2">
-      <span class="text-xs font-medium text-slate-500 dark:text-slate-400"
-        >Data (key / value)</span
-      >
-      <button
-        class="flex items-center gap-1 px-2 py-1 text-[11px] text-accent-700 dark:text-accent-300 bg-accent-50 dark:bg-accent-950/40 rounded hover:bg-accent-100 dark:hover:bg-accent-950/60 transition-colors cursor-pointer"
-        onclick={addEditRow}
-      >
-        <Plus size={10} /> Add row
-      </button>
-    </div>
-    {#if editRows.length === 0}
-      <p class="text-[11px] text-slate-400 dark:text-slate-500 italic">
-        No rows. Click "Add row" to start.
-      </p>
-    {:else}
-      <!-- Two-row stack per pair: key input + value editor side by
-           side reads poorly once the value spans more than one line.
-           Stacking lets the editor expand to full width and keeps the
-           remove-row button next to the key where it logically lives. -->
-      <div class="space-y-3">
-        {#each editRows as row, i (i)}
-          <div class="space-y-1.5">
-            <div class="flex items-center gap-1.5">
-              <input
-                type="text"
-                bind:value={row.key}
-                placeholder="key"
-                class="flex-1 px-2 py-1.5 text-xs font-mono border border-slate-200 dark:border-warm-700 rounded-md bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-              />
-              <button
-                class="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded transition-colors cursor-pointer shrink-0"
-                onclick={() => removeEditRow(i)}
-                title="Remove row"
-              >
-                <X size={12} />
-              </button>
-            </div>
-            <!-- The onchange closure captures i, not row, so reordering
-                 via add/remove keeps each editor pinned to its index. -->
-            <ExternalValueEditor
-              value={row.value}
-              onchange={(v) => {
-                editRows[i].value = v;
-              }}
-              placeholder="value (plain text or JSON)"
-            />
-          </div>
-        {/each}
-      </div>
-    {/if}
-    <p class="mt-2 text-[10px] text-slate-400 dark:text-slate-500">
-      Tip: paste a JSON object as a value to store it structurally. Plain
-      strings stay as strings.
-    </p>
   </div>
 {/snippet}

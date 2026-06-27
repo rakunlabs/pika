@@ -170,6 +170,17 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.GET("/api/v1/user-permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.getUserPermissions)))
 	m.PUT("/api/v1/user-permissions/*", m.Wrap(api.withPerm(service.CapPermissionsManage, api.setUserPermissions)))
 
+	// Effective-permission introspection + per-user session/deny control.
+	// Named-param routes ({user}/{handle}) sit on sibling prefixes so the
+	// /users/* wildcard doesn't swallow them (same reasoning as
+	// /users-kick). The raw session ID is never exposed — revocation keys
+	// off a hash handle resolved server-side.
+	m.GET("/api/v1/users-effective/{user}", m.Wrap(api.withPerm(service.CapUsersManage, api.getUserEffectivePermissions)))
+	m.GET("/api/v1/users-identities/{user}", m.Wrap(api.withPerm(service.CapUsersManage, api.getUserIdentities)))
+	m.GET("/api/v1/users-sessions/{user}", m.Wrap(api.withPerm(service.CapUsersManage, api.listUserSessions)))
+	m.DELETE("/api/v1/users-sessions/{user}/{handle}", m.Wrap(api.withPerm(service.CapUsersManage, api.revokeUserSession)))
+	m.PUT("/api/v1/users-denied/{user}", m.Wrap(api.withPerm(service.CapPermissionsManage, api.setUserDeniedPermissions)))
+
 	// Folder routes — directory listing reads use the ancestor variant so
 	// users granted only a deep pattern (e.g. configs/team-a/**) can still
 	// navigate the root and intermediate directories. Writes require the

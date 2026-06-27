@@ -39,20 +39,28 @@ type userRow struct {
 	CreatedAt    time.Time   `bw:"created_at,index"`
 	UpdatedAt    time.Time   `bw:"updated_at"`
 	Grants       []userGrant `bw:"grants"`
+	// DeniedCaps is a per-user deny overlay: capability keys subtracted
+	// from the user's resolved set regardless of how they were granted
+	// (role mapping, scope mapping, or db bundle). Lets an admin revoke a
+	// single IdP-derived capability for one user without editing the
+	// global RoleMapping. Like Grants, it is preserved across normal
+	// user Update and only mutated through the dedicated setter.
+	DeniedCaps []string `bw:"denied_capabilities"`
 }
 
 func (r *userRow) toService() *service.User {
 	return &service.User{
-		ID:           r.ID,
-		Username:     r.Username,
-		PasswordHash: r.PasswordHash,
-		Email:        r.Email,
-		DisplayName:  r.DisplayName,
-		External:     r.External,
-		Disabled:     r.Disabled,
-		IsSuperadmin: r.IsSuperadmin,
-		CreatedAt:    r.CreatedAt,
-		UpdatedAt:    r.UpdatedAt,
+		ID:                 r.ID,
+		Username:           r.Username,
+		PasswordHash:       r.PasswordHash,
+		Email:              r.Email,
+		DisplayName:        r.DisplayName,
+		External:           r.External,
+		Disabled:           r.Disabled,
+		IsSuperadmin:       r.IsSuperadmin,
+		DeniedCapabilities: append([]string(nil), r.DeniedCaps...),
+		CreatedAt:          r.CreatedAt,
+		UpdatedAt:          r.UpdatedAt,
 	}
 }
 

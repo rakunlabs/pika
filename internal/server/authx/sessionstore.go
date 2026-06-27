@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/rakunlabs/ada/middleware/auth/identity"
 	"github.com/rakunlabs/ada/middleware/auth/sessionstore"
 
 	"github.com/rakunlabs/pika/internal/service"
@@ -221,6 +222,48 @@ func extractIdentity(values map[string]any) extractedIdentity {
 	}
 	out.Provider = pair.Identity.Provider
 	return out
+}
+
+// reconstructIdentity rebuilds a *identity.Identity from a stored session's
+// sess.Values["pair"] blob, with enough fidelity for the capability resolver
+// to run out-of-band — i.e. the admin "effective permissions for user X"
+// path, which has no live *http.Request to read an identity from. It mirrors
+// the ada Pair serialization that extractIdentity reads, but keeps the fields
+// resolveDetailed needs: Subject, Provider, Roles, Scopes and the Claims map
+// (which already carries the stamped pika_user_id). Returns nil when the
+// payload has no usable identity.
+func reconstructIdentity(values map[string]any) *identity.Identity {
+	raw, ok := values["pair"].(string)
+	if !ok || raw == "" {
+		// Legacy/local rows persisted before the issuer store may only
+		// carry a bare username.
+		if v, ok := values["username"].(string); ok && v != "" {
+			return &identity.Identity{Subject: v, Provider: "local"}
+		}
+		return nil
+	}
+	var pair struct {
+		Identity struct {
+			Subject  string         `json:"subject"`
+			Roles    []string       `json:"roles"`
+			Scopes   []string       `json:"scopes"`
+			Claims   map[string]any `json:"claims"`
+			Provider string         `json:"provider"`
+		} `json:"identity"`
+	}
+	if err := json.Unmarshal([]byte(raw), &pair); err != nil {
+		return nil
+	}
+	if pair.Identity.Subject == "" && len(pair.Identity.Claims) == 0 {
+		return nil
+	}
+	return &identity.Identity{
+		Subject:  pair.Identity.Subject,
+		Roles:    pair.Identity.Roles,
+		Scopes:   pair.Identity.Scopes,
+		Claims:   pair.Identity.Claims,
+		Provider: pair.Identity.Provider,
+	}
 }
 
 // PikaUserIDClaim is the identity-claim key that carries the resolved

@@ -2,10 +2,14 @@ package authx
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/rakunlabs/ada"
 	"github.com/rakunlabs/ada/middleware/auth"
@@ -150,6 +154,137 @@ func (m *Manager) ResolveRequest(r *http.Request) (*identity.Identity, []string,
 
 	caps, username, userID, patterns := resolver.resolve(r.Context(), id)
 	return id, []string(caps), username, userID, patterns
+}
+
+// EffectiveForUser resolves a target user's effective capabilities for admin
+// inspection. It runs the SAME resolver the request hot path uses, sourced
+// from the user's most-recent active session (so IdP roles frozen in the
+// session participate), and falls back to a DB-only identity when the user is
+// offline (showing assigned bundles + superadmin + deny, with no IdP roles).
+func (m *Manager) EffectiveForUser(ctx context.Context, userID string) (*EffectiveReport, error) {
+	m.mu.Lock()
+	resolver := m.capResolver
+	m.mu.Unlock()
+	if resolver == nil {
+		return nil, fmt.Errorf("manager not booted")
+	}
+
+	user, err := m.deps.Svc.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := m.deps.Svc.ListRawSessionsByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	var id *identity.Identity
+	online := false
+	for _, row := range rows { // newest-first; first reconstructable wins
+		var values map[string]any
+		if err := json.Unmarshal(row.Payload, &values); err != nil {
+			continue
+		}
+		if rid := reconstructIdentity(values); rid != nil {
+			id = rid
+			online = true
+			break
+		}
+	}
+	if id == nil {
+		// Offline: synthesize a DB-only identity. Subject=username so an
+		// allowlist superadmin match by username still resolves; the
+		// stamped user_id claim lets the resolver load DB bundles,
+		// is_superadmin and the deny overlay. IdP roles are unknown.
+		id = &identity.Identity{
+			Subject: user.Username,
+			Claims:  map[string]any{PikaUserIDClaim: userID},
+		}
+	}
+
+	rep := resolver.resolveDetailed(ctx, id)
+	rep.Online = online
+	return rep, nil
+}
+
+// SessionView is the admin-safe projection of one active session. It never
+// carries the raw session ID — that value IS the live session cookie secret
+// (see SessionStore.Save) — only a stable hash handle for display/revocation.
+type SessionView struct {
+	Handle    string    `json:"handle"`
+	Provider  string    `json:"provider,omitempty"`
+	Subject   string    `json:"subject,omitempty"`
+	Current   bool      `json:"current"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// sessionHandle derives the public, non-reversible handle for a session ID.
+func sessionHandle(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:])
+}
+
+// ListUserSessions returns admin-safe views of a user's active sessions. The
+// caller's own session (when it belongs to userID) is flagged Current so the
+// UI can label it and warn before self-revocation.
+func (m *Manager) ListUserSessions(ctx context.Context, userID string, r *http.Request) ([]SessionView, error) {
+	rows, err := m.deps.Svc.ListRawSessionsByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	currentID := m.currentSessionID(r)
+	out := make([]SessionView, 0, len(rows))
+	for _, row := range rows {
+		view := SessionView{
+			Handle:    sessionHandle(row.ID),
+			Current:   currentID != "" && row.ID == currentID,
+			CreatedAt: row.CreatedAt,
+			ExpiresAt: row.ExpiresAt,
+		}
+		var values map[string]any
+		if err := json.Unmarshal(row.Payload, &values); err == nil {
+			if id := reconstructIdentity(values); id != nil {
+				view.Provider = id.Provider
+				view.Subject = id.Subject
+			}
+		}
+		out = append(out, view)
+	}
+	return out, nil
+}
+
+// RevokeUserSession deletes a single session of userID identified by its hash
+// handle. The raw session ID never leaves the server: we recompute the handle
+// over the user's own sessions and match. Returns ErrNotFound when nothing
+// matches (already expired/revoked, or a handle for a different user).
+func (m *Manager) RevokeUserSession(ctx context.Context, userID, handle string) error {
+	rows, err := m.deps.Svc.ListRawSessionsByUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if sessionHandle(row.ID) == handle {
+			return m.deps.Svc.DeleteRawSession(ctx, row.ID)
+		}
+	}
+	return service.ErrNotFound
+}
+
+// currentSessionID returns the calling request's own session ID (raw, never
+// exposed) so ListUserSessions can flag the "this is you" row.
+func (m *Manager) currentSessionID(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	m.mu.Lock()
+	authMW := m.authMW
+	m.mu.Unlock()
+	if authMW == nil {
+		return ""
+	}
+	return authMW.Session().CurrentSessionID(r)
 }
 
 // Mount registers /login/* and /logout on the given mux.

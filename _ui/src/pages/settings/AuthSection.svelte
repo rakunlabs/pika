@@ -32,6 +32,11 @@
         scopes?: string[];
         disable_pkce?: boolean;
         password_flow?: boolean;
+        // How client credentials are sent to the token endpoint:
+        // "basic" (default — HTTP Basic header / client_secret_basic),
+        // "post" (sent as request params / client_secret_post), or
+        // "bearer" (Authorization: Bearer <secret>). Empty == basic.
+        token_auth_method?: string;
         auto_create_user?: boolean;
         // Dotted claim paths roles are read from. Empty means the default
         // ["roles"]. Supports nesting + a "*" wildcard for Keycloak, e.g.
@@ -502,6 +507,10 @@
                     entry.roles_claims = e.roles_claims;
                 if (e.disable_pkce) entry.disable_pkce = true;
                 if (e.password_flow) entry.password_flow = true;
+                // Only persist a non-default auth method; "basic"/empty is
+                // the server default so omit it to keep the payload clean.
+                if (e.token_auth_method && e.token_auth_method !== "basic")
+                    entry.token_auth_method = e.token_auth_method;
                 if (e.auto_create_user) entry.auto_create_user = true;
                 return entry;
             });
@@ -1252,6 +1261,47 @@
                                     {/if}
                                 </p>
                             </div>
+                        </div>
+                        <!-- Token-endpoint client authentication. Default is
+                             HTTP Basic (client_secret_basic). Switch modes when
+                             the provider rejects the secret with an
+                             "invalid_client" / "client_secret does not match"
+                             error even though the secret is correct. -->
+                        <div>
+                            <!-- svelte-ignore a11y_label_has_associated_control -->
+                            <label
+                                class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
+                                >Client authentication</label
+                            >
+                            <select
+                                value={entry.token_auth_method ?? "basic"}
+                                onchange={(ev) =>
+                                    (entry.token_auth_method =
+                                        ev.currentTarget.value)}
+                                class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                            >
+                                <option value="basic"
+                                    >HTTP Basic header — client_secret_basic
+                                    (default)</option
+                                >
+                                <option value="post"
+                                    >Request parameters — client_secret_post</option
+                                >
+                                <option value="bearer"
+                                    >Bearer token — Authorization: Bearer</option
+                                >
+                            </select>
+                            <p
+                                class="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500"
+                            >
+                                How the client secret is sent to the token
+                                endpoint. Try
+                                <code>client_secret_post</code> if login fails
+                                with an "invalid_client" / "client_secret does
+                                not match" error despite a correct secret.
+                                <code>post</code> sends the credentials as request
+                                parameters (query string), not the form body.
+                            </p>
                         </div>
                         <!-- Scopes -->
                         <div>

@@ -203,6 +203,19 @@ type OAuth2StrategySettings struct {
 	Scopes            []string `json:"scopes,omitempty"`
 	DisablePKCE       bool     `json:"disable_pkce,omitempty"`
 	PasswordFlow      bool     `json:"password_flow,omitempty"`
+	// TokenAuthMethod selects how the client credentials are presented to
+	// the token endpoint during the code (or password) exchange. Most
+	// providers accept the default HTTP Basic header, but some reject it
+	// and require the secret transmitted differently — surfacing as an
+	// "invalid_client" / "client_secret does not match" error even when the
+	// secret itself is correct.
+	//
+	//	"" / "basic" -> HTTP Basic auth header (client_secret_basic) [default]
+	//	"post"       -> client_id & client_secret sent as request parameters
+	//	"bearer"     -> Authorization: Bearer <client_secret>
+	//
+	// See authx.BuildOAuth2 for the mapping onto ada's AuthHeaderStyle.
+	TokenAuthMethod string `json:"token_auth_method,omitempty"`
 	// AutoCreateUser allows this OAuth2 provider to materialize unknown
 	// external identities into local external-only users during login. When
 	// false (default), login only binds to an existing user/link.

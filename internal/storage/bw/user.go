@@ -126,7 +126,13 @@ func (s *userStorage) Update(ctx context.Context, user *service.User) error {
 		}
 		return err
 	}
-	return bucketUpdate(ctx, s.scope, s.bucket, userRowFromService(user, existing.Grants))
+	// Preserve Grants AND the denied-capabilities overlay — both are
+	// junction-style data not carried on the service.User write path, so
+	// a naive Update would wipe them. They are only mutated through their
+	// dedicated setters (SetUserPermissions / SetUserDeniedCapabilities).
+	row := userRowFromService(user, existing.Grants)
+	row.DeniedCaps = existing.DeniedCaps
+	return bucketUpdate(ctx, s.scope, s.bucket, row)
 }
 
 // listRowsAll returns every user row including its Grants slice. Used

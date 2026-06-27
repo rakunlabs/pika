@@ -59,6 +59,9 @@ export interface UserInfo {
   username: string;
   email?: string;
   display_name?: string;
+  // external is true for users authenticated by an external IdP
+  // (OAuth2/LDAP/Header) rather than a local password.
+  external?: boolean;
   disabled: boolean;
   is_superadmin: boolean;
   active_sessions: number;
@@ -67,8 +70,58 @@ export interface UserInfo {
   // live second factor flips this flag. The admin UI uses it to
   // show a 2FA badge and conditionally render the Reset action.
   has_totp: boolean;
+  // denied_capabilities is the per-user deny overlay (capability keys
+  // subtracted from the resolved set regardless of grant source).
+  denied_capabilities?: string[];
   created_at: string;
   updated_at: string;
+}
+
+// CapSource records where one granted capability key came from.
+export interface CapSource {
+  capability: string;
+  kind: 'superadmin' | 'db_bundle' | 'role' | 'scope';
+  bundle?: string;
+  role?: string;
+  scope?: string;
+}
+
+// EffectiveReport is the resolved capability view for a target user.
+export interface EffectiveReport {
+  username: string;
+  user_id: string;
+  online: boolean;
+  superadmin: boolean;
+  superadmin_reason?: 'allowlist' | 'column';
+  roles: string[];
+  scopes: string[];
+  capabilities: string[];
+  patterns?: Record<string, string[]>;
+  sources: CapSource[];
+  denied: string[];
+}
+
+// SessionView is an admin-safe projection of one active session. The raw
+// session ID is never exposed — `handle` is a hash used for revocation.
+export interface SessionView {
+  handle: string;
+  provider?: string;
+  subject?: string;
+  current: boolean;
+  created_at: string;
+  expires_at: string;
+}
+
+// UserIdentity is a linked external credential (OAuth2/LDAP/Header).
+export interface UserIdentity {
+  id: string;
+  user_id: string;
+  provider: string;
+  subject: string;
+  email?: string;
+  display_name?: string;
+  created_at: string;
+  last_login_at?: string;
 }
 
 export interface UserQuery {
@@ -376,6 +429,31 @@ function createAppStore() {
     await axios.put(`/api/v1/user-permissions/${userId}`, { permission_ids: permissionIds });
   }
 
+  // Effective-permission introspection + per-user session/deny control.
+
+  async function getUserEffectivePermissions(userId: string): Promise<EffectiveReport> {
+    const response = await axios.get(`/api/v1/users-effective/${userId}`);
+    return response.data;
+  }
+
+  async function getUserIdentities(userId: string): Promise<UserIdentity[]> {
+    const response = await axios.get(`/api/v1/users-identities/${userId}`);
+    return response.data?.identities || [];
+  }
+
+  async function listUserSessions(userId: string): Promise<SessionView[]> {
+    const response = await axios.get(`/api/v1/users-sessions/${userId}`);
+    return response.data?.sessions || [];
+  }
+
+  async function revokeUserSession(userId: string, handle: string): Promise<void> {
+    await axios.delete(`/api/v1/users-sessions/${userId}/${handle}`);
+  }
+
+  async function setUserDeniedPermissions(userId: string, capabilityKeys: string[]): Promise<void> {
+    await axios.put(`/api/v1/users-denied/${userId}`, { capability_keys: capabilityKeys });
+  }
+
   // Set up axios interceptor for 401 responses.
   //
   // A 401 from a regular API call means the session expired (or the
@@ -439,6 +517,11 @@ function createAppStore() {
     deletePermission,
     getUserPermissions,
     setUserPermissions,
+    getUserEffectivePermissions,
+    getUserIdentities,
+    listUserSessions,
+    revokeUserSession,
+    setUserDeniedPermissions,
   };
 }
 

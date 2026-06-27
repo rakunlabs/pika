@@ -158,6 +158,9 @@ type SessionStorage interface {
 	DeleteByUserID(ctx context.Context, userID string) error
 	DeleteExpired(ctx context.Context) error
 	CountByUserID(ctx context.Context, userID string) (int64, error)
+	// ListByUserID returns a user's non-expired sessions, newest first.
+	// Used by admin session inspection/per-session revocation.
+	ListByUserID(ctx context.Context, userID string) ([]*Session, error)
 }
 
 // Permission represents a defined permission in the system.
@@ -215,6 +218,11 @@ type PermissionStorage interface {
 	// UserHasCapability checks if a user has been granted the given capability key
 	// through any of their assigned permissions.
 	UserHasCapability(ctx context.Context, userID string, key string) (bool, error)
+	// GetUserDeniedCapabilities returns the per-user deny overlay: capability
+	// keys subtracted from the user's resolved set regardless of grant source.
+	GetUserDeniedCapabilities(ctx context.Context, userID string) ([]string, error)
+	// SetUserDeniedCapabilities replaces the per-user deny overlay.
+	SetUserDeniedCapabilities(ctx context.Context, userID string, keys []string) error
 }
 
 // TokenStorage manages access tokens.

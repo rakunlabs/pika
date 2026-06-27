@@ -362,3 +362,137 @@ func TestCapResolver_ExternalUnionsRoleMapping(t *testing.T) {
 		t.Errorf("missing role-mapped perm: %v", got)
 	}
 }
+
+// TestCapResolver_PerUserDenySubtractsCapability verifies the per-user deny
+// overlay strips a single role-mapped capability for one user only, leaving
+// the rest of the role's grants intact.
+func TestCapResolver_PerUserDenySubtractsCapability(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	info, err := svc.FindOrCreateExternalUser(ctx, service.ExternalIdentityInput{
+		Provider: "google", Subject: "sub-deny", Username: "deny-user",
+	})
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if _, err := svc.CreatePermission(ctx, &service.CreatePermissionRequest{
+		Key: "editor", Name: "Editor",
+		Keys: []string{service.CapFilesRead, service.CapFilesWrite},
+	}); err != nil {
+		t.Fatalf("create perm: %v", err)
+	}
+
+	cr := &CapResolver{svc: svc, settings: service.CapabilityMapping{
+		RoleMapping: map[string][]string{"pika-editor": {"editor"}},
+	}}
+	id := &identity.Identity{
+		Subject: "sub-deny", Provider: "google",
+		Roles:  []string{"pika-editor"},
+		Claims: map[string]any{PikaUserIDClaim: info.ID},
+	}
+
+	got, _, _, _ := cr.resolve(ctx, id)
+	if !got.Has(service.CapFilesRead) || !got.Has(service.CapFilesWrite) {
+		t.Fatalf("pre-deny should have both caps: %v", got)
+	}
+
+	if err := svc.SetUserDeniedCapabilities(ctx, info.ID, []string{service.CapFilesWrite}); err != nil {
+		t.Fatalf("set deny: %v", err)
+	}
+	got, _, _, _ = cr.resolve(ctx, id)
+	if got.Has(service.CapFilesWrite) {
+		t.Errorf("deny did not remove files.write: %v", got)
+	}
+	if !got.Has(service.CapFilesRead) {
+		t.Errorf("deny removed too much; files.read should remain: %v", got)
+	}
+}
+
+// TestCapResolver_DenyExemptForAllowlistSuperadmin verifies the operator
+// Superadmins allowlist is break-glass and not reduced by a per-user deny.
+func TestCapResolver_DenyExemptForAllowlistSuperadmin(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	info, err := svc.FindOrCreateExternalUser(ctx, service.ExternalIdentityInput{
+		Provider: "google", Subject: "admin-sub", Username: "admin-u",
+	})
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if err := svc.SetUserDeniedCapabilities(ctx, info.ID, []string{service.CapFilesWrite}); err != nil {
+		t.Fatalf("set deny: %v", err)
+	}
+
+	cr := &CapResolver{svc: svc, settings: service.CapabilityMapping{
+		Superadmins: []string{"admin-sub"},
+	}}
+	got, _, _, _ := cr.resolve(ctx, &identity.Identity{
+		Subject: "admin-sub", Provider: "google",
+		Claims: map[string]any{PikaUserIDClaim: info.ID},
+	})
+	if len(got) != len(service.KnownCapabilityKeys()) {
+		t.Errorf("allowlist superadmin must be exempt from deny, got %d/%d", len(got), len(service.KnownCapabilityKeys()))
+	}
+}
+
+// TestCapResolver_ResolveDetailedProvenance verifies the effective report
+// attributes a role-mapped capability back to its role and bundle.
+func TestCapResolver_ResolveDetailedProvenance(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	info, err := svc.FindOrCreateExternalUser(ctx, service.ExternalIdentityInput{
+		Provider: "google", Subject: "sub-prov", Username: "prov",
+	})
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if _, err := svc.CreatePermission(ctx, &service.CreatePermissionRequest{
+		Key: "editor", Name: "Editor", Keys: []string{service.CapFilesWrite},
+	}); err != nil {
+		t.Fatalf("create perm: %v", err)
+	}
+	cr := &CapResolver{svc: svc, settings: service.CapabilityMapping{
+		RoleMapping: map[string][]string{"pika-editor": {"editor"}},
+	}}
+	rep := cr.resolveDetailed(ctx, &identity.Identity{
+		Subject: "sub-prov", Provider: "google",
+		Roles:  []string{"pika-editor"},
+		Claims: map[string]any{PikaUserIDClaim: info.ID},
+	})
+	found := false
+	for _, s := range rep.Sources {
+		if s.Capability == service.CapFilesWrite && s.Kind == "role" && s.Role == "pika-editor" && s.Bundle == "editor" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected role provenance for files.write, got %+v", rep.Sources)
+	}
+}
+
+func TestSubtractDenied(t *testing.T) {
+	keys := []string{"a", "b", "c"}
+	out, pat := subtractDenied(keys, map[string][]string{"b": {"x/**"}}, []string{"b"})
+	if len(out) != 2 || out[0] != "a" || out[1] != "c" {
+		t.Errorf("subtractDenied keys: %v", out)
+	}
+	if pat != nil {
+		t.Errorf("subtractDenied should drop the only (denied) pattern, got %v", pat)
+	}
+	out2, pat2 := subtractDenied(keys, map[string][]string{"b": {"x/**"}}, nil)
+	if len(out2) != 3 || pat2 == nil {
+		t.Errorf("no deny should pass through unchanged: %v %v", out2, pat2)
+	}
+}
+
+func TestSessionHandle_StableAndHidesID(t *testing.T) {
+	id := "super-secret-session-cookie-id"
+	h1 := sessionHandle(id)
+	if h1 != sessionHandle(id) {
+		t.Errorf("handle not stable")
+	}
+	if h1 == id || len(h1) != 64 {
+		t.Errorf("handle must be a 64-hex sha256 that hides the raw id, got %q", h1)
+	}
+}

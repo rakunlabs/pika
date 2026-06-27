@@ -361,3 +361,44 @@ func (s *permissionStorage) UserHasCapability(ctx context.Context, userID string
 	}
 	return false, nil
 }
+
+// GetUserDeniedCapabilities returns the per-user deny overlay (capability
+// keys subtracted from the resolved set). Empty slice when none.
+func (s *permissionStorage) GetUserDeniedCapabilities(ctx context.Context, userID string) ([]string, error) {
+	users := s.store.usersAt(s.scope)
+	row, err := users.getRow(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return append([]string(nil), row.DeniedCaps...), nil
+}
+
+// SetUserDeniedCapabilities replaces the per-user deny overlay. Writes the
+// user row directly (like SetUserPermissions does for Grants) so it bypasses
+// the Update preserve path.
+func (s *permissionStorage) SetUserDeniedCapabilities(ctx context.Context, userID string, keys []string) error {
+	users := s.store.usersAt(s.scope)
+	row, err := users.getRow(ctx, userID)
+	if err != nil {
+		return err
+	}
+	// Dedupe, drop empties; nil when empty so the column stays clean.
+	if len(keys) == 0 {
+		row.DeniedCaps = nil
+		return users.updateRow(ctx, row)
+	}
+	seen := make(map[string]struct{}, len(keys))
+	clean := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if k == "" {
+			continue
+		}
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		clean = append(clean, k)
+	}
+	row.DeniedCaps = clean
+	return users.updateRow(ctx, row)
+}

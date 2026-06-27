@@ -2,6 +2,7 @@ package bw
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/rakunlabs/bw"
@@ -92,6 +93,26 @@ func (s *sessionStorage) CountByUserID(ctx context.Context, userID string) (int6
 		}
 	}
 	return n, nil
+}
+
+// ListByUserID returns a user's non-expired sessions, newest first. Used by
+// admin session inspection/revocation. Expired rows are skipped (they're
+// swept lazily on Get/DeleteExpired) so the admin only ever sees live ones.
+func (s *sessionStorage) ListByUserID(ctx context.Context, userID string) ([]*service.Session, error) {
+	rows, err := s.findByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	out := make([]*service.Session, 0, len(rows))
+	for _, r := range rows {
+		if !r.ExpiresAt.After(now) {
+			continue
+		}
+		out = append(out, r.toService())
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
 }
 
 // findByUserID uses the bw query engine's user_id index. The typed

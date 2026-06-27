@@ -49,16 +49,20 @@ func init() {
 // optionally a local password. External-only users have External=true and
 // an empty PasswordHash — they can never be authenticated via local.
 type User struct {
-	ID           string    `json:"id"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"password_hash"`
-	Email        string    `json:"email"`
-	DisplayName  string    `json:"display_name"`
-	External     bool      `json:"external"`
-	Disabled     bool      `json:"disabled"`
-	IsSuperadmin bool      `json:"is_superadmin"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           string `json:"id"`
+	Username     string `json:"username"`
+	PasswordHash string `json:"password_hash"`
+	Email        string `json:"email"`
+	DisplayName  string `json:"display_name"`
+	External     bool   `json:"external"`
+	Disabled     bool   `json:"disabled"`
+	IsSuperadmin bool   `json:"is_superadmin"`
+	// DeniedCapabilities is a read-through of the per-user deny overlay.
+	// It is preserved across normal Update and only mutated through
+	// SetUserDeniedCapabilities (mirrors how Grants are handled).
+	DeniedCapabilities []string  `json:"denied_capabilities,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // UserInfo is the public representation of a user (no password hash).
@@ -71,17 +75,19 @@ type User struct {
 // (Enabled=false) is reported as HasTOTP=false: pika treats only the
 // live enrollment as security-relevant.
 type UserInfo struct {
-	ID             string    `json:"id"`
-	Username       string    `json:"username"`
-	Email          string    `json:"email,omitempty"`
-	DisplayName    string    `json:"display_name,omitempty"`
-	External       bool      `json:"external,omitempty"`
-	Disabled       bool      `json:"disabled"`
-	IsSuperadmin   bool      `json:"is_superadmin"`
-	ActiveSessions int64     `json:"active_sessions"`
-	HasTOTP        bool      `json:"has_totp"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             string `json:"id"`
+	Username       string `json:"username"`
+	Email          string `json:"email,omitempty"`
+	DisplayName    string `json:"display_name,omitempty"`
+	External       bool   `json:"external,omitempty"`
+	Disabled       bool   `json:"disabled"`
+	IsSuperadmin   bool   `json:"is_superadmin"`
+	ActiveSessions int64  `json:"active_sessions"`
+	HasTOTP        bool   `json:"has_totp"`
+	// DeniedCapabilities surfaces the per-user deny overlay to admin UIs.
+	DeniedCapabilities []string  `json:"denied_capabilities,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // CreateUserRequest is the request body for creating a new user.
@@ -102,15 +108,16 @@ type UpdateUserRequest struct {
 
 func (u *User) toInfo() UserInfo {
 	return UserInfo{
-		ID:           u.ID,
-		Username:     u.Username,
-		Email:        u.Email,
-		DisplayName:  u.DisplayName,
-		External:     u.External,
-		Disabled:     u.Disabled,
-		IsSuperadmin: u.IsSuperadmin,
-		CreatedAt:    u.CreatedAt,
-		UpdatedAt:    u.UpdatedAt,
+		ID:                 u.ID,
+		Username:           u.Username,
+		Email:              u.Email,
+		DisplayName:        u.DisplayName,
+		External:           u.External,
+		Disabled:           u.Disabled,
+		IsSuperadmin:       u.IsSuperadmin,
+		DeniedCapabilities: u.DeniedCapabilities,
+		CreatedAt:          u.CreatedAt,
+		UpdatedAt:          u.UpdatedAt,
 	}
 }
 

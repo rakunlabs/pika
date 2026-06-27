@@ -41,14 +41,15 @@ func BuildOAuth2(specs []service.OAuth2StrategySettings, basePath string) ([]str
 			continue
 		}
 		cfg := oauth2.Config{
-			AuthURL:      s.AuthURL,
-			TokenURL:     s.TokenURL,
-			UserInfoURL:  s.UserInfoURL,
-			ClientID:     s.ClientID,
-			ClientSecret: s.ClientSecret,
-			Scopes:       s.Scopes,
-			DisablePKCE:  s.DisablePKCE,
-			PasswordFlow: s.PasswordFlow,
+			AuthURL:         s.AuthURL,
+			TokenURL:        s.TokenURL,
+			UserInfoURL:     s.UserInfoURL,
+			ClientID:        s.ClientID,
+			ClientSecret:    s.ClientSecret,
+			Scopes:          s.Scopes,
+			DisablePKCE:     s.DisablePKCE,
+			PasswordFlow:    s.PasswordFlow,
+			AuthHeaderStyle: oauth2AuthHeaderStyle(s.TokenAuthMethod),
 		}
 		if !manualEndpoints {
 			cfg.IssuerURL = s.IssuerURL
@@ -64,4 +65,24 @@ func BuildOAuth2(specs []service.OAuth2StrategySettings, basePath string) ([]str
 		out = append(out, strat)
 	}
 	return out, nil
+}
+
+// oauth2AuthHeaderStyle maps a provider's configured token auth method onto
+// ada's AuthHeaderStyle, delegating the alias matching to ada so the two stay
+// in lockstep. Empty/unknown values fall back to Basic (client_secret_basic),
+// ada's default and the most widely accepted form.
+//
+//	"post"   -> client_secret_post: credentials in the request BODY (the
+//	            standard alternative to Basic; RFC 6749 §2.3.1)
+//	"query"  -> credentials in the URL query string (legacy/non-standard)
+//	"bearer" -> "Authorization: Bearer <secret>"
+//
+// Operators reach for this when the token endpoint rejects the credentials
+// with an "invalid_client" / "client_secret does not match" error even
+// though the secret is correct — the provider just wants it transmitted a
+// different way than HTTP Basic.
+func oauth2AuthHeaderStyle(method string) oauth2.AuthHeaderStyle {
+	style, _ := oauth2.ParseAuthHeaderStyle(method)
+
+	return style
 }

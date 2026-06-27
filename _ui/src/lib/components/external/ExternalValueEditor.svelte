@@ -48,6 +48,11 @@
      *  off: most readonly displays don't need format controls because
      *  auto-detect already nails it. */
     showFormatControls?: boolean;
+    /** Two-way: surfaces the current syntax-validation error (or null)
+     *  for the effective language so a parent can gate Save on it, the
+     *  way the Configurations editor does. Updated reactively as the
+     *  user types or switches format. */
+    lintError?: string | null;
   }
 
   let {
@@ -58,6 +63,7 @@
     placeholder = "",
     title,
     showFormatControls = false,
+    lintError = $bindable(null),
   }: Props = $props();
 
   // Internal lang state: starts from the prop's initial value and
@@ -167,6 +173,34 @@
       default:
         return [];
     }
+  });
+
+  // Surface the current validation status to the parent so it can gate
+  // Save on it. Mirrors validateContent() in the Configurations editor:
+  // JSON via JSON.parse, YAML via js-yaml; plain text never errors. This
+  // is the same parse the inline linter performs, lifted to a value the
+  // parent can read (the linter only paints the gutter).
+  const currentLintError = $derived.by((): string | null => {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      switch (effectiveLang) {
+        case "json":
+          JSON.parse(value);
+          return null;
+        case "yaml":
+          jsYaml.load(value);
+          return null;
+        default:
+          return null;
+      }
+    } catch (e: any) {
+      return e?.reason || e?.message || `Invalid ${effectiveLang.toUpperCase()}`;
+    }
+  });
+
+  $effect(() => {
+    lintError = currentLintError;
   });
 
   const formatLabel = $derived(effectiveLang.toUpperCase());

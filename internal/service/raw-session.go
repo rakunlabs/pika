@@ -73,3 +73,27 @@ func (s *Service) PutRawSession(ctx context.Context, rs *RawSession) error {
 func (s *Service) DeleteRawSession(ctx context.Context, id string) error {
 	return s.store.Sessions().Delete(ctx, id)
 }
+
+// ListRawSessionsByUser returns a user's non-expired sessions, newest first.
+// The rows include the raw session ID and payload, so callers MUST NOT leak
+// them to clients — the auth manager maps these to hashed handles before they
+// reach any API response (the raw ID is the live session cookie value).
+func (s *Service) ListRawSessionsByUser(ctx context.Context, userID string) ([]*RawSession, error) {
+	rows, err := s.store.Sessions().ListByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*RawSession, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, &RawSession{
+			ID:        row.ID,
+			UserID:    row.UserID,
+			Username:  row.Username,
+			Payload:   row.Payload,
+			RefreshID: row.RefreshID,
+			ExpiresAt: row.ExpiresAt,
+			CreatedAt: row.CreatedAt,
+		})
+	}
+	return out, nil
+}

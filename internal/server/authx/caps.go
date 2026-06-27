@@ -93,57 +93,196 @@ func (r *CapResolver) Middleware() ada.MiddlewareFunc {
 // per-user DB step is skipped — the user still gets Superadmin/Role/
 // Scope caps when those apply.
 func (r *CapResolver) resolve(ctx context.Context, id *identity.Identity) (service.Capabilities, string, string, map[string][]string) {
-	username := id.Subject
+	rep := r.resolveDetailed(ctx, id)
+	return service.Capabilities(rep.Capabilities), rep.Username, rep.UserID, rep.Patterns
+}
+
+// CapSource records where one granted capability key came from, so admin
+// tooling can answer "why does this user have files.write?".
+type CapSource struct {
+	Capability string `json:"capability"`
+	// Kind is one of: "superadmin", "db_bundle", "role", "scope".
+	Kind   string `json:"kind"`
+	Bundle string `json:"bundle,omitempty"` // permission bundle key
+	Role   string `json:"role,omitempty"`   // source role (Kind=="role")
+	Scope  string `json:"scope,omitempty"`  // source scope (Kind=="scope")
+}
+
+// EffectiveReport is the full, introspectable resolution of an identity's
+// capabilities — the same computation the request hot-path uses, plus the
+// provenance and the deny overlay the admin UI needs to display and edit.
+type EffectiveReport struct {
+	Username         string              `json:"username"`
+	UserID           string              `json:"user_id"`
+	Online           bool                `json:"online"`
+	Superadmin       bool                `json:"superadmin"`
+	SuperadminReason string              `json:"superadmin_reason,omitempty"` // "allowlist" | "column"
+	Roles            []string            `json:"roles"`
+	Scopes           []string            `json:"scopes"`
+	Capabilities     []string            `json:"capabilities"` // effective (post-deny)
+	Patterns         map[string][]string `json:"patterns,omitempty"`
+	Sources          []CapSource         `json:"sources"` // provenance (pre-deny)
+	Denied           []string            `json:"denied"`  // configured deny overlay
+}
+
+// resolveDetailed is the single source of truth for capability resolution.
+// resolve() wraps it for the hot path; the admin "effective permissions"
+// endpoint surfaces the whole report. Grant sources mirror the documentation
+// on resolve()'s former body: superadmin (allowlist/column), DB-assigned
+// bundles, and RoleMapping/ScopeMapping. A per-user deny overlay
+// (user.DeniedCapabilities) is then subtracted from the final set — except
+// for the operator Superadmins allowlist, which is an explicit break-glass
+// escape hatch and is never reduced by deny.
+func (r *CapResolver) resolveDetailed(ctx context.Context, id *identity.Identity) *EffectiveReport {
+	rep := &EffectiveReport{
+		Username:     id.Subject,
+		Roles:        []string{},
+		Scopes:       []string{},
+		Capabilities: []string{},
+		Sources:      []CapSource{},
+		Denied:       []string{},
+	}
 	userID := identity.Claim[string](id, PikaUserIDClaim)
+	rep.UserID = userID
 
 	// Look the user up once and reuse for every subsequent decision.
-	// Failures (deleted user, DB error) leave `user` nil and we still
-	// honor Superadmin/Role/Scope mappings below.
 	var user *service.UserInfo
 	if r.svc != nil && userID != "" {
 		if u, err := r.svc.GetUserByID(ctx, userID); err == nil && u != nil {
 			user = u
-			username = u.Username
+			rep.Username = u.Username
 		}
 	}
 
-	// 1. Superadmin allowlist — operator-controlled escape hatch. We
-	// short-circuit to the full known-key set; no patterns because
-	// superadmins are unrestricted by definition.
+	// Per-user deny overlay travels on the loaded user (no extra DB read).
+	var denied []string
+	if user != nil && len(user.DeniedCapabilities) > 0 {
+		denied = user.DeniedCapabilities
+		rep.Denied = append([]string(nil), denied...)
+	}
+
+	roles := r.effectiveRoles(id)
+	if len(roles) > 0 {
+		rep.Roles = roles
+	}
+	if len(id.Scopes) > 0 {
+		rep.Scopes = id.Scopes
+	}
+
+	// 1. Superadmin allowlist — break-glass escape hatch, exempt from deny.
 	for _, admin := range r.settings.Superadmins {
 		if admin == id.Subject {
-			return service.Capabilities(service.KnownCapabilityKeys()), username, userID, nil
+			rep.Superadmin = true
+			rep.SuperadminReason = "allowlist"
+			rep.Capabilities = service.KnownCapabilityKeys()
+			rep.Sources = superadminSources(rep.Capabilities)
+			return rep
 		}
 	}
 
-	// 2. The is_superadmin column on the users row also produces the
-	// full known-key set, regardless of identity provider.
+	// 2. The is_superadmin column — full set, but deny still applies.
 	if user != nil && user.IsSuperadmin {
-		return service.Capabilities(service.KnownCapabilityKeys()), username, userID, nil
+		rep.Superadmin = true
+		rep.SuperadminReason = "column"
+		keys := service.KnownCapabilityKeys()
+		rep.Sources = superadminSources(keys)
+		keys, _ = subtractDenied(keys, nil, denied)
+		rep.Capabilities = keys
+		return rep
 	}
 
-	// Gather every permission bundle that applies to this request:
-	//   - the user's DB-assigned bundles (admin UI), and
-	//   - bundles referenced by external role/scope mappings.
-	// Combining them into one slice lets CapabilitiesFromBundles union
-	// capability keys AND path patterns with a single, consistent
-	// "unrestricted-wins" rule — a role-mapped unrestricted grant
-	// correctly widens a DB pattern-scoped grant for the same key.
+	// 3. Union DB-assigned bundles + role/scope-mapped bundles, tracking
+	// provenance for every capability key as we go.
 	var bundles []service.Permission
+	var sources []CapSource
+
 	if r.svc != nil && user != nil {
-		if ub, err := r.svc.GetUserPermissions(ctx, user.ID); err == nil {
-			bundles = append(bundles, ub...)
+		if dbB, err := r.svc.GetUserPermissions(ctx, user.ID); err == nil {
+			bundles = append(bundles, dbB...)
+			for _, p := range dbB {
+				for _, k := range p.Keys {
+					sources = append(sources, CapSource{Capability: k, Kind: "db_bundle", Bundle: p.Key})
+				}
+			}
 		}
 	}
-	roles := r.effectiveRoles(id)
+
 	if r.svc != nil && (len(roles) > 0 || len(id.Scopes) > 0) {
-		if rb, err := r.svc.PermissionsByKeys(ctx, r.mappedPermissionKeys(roles, id.Scopes)); err == nil {
-			bundles = append(bundles, rb...)
+		if mb, err := r.svc.PermissionsByKeys(ctx, r.mappedPermissionKeys(roles, id.Scopes)); err == nil {
+			bundles = append(bundles, mb...)
+			byKey := make(map[string]service.Permission, len(mb))
+			for _, p := range mb {
+				byKey[p.Key] = p
+			}
+			for _, role := range roles {
+				for _, bk := range r.settings.RoleMapping[role] {
+					if p, ok := byKey[bk]; ok {
+						for _, k := range p.Keys {
+							sources = append(sources, CapSource{Capability: k, Kind: "role", Role: role, Bundle: p.Key})
+						}
+					}
+				}
+			}
+			for _, sc := range id.Scopes {
+				for _, bk := range r.settings.ScopeMapping[sc] {
+					if p, ok := byKey[bk]; ok {
+						for _, k := range p.Keys {
+							sources = append(sources, CapSource{Capability: k, Kind: "scope", Scope: sc, Bundle: p.Key})
+						}
+					}
+				}
+			}
 		}
 	}
 
 	keys, patterns := service.CapabilitiesFromBundles(bundles)
-	return service.Capabilities(keys), username, userID, patterns
+	keys, patterns = subtractDenied(keys, patterns, denied)
+	if len(keys) > 0 {
+		rep.Capabilities = keys
+	}
+	rep.Patterns = patterns
+	if len(sources) > 0 {
+		rep.Sources = sources
+	}
+	return rep
+}
+
+// superadminSources tags every known capability key as superadmin-granted.
+func superadminSources(keys []string) []CapSource {
+	out := make([]CapSource, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, CapSource{Capability: k, Kind: "superadmin"})
+	}
+	return out
+}
+
+// subtractDenied removes the denied capability keys from the resolved set and
+// drops their path patterns. Returns the inputs untouched when nothing is
+// denied (the common case).
+func subtractDenied(keys []string, patterns map[string][]string, denied []string) ([]string, map[string][]string) {
+	if len(denied) == 0 {
+		return keys, patterns
+	}
+	deny := make(map[string]struct{}, len(denied))
+	for _, d := range denied {
+		deny[d] = struct{}{}
+	}
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if _, blocked := deny[k]; blocked {
+			continue
+		}
+		out = append(out, k)
+	}
+	if patterns != nil {
+		for k := range deny {
+			delete(patterns, k)
+		}
+		if len(patterns) == 0 {
+			patterns = nil
+		}
+	}
+	return out, patterns
 }
 
 // effectiveRoles returns the role strings used for RoleMapping lookups: the
