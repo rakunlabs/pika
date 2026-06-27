@@ -68,8 +68,16 @@ func vaultItemVersionKey(itemID string, version int64) []byte {
 func (s *Storage) registerBuckets() error {
 	var err error
 
+	// Version bumps for the users bucket:
+	//
+	//   v1 — initial schema.
+	//   v2 — added DeniedCaps []string field (per-user capability deny
+	//        overlay). Untagged, non-indexed new field; existing rows
+	//        decode with DeniedCaps == nil (no denials), so the bump just
+	//        re-stamps the fingerprint — bw's incremental migration leaves
+	//        every user row's data untouched (no index entries to build).
 	if s.users, err = bw.RegisterBucket[userRow](s.db, bucketUsers,
-		bw.WithVersion[userRow](1),
+		bw.WithVersion[userRow](2),
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketUsers, err)
 	}

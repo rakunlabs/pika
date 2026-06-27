@@ -197,11 +197,16 @@ func (m *Manager) EffectiveForUser(ctx context.Context, userID string) (*Effecti
 		// allowlist superadmin match by username still resolves; the
 		// stamped user_id claim lets the resolver load DB bundles,
 		// is_superadmin and the deny overlay. IdP roles are unknown.
-		id = &identity.Identity{
-			Subject: user.Username,
-			Claims:  map[string]any{PikaUserIDClaim: userID},
-		}
+		id = &identity.Identity{Subject: user.Username}
 	}
+
+	// We already know the target user, so pin the resolver's user_id claim
+	// to it. This is correct (every listed session belongs to userID) and
+	// robust against sessions whose login-time user_id stamping failed.
+	if id.Claims == nil {
+		id.Claims = map[string]any{}
+	}
+	id.Claims[PikaUserIDClaim] = userID
 
 	rep := resolver.resolveDetailed(ctx, id)
 	rep.Online = online
