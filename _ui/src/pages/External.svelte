@@ -31,6 +31,7 @@
   import { appStore } from "@/lib/store/store.svelte";
   import { addToast } from "@/lib/store/toast.svelte";
   import ExternalValueEditor from "@/lib/components/external/ExternalValueEditor.svelte";
+  import ResizablePanel from "@/lib/components/config/ResizablePanel.svelte";
   import {
     Globe,
     ShieldOff,
@@ -65,6 +66,14 @@
   // Selected resource (left pane). All middle/right pane state is
   // scoped per-resource — switching resources clears everything below.
   let selectedResource = $state<string | null>(null);
+
+  // Sidebar widths (session-only, mirroring the Configurations page).
+  // Both panes are mouse-resizable via the ResizablePanel drag handle.
+  // Defaults are intentionally compact — the resources list only needs
+  // room for a name + kind badge, so it starts narrow and grows on demand.
+  let resourcesWidth = $state(200);
+  let pathsWidth = $state(260);
+
   const currentResource = $derived(
     selectedResource
       ? (resources.find((r) => r.name === selectedResource) ?? null)
@@ -648,9 +657,16 @@
   {:else}
     <div class="flex-1 flex overflow-hidden">
       <!-- ── Left: Resource List ─────────────────────────────── -->
-      <aside
-        class="w-64 shrink-0 flex flex-col border-r border-slate-200 dark:border-warm-700 bg-white dark:bg-warm-950"
+      <ResizablePanel
+        width={resourcesWidth}
+        minWidth={160}
+        maxWidth={360}
+        side="left"
+        onResize={(w) => (resourcesWidth = w)}
       >
+        <aside
+          class="h-full w-full flex flex-col border-r border-slate-200 dark:border-warm-700 bg-white dark:bg-warm-950"
+        >
         <div
           class="px-3 py-3 border-b border-slate-200 dark:border-warm-700 shrink-0"
         >
@@ -733,12 +749,20 @@
             </ul>
           {/if}
         </div>
-      </aside>
+        </aside>
+      </ResizablePanel>
 
       <!-- ── Middle: Path Tree ───────────────────────────────── -->
-      <aside
-        class="w-72 shrink-0 flex flex-col border-r border-slate-200 dark:border-warm-700 bg-white dark:bg-warm-950"
+      <ResizablePanel
+        width={pathsWidth}
+        minWidth={180}
+        maxWidth={420}
+        side="left"
+        onResize={(w) => (pathsWidth = w)}
       >
+        <aside
+          class="h-full w-full flex flex-col border-r border-slate-200 dark:border-warm-700 bg-white dark:bg-warm-950"
+        >
         {#if !selectedResource}
           <div class="flex-1 flex items-center justify-center text-center px-4">
             <p class="text-xs text-slate-400 dark:text-slate-500">
@@ -1039,7 +1063,8 @@
             {/if}
           </div>
         {/if}
-      </aside>
+        </aside>
+      </ResizablePanel>
 
       <!-- ── Right: Content viewer / editor ──────────────────── -->
       <section
@@ -1359,28 +1384,32 @@
       <div class="m-5 text-xs text-slate-400 dark:text-slate-500 italic">
         No data
       </div>
+    {:else if isWrapper}
+      <!-- Wrapper backends (Consul/etcd/HTTP/GCP fallback) carry a
+           single opaque string under the synthetic "value" key. Show
+           that raw string in one editor, with no "value" header (it
+           would just be noise — see the synthetic-wrapper note above). -->
+      <div class="flex-1 min-h-0 flex flex-col">
+        <ExternalValueEditor
+          value={typeof dataEntries[0][1] === "string"
+            ? dataEntries[0][1]
+            : JSON.stringify(dataEntries[0][1], null, 2)}
+          readonly={true}
+        />
+      </div>
     {:else}
-      <div class="flex-1 min-h-0 flex flex-col overflow-y-auto">
-        {#each dataEntries as [k, v], i (k)}
-          <!-- Each editor gets flex-1 to share the column equally.
-               The min-h backstop keeps an editor from collapsing to
-               nothing when there are many keys; total overflow
-               scrolls inside the parent. The border-t on every
-               editor except the first gives the IDE split-pane seam
-               look — a 1px line in the same #3c3c3c the editor
-               chrome uses. -->
-          <div
-            class="flex-1 min-h-[8rem] flex flex-col {i > 0
-              ? 'border-t border-[#3c3c3c]'
-              : ''}"
-          >
-            <ExternalValueEditor
-              title={isWrapper ? undefined : k}
-              value={typeof v === "string" ? v : JSON.stringify(v, null, 2)}
-              readonly={true}
-            />
-          </div>
-        {/each}
+      <!-- Structured secret (Vault, Kubernetes): render the WHOLE map
+           as one flat JSON document in a single editor. We used to open
+           one editor per key, which fragmented a single secret into N
+           stacked code panes — hard to scan, copy, and reason about.
+           A single JSON view matches how the secret actually lives in
+           the backend and lets the user copy/format it in one shot. -->
+      <div class="flex-1 min-h-0 flex flex-col">
+        <ExternalValueEditor
+          value={JSON.stringify(e.data, null, 2)}
+          lang="json"
+          readonly={true}
+        />
       </div>
     {/if}
     {#if e.content_type}

@@ -60,9 +60,10 @@
           return Object.keys(out).length > 0 ? out : undefined;
      }
      let newExtVaultAddr = $state("");
-     let newExtVaultMount = $state("secret");
-     let newExtVaultKVVersion = $state<1 | 2>(2);
-     let newExtVaultRoleId = $state("");
+	let newExtVaultMount = $state("secret");
+	let newExtVaultKVVersion = $state<1 | 2>(2);
+	let newExtVaultListMethod = $state<"get" | "list">("get");
+	let newExtVaultRoleId = $state("");
      let newExtVaultSecretId = $state("");
      let newExtVaultAppRolePath = $state("approle");
      let newExtK8sAuthMode = $state<"in-cluster" | "path" | "inline">(
@@ -159,11 +160,12 @@
                     );
                     return;
                }
-               resource.vault = {
-                    address: newExtVaultAddr.trim(),
-                    mount: newExtVaultMount.trim(),
-                    kv_version: newExtVaultKVVersion,
-                    app_role: {
+				resource.vault = {
+					address: newExtVaultAddr.trim(),
+					mount: newExtVaultMount.trim(),
+					kv_version: newExtVaultKVVersion,
+					list_method: newExtVaultListMethod,
+					app_role: {
                          role_id: newExtVaultRoleId.trim(),
                          secret_id: newExtVaultSecretId.trim(),
                          app_role_base_path:
@@ -326,9 +328,10 @@
                newExtHttpUrl = "";
                newExtHttpHeaders = [];
                newExtVaultAddr = "";
-               newExtVaultMount = "secret";
-               newExtVaultKVVersion = 2;
-               newExtVaultRoleId = "";
+			newExtVaultMount = "secret";
+			newExtVaultKVVersion = 2;
+			newExtVaultListMethod = "get";
+			newExtVaultRoleId = "";
                newExtVaultSecretId = "";
                newExtVaultAppRolePath = "approle";
                newExtK8sAuthMode = "in-cluster";
@@ -727,6 +730,28 @@
                                v2 reads &lt;mount&gt;/data/&lt;path&gt; and lists
                                &lt;mount&gt;/metadata/&lt;path&gt;; v1 uses
                                &lt;mount&gt;/&lt;path&gt;. Must match your mount.
+                          </p>
+                     </div>
+                     <div class="mb-4">
+                          <label
+                               for="ext-vault-list-method"
+                               class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"
+                               >List method</label
+                          >
+                          <select
+                               id="ext-vault-list-method"
+                               bind:value={newExtVaultListMethod}
+                               class="w-full px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+                          >
+                               <option value="get">GET ?list=true (proxy-safe)</option>
+                               <option value="list">LIST verb (native)</option>
+                          </select>
+                          <p
+                               class="mt-1 text-[11px] text-slate-400 dark:text-slate-500"
+                          >
+                               Equivalent server-side. Use GET ?list=true when a
+                               proxy/WAF fronts Vault and rejects the non-standard
+                               LIST verb (403/405).
                           </p>
                      </div>
 

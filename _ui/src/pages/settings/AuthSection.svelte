@@ -33,6 +33,10 @@
         disable_pkce?: boolean;
         password_flow?: boolean;
         auto_create_user?: boolean;
+        // Dotted claim paths roles are read from. Empty means the default
+        // ["roles"]. Supports nesting + a "*" wildcard for Keycloak, e.g.
+        // ["realm_access.roles", "resource_access.*.roles"].
+        roles_claims?: string[];
     }
 
     interface AuthSettings {
@@ -172,6 +176,7 @@
     // OAuth2 entries
     let oauth2Entries = $state<OAuth2Entry[]>([]);
     let oauth2ScopeInputs = $state<string[]>([]);
+    let oauth2RolesClaimInputs = $state<string[]>([]);
 
     // LDAP
     let ldapName = $state("");
@@ -382,8 +387,10 @@
             client_secret: "",
             client_secret_set: e.client_secret_set ?? false,
             clear_client_secret: false,
+            roles_claims: [...(e.roles_claims ?? [])],
         }));
         oauth2ScopeInputs = oauth2Entries.map(() => "");
+        oauth2RolesClaimInputs = oauth2Entries.map(() => "");
 
         ldapName = auth.ldap?.name ?? "";
         ldapAddr = auth.ldap?.addr ?? "";
@@ -491,6 +498,8 @@
                     entry.client_secret = e.client_secret;
                 }
                 if (e.scopes && e.scopes.length > 0) entry.scopes = e.scopes;
+                if (e.roles_claims && e.roles_claims.length > 0)
+                    entry.roles_claims = e.roles_claims;
                 if (e.disable_pkce) entry.disable_pkce = true;
                 if (e.password_flow) entry.password_flow = true;
                 if (e.auto_create_user) entry.auto_create_user = true;
@@ -595,13 +604,42 @@
 
     // OAuth2 helpers
     function addOAuth2() {
-        oauth2Entries = [...oauth2Entries, { name: "", scopes: [] }];
+        oauth2Entries = [
+            ...oauth2Entries,
+            { name: "", scopes: [], roles_claims: [] },
+        ];
         oauth2ScopeInputs = [...oauth2ScopeInputs, ""];
+        oauth2RolesClaimInputs = [...oauth2RolesClaimInputs, ""];
     }
 
     function removeOAuth2(i: number) {
         oauth2Entries = oauth2Entries.filter((_, idx) => idx !== i);
         oauth2ScopeInputs = oauth2ScopeInputs.filter((_, idx) => idx !== i);
+        oauth2RolesClaimInputs = oauth2RolesClaimInputs.filter(
+            (_, idx) => idx !== i,
+        );
+    }
+
+    function addOAuth2RolesClaim(i: number) {
+        const v = oauth2RolesClaimInputs[i]?.trim();
+        if (!v) return;
+        const entry = oauth2Entries[i];
+        if (!entry) return;
+        if ((entry.roles_claims ?? []).includes(v)) return;
+        entry.roles_claims = [...(entry.roles_claims ?? []), v];
+        oauth2Entries = [...oauth2Entries];
+        oauth2RolesClaimInputs = oauth2RolesClaimInputs.map((s, idx) =>
+            idx === i ? "" : s,
+        );
+    }
+
+    function removeOAuth2RolesClaim(entryIdx: number, claimIdx: number) {
+        const entry = oauth2Entries[entryIdx];
+        if (!entry) return;
+        entry.roles_claims = (entry.roles_claims ?? []).filter(
+            (_, i) => i !== claimIdx,
+        );
+        oauth2Entries = [...oauth2Entries];
     }
 
     function addOAuth2Scope(i: number) {
@@ -1260,6 +1298,69 @@
                                     {/each}
                                 </div>
                             {/if}
+                        </div>
+                        <!-- Roles claim paths -->
+                        <div>
+                            <!-- svelte-ignore a11y_label_has_associated_control -->
+                            <label
+                                class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
+                                >Roles claim path(s)</label
+                            >
+                            <div class="flex gap-2">
+                                <input
+                                    type="text"
+                                    bind:value={oauth2RolesClaimInputs[i]}
+                                    placeholder="realm_access.roles"
+                                    onkeydown={(e) => {
+                                        if (e.key === "Enter") {
+                                            e.preventDefault();
+                                            addOAuth2RolesClaim(i);
+                                        }
+                                    }}
+                                    class="flex-1 px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+                                />
+                                <button
+                                    type="button"
+                                    class="px-3 py-2 text-sm text-white bg-accent-600 rounded-md hover:bg-accent-700 transition-colors cursor-pointer"
+                                    onclick={() => addOAuth2RolesClaim(i)}
+                                    >Add</button
+                                >
+                            </div>
+                            {#if (entry.roles_claims ?? []).length > 0}
+                                <div class="mt-2 flex flex-wrap gap-1.5">
+                                    {#each entry.roles_claims ?? [] as claim, ci}
+                                        <span
+                                            class="inline-flex items-center gap-1 px-2 py-1 bg-accent-50 border border-accent-200 rounded text-xs font-mono text-brand-700"
+                                        >
+                                            {claim}
+                                            <button
+                                                type="button"
+                                                class="w-3.5 h-3.5 flex items-center justify-center bg-transparent border-none cursor-pointer text-brand-400 hover:text-red-500"
+                                                onclick={() =>
+                                                    removeOAuth2RolesClaim(
+                                                        i,
+                                                        ci,
+                                                    )}
+                                                >&times;</button
+                                            >
+                                        </span>
+                                    {/each}
+                                </div>
+                            {/if}
+                            <p
+                                class="mt-1 text-[11px] text-slate-400 dark:text-slate-500"
+                            >
+                                Where to read roles from in the token/userinfo
+                                claims. Leave empty for the default <code
+                                    >roles</code
+                                >
+                                claim. Supports nesting and a <code>*</code>
+                                wildcard — for Keycloak use
+                                <code>realm_access.roles</code> and/or
+                                <code>resource_access.*.roles</code>. Mapped to
+                                permissions in Capabilities &amp; Superadmins
+                                below.
+                            </p>
                         </div>
                         <div class="flex flex-wrap gap-4">
                             <label

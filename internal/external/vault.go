@@ -377,12 +377,13 @@ func (vc *VaultClient) ReadSecret(ctx context.Context, secretPath string) (map[s
 // ListSecrets lists secret keys at the given path using Vault's list API.
 // Returns a list of key names. Keys ending with "/" are sub-directories.
 //
-// It issues a GET with "?list=true" rather than the non-standard "LIST"
-// HTTP verb. The two are equivalent to the Vault server, but the custom
-// LIST method is rejected (often with a 403/405) by some proxies, WAFs
-// and load balancers. The official hashicorp/vault/api client does the
-// same "for broader compatibility".
-func (vc *VaultClient) ListSecrets(ctx context.Context, listPath string) ([]string, error) {
+// When useListVerb is false (the default) it issues a GET with "?list=true"
+// rather than the non-standard "LIST" HTTP verb. The two are equivalent to
+// the Vault server, but the custom LIST method is rejected (often with a
+// 403/405) by some proxies, WAFs and load balancers. The official
+// hashicorp/vault/api client uses GET "for broader compatibility". Set
+// useListVerb to true to force the native LIST verb.
+func (vc *VaultClient) ListSecrets(ctx context.Context, listPath string, useListVerb bool) ([]string, error) {
 	if err := vc.EnsureAuthenticated(ctx); err != nil {
 		return nil, err
 	}
@@ -391,9 +392,14 @@ func (vc *VaultClient) ListSecrets(ctx context.Context, listPath string) ([]stri
 	token := vc.token
 	vc.mu.RUnlock()
 
+	method, logMethod := http.MethodGet, "GET?list=true"
 	listURL := fmt.Sprintf("%s/v1/%s?list=true", vc.address, strings.TrimLeft(listPath, "/"))
+	if useListVerb {
+		method, logMethod = "LIST", "LIST"
+		listURL = fmt.Sprintf("%s/v1/%s", vc.address, strings.TrimLeft(listPath, "/"))
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	req, err := http.NewRequestWithContext(ctx, method, listURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating list request: %w", err)
 	}
@@ -418,7 +424,7 @@ func (vc *VaultClient) ListSecrets(ctx context.Context, listPath string) ([]stri
 		slog.Warn("vault: permission denied (token authenticated but policy lacks access)",
 			"address", vc.address,
 			"operation", "list",
-			"method", "GET?list=true",
+			"method", logMethod,
 			"path", listPath,
 			"status", resp.StatusCode,
 			"response", string(respBody))
@@ -790,7 +796,7 @@ func (p *VaultProvider) Fetch(ctx context.Context, path string) ([]byte, error) 
 // v1 lists "<mount>/" directly.
 func (p *VaultProvider) List(ctx context.Context, prefix string) ([]string, error) {
 	client := p.Deps.VaultClient(ctx, p.Config)
-	return client.ListSecrets(ctx, p.listPath(prefix))
+	return client.ListSecrets(ctx, p.listPath(prefix), p.Config.UseListVerb())
 }
 
 func (p *VaultProvider) Test(ctx context.Context) TestResult {

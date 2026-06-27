@@ -160,6 +160,15 @@ type Vault struct {
 	// explicitly for legacy KV v1 mounts.
 	KVVersion int `json:"kv_version,omitempty"`
 
+	// ListMethod selects how secret listing talks to Vault:
+	//   - "get" (default, empty): GET with "?list=true". Use this when a
+	//     proxy/WAF/load balancer sits between pika and Vault, since many
+	//     reject the non-standard "LIST" HTTP verb (often with 403/405).
+	//   - "list": the native Vault "LIST" HTTP verb.
+	// Both are equivalent to the Vault server; the choice only matters for
+	// intermediaries on the path to Vault.
+	ListMethod string `json:"list_method,omitempty"`
+
 	// AppRole holds AppRole authentication credentials.
 	AppRole *VaultAppRole `json:"app_role,omitempty"`
 	// Token is a direct Vault token (optional fallback, not recommended for production).
@@ -184,6 +193,13 @@ func (v *Vault) IsKVv2() bool {
 		return true
 	}
 	return v.KVVersion != 1
+}
+
+// UseListVerb reports whether secret listing should use the native "LIST"
+// HTTP verb instead of GET "?list=true". Defaults to false (GET), which is
+// proxy/WAF-safe. Set ListMethod to "list" to opt into the raw verb.
+func (v *Vault) UseListVerb() bool {
+	return v != nil && strings.EqualFold(v.ListMethod, "list")
 }
 
 type VaultAppRole struct {

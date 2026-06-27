@@ -101,6 +101,11 @@
   let vaultKVVersion = $state<1 | 2>(
     snapResource.vault?.kv_version === 1 ? 1 : 2,
   );
+  // How listing talks to Vault. Absent ≡ "get" (GET ?list=true), which is
+  // proxy/WAF-safe; "list" uses the native LIST verb.
+  let vaultListMethod = $state<"get" | "list">(
+    snapResource.vault?.list_method === "list" ? "list" : "get",
+  );
   let vaultRoleId = $state(snapResource.vault?.app_role?.role_id ?? "");
   let vaultSecretId = $state(snapResource.vault?.app_role?.secret_id ?? "");
   let vaultAppRolePath = $state(
@@ -283,6 +288,7 @@
         address: vaultAddr.trim(),
         mount: vaultMount.trim(),
         kv_version: vaultKVVersion,
+        list_method: vaultListMethod,
         app_role: {
           role_id: vaultRoleId.trim(),
           secret_id: vaultSecretId.trim(),
@@ -839,6 +845,33 @@
             <code>&lt;mount&gt;/metadata/&lt;path&gt;</code>; v1 uses
             <code>&lt;mount&gt;/&lt;path&gt;</code> directly. Must match your
             mount.
+          </p>
+        {/if}
+      </div>
+
+      <div class="mb-4">
+        <span
+          class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"
+          >List method</span
+        >
+        {#if isReadOnly}
+          <div
+            class="px-3 py-2 text-sm font-mono text-slate-700 dark:text-slate-200 bg-slate-50 dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md"
+          >
+            {vaultListMethod === "list" ? "LIST" : "GET ?list=true"}
+          </div>
+        {:else}
+          <select
+            bind:value={vaultListMethod}
+            class="w-full px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+          >
+            <option value="get">GET ?list=true (proxy-safe)</option>
+            <option value="list">LIST verb (native)</option>
+          </select>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            How listing calls Vault. Both are equivalent server-side. Use
+            <code>GET ?list=true</code> when a proxy/WAF sits in front of Vault
+            (many reject the non-standard <code>LIST</code> verb with 403/405).
           </p>
         {/if}
       </div>

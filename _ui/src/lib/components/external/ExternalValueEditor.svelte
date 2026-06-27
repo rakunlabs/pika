@@ -18,9 +18,11 @@
   import { untrack } from "svelte";
   import AppCodeMirror from "@/lib/editor/AppCodeMirror.svelte";
   import { addToast } from "@/lib/store/toast.svelte";
-  import { json } from "@codemirror/lang-json";
+  import { json, jsonParseLinter } from "@codemirror/lang-json";
   import { yaml } from "@codemirror/lang-yaml";
   import type { LanguageSupport } from "@codemirror/language";
+  import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
+  import type { Extension } from "@codemirror/state";
   import { Copy, Check, Sparkles, ChevronDown } from "lucide-svelte";
   import jsYaml from "js-yaml";
 
@@ -107,6 +109,63 @@
         return yaml();
       default:
         return undefined;
+    }
+  });
+
+  // ── Linting ───────────────────────────────────────────────────────
+  // Mirrors the Configuration editor (Editor.svelte): JSON uses
+  // CodeMirror's built-in jsonParseLinter; YAML is validated with
+  // js-yaml, surfacing the parse error at its reported mark. A
+  // lintGutter() paints the error markers in the gutter. The extension
+  // set is keyed on the effective language so switching formats (via
+  // the toolbar selector) re-derives the right linter.
+  const LINT_DELAY = 500; // ms debounce, matches Editor.svelte
+
+  const yamlLinter = linter(
+    (view) => {
+      const doc = view.state.doc;
+      const content = doc.toString();
+      if (!content.trim()) return [];
+
+      try {
+        jsYaml.load(content);
+        return [];
+      } catch (e: any) {
+        const diagnostics: Diagnostic[] = [];
+        if (e?.mark) {
+          const line = Math.min(e.mark.line, doc.lines - 1);
+          const lineObj = doc.line(line + 1);
+          const from =
+            lineObj.from + Math.min(e.mark.column || 0, lineObj.length);
+          const to = Math.min(from + 1, doc.length);
+          diagnostics.push({
+            from,
+            to,
+            severity: "error",
+            message: e.reason || "YAML syntax error",
+          });
+        } else {
+          diagnostics.push({
+            from: 0,
+            to: Math.min(1, doc.length),
+            severity: "error",
+            message: e?.message || "YAML syntax error",
+          });
+        }
+        return diagnostics;
+      }
+    },
+    { delay: LINT_DELAY },
+  );
+
+  const lintExtensions = $derived.by((): Extension[] => {
+    switch (effectiveLang) {
+      case "json":
+        return [lintGutter(), linter(jsonParseLinter(), { delay: LINT_DELAY })];
+      case "yaml":
+        return [lintGutter(), yamlLinter];
+      default:
+        return [];
     }
   });
 
@@ -315,7 +374,13 @@
        editor never collapses to zero when its parent doesn't bound
        it vertically. -->
   <div class="relative flex-1 min-h-[8rem] overflow-auto">
-    <AppCodeMirror {value} lang={languageExtension} {readonly} {onchange} />
+    <AppCodeMirror
+      {value}
+      lang={languageExtension}
+      extensions={lintExtensions}
+      {readonly}
+      {onchange}
+    />
     {#if !value && placeholder}
       <div
         class="pointer-events-none absolute top-1.5 left-3 text-[11px] text-slate-500 italic font-mono"

@@ -87,6 +87,47 @@ func TestCapResolver_RoleMappingUnknownBundle(t *testing.T) {
 	}
 }
 
+// TestCapResolver_KeycloakNestedRoles verifies that roles harvested from a
+// nested claim path (Keycloak's realm_access.roles) — not present in
+// Identity.Roles because ada only reads the flat "roles" claim — are mapped to
+// permission bundles via RoleMapping.
+func TestCapResolver_KeycloakNestedRoles(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	if _, err := svc.CreatePermission(ctx, &service.CreatePermissionRequest{
+		Key:  "editor",
+		Name: "Editor",
+		Keys: []string{service.CapFilesRead, service.CapFilesWrite},
+	}); err != nil {
+		t.Fatalf("create perm: %v", err)
+	}
+
+	cr := &CapResolver{
+		svc: svc,
+		settings: service.CapabilityMapping{
+			RoleMapping: map[string][]string{"pika-admin": {"editor"}},
+		},
+		rolePaths: map[string][]string{
+			"keycloak": {"realm_access.roles", "resource_access.*.roles"},
+		},
+	}
+
+	got, _, _, _ := cr.resolve(ctx, &identity.Identity{
+		Subject:  "kc-sub",
+		Provider: "keycloak",
+		// Note: Roles is empty — ada found no flat "roles" claim.
+		Claims: map[string]any{
+			"realm_access": map[string]any{
+				"roles": []any{"pika-admin", "offline_access"},
+			},
+		},
+	})
+	if len(got) != 2 || !got.Has(service.CapFilesRead) || !got.Has(service.CapFilesWrite) {
+		t.Errorf("keycloak realm role mapping: %v", got)
+	}
+}
+
 func TestCapResolver_LocalDelegates(t *testing.T) {
 	svc := newTestService(t)
 	user, err := svc.CreateSetupUser(context.Background(),

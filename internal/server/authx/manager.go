@@ -62,7 +62,7 @@ func (m *Manager) Boot(ctx context.Context, s *service.AuthSettings) error {
 	}
 
 	m.authMW = a
-	m.capResolver = NewCapResolver(m.deps.Svc, s.Capabilities)
+	m.capResolver = NewCapResolver(m.deps.Svc, s.Capabilities, s.OAuth2RolesClaims())
 	return nil
 }
 
@@ -95,7 +95,7 @@ func (m *Manager) Reload(ctx context.Context, s *service.AuthSettings) error {
 		SignupFirstFn: m.signupFirstFn(),
 	})
 
-	m.capResolver = NewCapResolver(m.deps.Svc, s.Capabilities)
+	m.capResolver = NewCapResolver(m.deps.Svc, s.Capabilities, s.OAuth2RolesClaims())
 	return nil
 }
 

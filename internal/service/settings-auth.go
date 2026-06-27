@@ -207,6 +207,47 @@ type OAuth2StrategySettings struct {
 	// external identities into local external-only users during login. When
 	// false (default), login only binds to an existing user/link.
 	AutoCreateUser bool `json:"auto_create_user,omitempty"`
+	// RolesClaims lists dotted claim paths to read role strings from when
+	// resolving capabilities for this provider. Empty means the default
+	// ["roles"] (the flat top-level claim ada already extracts into
+	// Identity.Roles).
+	//
+	// Paths support nesting and a "*" wildcard segment that iterates every
+	// value of a map. This covers Keycloak's role shapes:
+	//
+	//	"realm_access.roles"          -> realm roles
+	//	"resource_access.*.roles"     -> every client's roles
+	//	"resource_access.pika.roles"  -> one client's roles
+	//
+	// The harvested role strings are unioned with Identity.Roles and routed
+	// through CapabilityMapping.RoleMapping like any other role name (bare,
+	// not client-namespaced). See HarvestRoles and CapResolver.resolve.
+	RolesClaims []string `json:"roles_claims,omitempty"`
+}
+
+// OAuth2RolesClaims returns the EXTRA role-claim paths configured per OAuth2
+// provider, keyed by provider Name. Only providers with an explicit
+// RolesClaims are included — these are additive sources harvested on top of
+// the default flat "roles" claim, which ada always extracts into
+// Identity.Roles and CapResolver.effectiveRoles always unions in. A provider
+// that sets no RolesClaims is therefore absent from the map and keeps the
+// default "roles" behavior with zero extra work. Used by authx.Manager to bind
+// the CapResolver to the live settings at boot/reload.
+func (s *AuthSettings) OAuth2RolesClaims() map[string][]string {
+	if s == nil || len(s.OAuth2) == 0 {
+		return nil
+	}
+	var out map[string][]string
+	for _, spec := range s.OAuth2 {
+		if spec.Name == "" || len(spec.RolesClaims) == 0 {
+			continue
+		}
+		if out == nil {
+			out = make(map[string][]string)
+		}
+		out[spec.Name] = spec.RolesClaims
+	}
+	return out
 }
 
 // OAuth2AutoCreateUserEnabled reports whether the named OAuth2 provider is

@@ -130,6 +130,10 @@ export interface VaultConfig {
   // (and "<mount>/metadata/<path>" for list/versions); v1 uses
   // "<mount>/<path>" directly. Absent ≡ v2 (the server default).
   kv_version?: number;
+  // How secret listing calls Vault. "get" (default) issues GET "?list=true"
+  // (proxy/WAF-safe); "list" uses the native LIST HTTP verb. Equivalent
+  // server-side. Absent ≡ "get".
+  list_method?: "get" | "list";
   token?: string;
   app_role?: VaultAppRole;
   // Outbound proxy URL (used when proxy_mode is "custom").

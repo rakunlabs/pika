@@ -27,6 +27,32 @@ func TestVaultIsKVv2Default(t *testing.T) {
 	}
 }
 
+func TestVaultUseListVerb(t *testing.T) {
+	cases := []struct {
+		name   string
+		method string
+		want   bool
+	}{
+		{"unset defaults to GET", "", false},
+		{"explicit get", "get", false},
+		{"explicit list", "list", true},
+		{"list is case-insensitive", "LIST", true},
+		{"unknown defaults to GET", "weird", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := &Vault{ListMethod: tc.method}
+			if got := v.UseListVerb(); got != tc.want {
+				t.Fatalf("UseListVerb(method=%q) = %v, want %v", tc.method, got, tc.want)
+			}
+		})
+	}
+	var nilVault *Vault
+	if nilVault.UseListVerb() {
+		t.Fatal("nil Vault should default to GET (UseListVerb=false)")
+	}
+}
+
 // TestVaultProviderPathsKVv2 locks in the v2 path layout (the finops/kv2
 // case): reads/writes under data/, list/versions under metadata/. This
 // is the regression guard against the old "guess v2 then fall back to
