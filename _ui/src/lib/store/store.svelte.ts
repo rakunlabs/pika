@@ -303,6 +303,16 @@ function createAppStore() {
     await Promise.allSettled([loadIdentity(), loadInfo(), prefsStore.loadPreferences()]);
   }
 
+  // finishExternalLogin runs the post-login fan-out for flows where the
+  // session cookie is set out-of-band — i.e. the OAuth2 popup callback, which
+  // mints the cookie server-side and closes itself. By the time we call this
+  // the cookie is already present; we just refresh identity, app info and
+  // preferences so App.svelte's reactive gate flips the login screen for the
+  // app. Mirrors loginWith's tail — see loginWith for the allSettled rationale.
+  async function finishExternalLogin(): Promise<void> {
+    await Promise.allSettled([loadIdentity(), loadInfo(), prefsStore.loadPreferences()]);
+  }
+
   async function logout(): Promise<void> {
     try {
       await axios.post('/logout');
@@ -504,6 +514,7 @@ function createAppStore() {
     loginWith,
     finishMFA,
     registerWith,
+    finishExternalLogin,
     logout,
     loadUsers,
     createUser,

@@ -158,6 +158,9 @@
         // user navigates away would still try to post a finish request.
         conditionalController?.abort();
         conditionalController = null;
+        // Stop the OAuth popup poll if the component unmounts mid-flow (e.g.
+        // the auth gate swaps us out the instant identity refreshes).
+        stopOAuthPoll();
     });
 
     function getFieldValue(
@@ -345,8 +348,114 @@
         }
     }
 
-    function handleOAuth(url: string) {
-        location.href = withBasePath(url);
+    // OAuth2 login runs in a popup, which is the flow ada's server side was
+    // built for: the callback exchanges the code, sets the session cookie plus
+    // a short-lived non-HttpOnly success cookie, then emits a tiny
+    // window.close() script to close the popup. We watch for either the success
+    // cookie or the popup closing, then refresh identity so App.svelte swaps the
+    // login screen for the app — preserving any location.hash deep-link exactly
+    // like the password flow.
+    //
+    // Why not a full-page redirect: a top-level navigation lands the browser on
+    // the callback's window.close() document, which is a no-op in a normal tab,
+    // stranding the user on a blank page even though login actually succeeded.
+    let oauthLoading = $state(false);
+    let oauthActiveName = $state<string | null>(null);
+    let oauthPoll: ReturnType<typeof setInterval> | null = null;
+
+    // ada's default success cookie name (see auth.go SuccessCookie.withDefaults).
+    // Pika does not override SuccessCookie in buildAuthConfig, so this is stable.
+    const OAUTH_SUCCESS_COOKIE = "auth_success";
+
+    function readCookie(name: string): string | null {
+        for (const part of document.cookie.split(";")) {
+            const [k, v] = part.split("=").map((s) => s.trim());
+            if (k === name) return v ?? "";
+        }
+        return null;
+    }
+
+    function clearOAuthSuccessCookie() {
+        // ada sets it with Path=/, so we can expire it from JS. Clearing avoids
+        // a stale cookie from a prior login firing a false success next time.
+        document.cookie = `${OAUTH_SUCCESS_COOKIE}=; Max-Age=0; Path=/`;
+    }
+
+    function stopOAuthPoll() {
+        if (oauthPoll !== null) {
+            clearInterval(oauthPoll);
+            oauthPoll = null;
+        }
+    }
+
+    async function finishOAuth(popup: Window | null) {
+        stopOAuthPoll();
+        clearOAuthSuccessCookie();
+        try {
+            popup?.close();
+        } catch {
+            // cross-origin or already-closed window — nothing to do.
+        }
+        await appStore.finishExternalLogin();
+        oauthLoading = false;
+        oauthActiveName = null;
+        // If we're still not authenticated the user cancelled the popup or the
+        // IdP denied the request — stay on the login screen silently (no toast
+        // for a plain cancel).
+    }
+
+    function handleOAuth(strategy: LoginStrategy) {
+        const target = withBasePath(strategy.url);
+
+        // Clear any stale success cookie so we only react to THIS attempt.
+        clearOAuthSuccessCookie();
+
+        const popup = window.open(
+            target,
+            "pika_oauth_login",
+            "width=520,height=640,menubar=no,toolbar=no,location=yes",
+        );
+        if (!popup) {
+            // Popups blocked (rare for a click): fall back to a full-page
+            // redirect. The callback's window.close() is a no-op here, but auth
+            // still completes and the cookie is set — better than doing nothing.
+            location.href = target;
+            return;
+        }
+
+        error = "";
+        oauthLoading = true;
+        oauthActiveName = strategy.name;
+
+        const startedAt = Date.now();
+        const timeoutMs = 5 * 60 * 1000;
+
+        stopOAuthPoll();
+        oauthPoll = setInterval(() => {
+            // Primary signal: the callback set the success cookie. Fires even
+            // if window.close() is delayed or blocked by the browser.
+            if (readCookie(OAUTH_SUCCESS_COOKIE) !== null) {
+                void finishOAuth(popup);
+                return;
+            }
+            // Fallback signal: the popup closed — either success via the
+            // callback's window.close(), or the user dismissed it. A definitive
+            // identity check in finishOAuth settles which.
+            if (popup.closed) {
+                void finishOAuth(popup);
+                return;
+            }
+            if (Date.now() - startedAt > timeoutMs) {
+                stopOAuthPoll();
+                try {
+                    popup.close();
+                } catch {
+                    // ignore
+                }
+                oauthLoading = false;
+                oauthActiveName = null;
+            }
+        }, 500);
     }
 
     // Passkey login: two-step ceremony that hits the same strategy URL
@@ -774,11 +883,14 @@
                         {#each oauthStrategies as strategy}
                             <button
                                 type="button"
-                                onclick={() => handleOAuth(strategy.url)}
-                                class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-100 dark:bg-warm-900 text-slate-700 dark:text-slate-200 text-sm font-medium rounded-md border border-slate-300 dark:border-warm-600 hover:bg-slate-200 dark:hover:bg-warm-700 cursor-pointer transition-colors"
+                                onclick={() => handleOAuth(strategy)}
+                                disabled={oauthLoading}
+                                class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-100 dark:bg-warm-900 text-slate-700 dark:text-slate-200 text-sm font-medium rounded-md border border-slate-300 dark:border-warm-600 hover:bg-slate-200 dark:hover:bg-warm-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                             >
                                 <ExternalLink size={14} />
-                                {strategy.label}
+                                {oauthLoading && oauthActiveName === strategy.name
+                                    ? "Waiting for sign-in..."
+                                    : strategy.label}
                             </button>
                         {/each}
                     </div>
