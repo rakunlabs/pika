@@ -20,6 +20,7 @@
     onchange?: (value: string) => void;
     onready?: (view: EditorView) => void;
     onreconfigure?: (view: EditorView) => void;
+    lineWrapping?: boolean;
     // Optional override for the gutter styling — RenderPreview historically
     // didn't paint its gutter, so callers may pass `hideGutter` to keep
     // CodeMirror's intrinsic look. Defaults: gutter painted to match theme.
@@ -34,6 +35,7 @@
     onchange,
     onready,
     onreconfigure,
+    lineWrapping,
     hideGutter = false,
   }: Props = $props();
 
@@ -80,6 +82,6 @@
   {onready}
   {onreconfigure}
   theme={themeMeta.extension}
-  lineWrapping={prefsStore.editor.line_wrap}
+  lineWrapping={lineWrapping ?? prefsStore.editor.line_wrap}
   {styles}
 />

@@ -6,8 +6,9 @@
   // re-implemented here at smaller scope:
   //
   //   1. Language detection/selection — `lang='auto'` inspects the
-  //      value and picks JSON or YAML; the user can override via the
-  //      format selector in the toolbar (TEXT / JSON / YAML).
+  //      value and picks JSON or YAML; editable controls seed that
+  //      detected format as the selection, while still letting the user
+  //      switch back to Auto from the toolbar.
   //   2. Beautify — pretty-prints JSON (and trims YAML/TEXT).
   //   3. Copy to clipboard.
   //
@@ -66,22 +67,8 @@
     lintError = $bindable(null),
   }: Props = $props();
 
-  // Internal lang state: starts from the prop's initial value and
-  // then tracks user overrides via the format selector. We use
-  // `untrack` so Svelte's compiler knows we intentionally only read
-  // the prop once at mount — subsequent prop changes don't override
-  // a user choice (if the parent flips between resources, a remount
-  // via {#key} reseeds this correctly).
-  let chosenLang = $state<LangChoice>(
-    untrack(() => (lang === "none" ? "text" : (lang as LangChoice))),
-  );
-
-  // Effective lang for the editor extension — folds 'auto' into a
-  // concrete language by inspecting the value.
-  const effectiveLang = $derived.by((): "json" | "yaml" | "text" => {
-    if (chosenLang !== "auto") return chosenLang;
-
-    const trimmed = value.trim();
+  function detectLang(content: string): "json" | "yaml" | "text" {
+    const trimmed = content.trim();
     if (!trimmed) return "text";
 
     if (trimmed[0] === "{" || trimmed[0] === "[") {
@@ -105,6 +92,28 @@
     }
 
     return "text";
+  }
+
+  // Internal lang state: starts from the prop's initial value and
+  // then tracks user overrides via the format selector. We use
+  // `untrack` so Svelte's compiler knows we intentionally only read
+  // the prop once at mount — subsequent prop changes don't override
+  // a user choice (if the parent flips between resources, a remount
+  // via {#key} reseeds this correctly).
+  let chosenLang = $state<LangChoice>(
+    untrack(() => {
+      if (lang === "none") return "text";
+      if (lang === "auto" && showFormatControls) return detectLang(value);
+      return lang as LangChoice;
+    }),
+  );
+
+  // Effective lang for the editor extension — folds 'auto' into a
+  // concrete language by inspecting the value.
+  const effectiveLang = $derived.by((): "json" | "yaml" | "text" => {
+    if (chosenLang !== "auto") return chosenLang;
+
+    return detectLang(value);
   });
 
   const languageExtension = $derived.by((): LanguageSupport | undefined => {
@@ -294,6 +303,8 @@
     chosenLang = l;
     formatMenuOpen = false;
   }
+
+  let lineWrapping = $state(false);
 </script>
 
 <!--
@@ -306,7 +317,7 @@
   No outer border or rounded corners — the parent in External.svelte
   places us edge-to-edge for a true full-pane look.
 -->
-<div class="flex flex-col h-full overflow-hidden bg-[#1e1e1e]">
+<div class="external-value-editor flex flex-col h-full overflow-hidden bg-[#1e1e1e]">
   <!-- Toolbar — left: format pill + optional title; right: optional
        Beautify, optional format dropdown, always-on Copy. Toolbar
        metrics match Editor.svelte:389 (px-3 py-1.5). -->
@@ -387,6 +398,20 @@
 
       <button
         type="button"
+        class="flex items-center gap-1 px-2 py-0.5 bg-transparent border border-[#3c3c3c] rounded text-[11px] cursor-pointer transition-colors
+               {lineWrapping
+          ? 'text-gray-100 bg-[#333]'
+          : 'text-gray-400 hover:bg-[#333] hover:text-gray-100'}"
+        onclick={() => (lineWrapping = !lineWrapping)}
+        title="Wrap long lines"
+        aria-label="Wrap long lines"
+        aria-pressed={lineWrapping}
+      >
+        Wrap
+      </button>
+
+      <button
+        type="button"
         class="flex items-center gap-1 px-2 py-0.5 bg-transparent border border-[#3c3c3c] rounded text-[11px] text-gray-400 hover:bg-[#333] hover:text-gray-100 cursor-pointer transition-colors"
         onclick={handleCopy}
         title="Copy value"
@@ -403,18 +428,20 @@
     </div>
   </div>
 
-  <!-- Body. `flex-1 min-h-0` lets the editor expand to fill the
-       parent's remaining height. min-h-[8rem] is a backstop so the
-       editor never collapses to zero when its parent doesn't bound
-       it vertically. -->
-  <div class="relative flex-1 min-h-[8rem] overflow-auto">
-    <AppCodeMirror
-      {value}
-      lang={languageExtension}
-      extensions={lintExtensions}
-      {readonly}
-      {onchange}
-    />
+  <!-- Body. CodeMirror fills an absolute inner wrapper so its own
+       scroller spans the full pane height; horizontal scrollbars stay at
+       the bottom of the editor, not directly under the last visible line. -->
+  <div class="relative flex-1 min-h-0 min-w-0">
+    <div class="absolute inset-0 h-full w-full overflow-hidden">
+      <AppCodeMirror
+        {value}
+        lang={languageExtension}
+        extensions={lintExtensions}
+        {readonly}
+        {onchange}
+        {lineWrapping}
+      />
+    </div>
     {#if !value && placeholder}
       <div
         class="pointer-events-none absolute top-1.5 left-3 text-[11px] text-slate-500 italic font-mono"
@@ -424,3 +451,9 @@
     {/if}
   </div>
 </div>
+
+<style>
+  :global(.codemirror-wrapper) {
+    height: 100%;
+  }
+</style>

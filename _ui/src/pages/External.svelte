@@ -103,6 +103,9 @@
   let pathTreeLoading = $state<Record<string, boolean>>({});
   let expanded = $state<Record<string, boolean>>({ "": true });
   let selectedPath = $state<string | null>(null);
+  let deepLinkHydrationStarted = $state(false);
+  let deepLinkHydrated = $state(false);
+  let applyingDeepLink = $state(false);
 
   // ── Content viewer (right pane) ───────────────────────────────────
   let entry = $state<ExternalEntry | null>(null);
@@ -222,6 +225,70 @@
 
     await loadChildren("");
   }
+
+  function readDeepLink(): { resource: string | null; path: string | null } {
+    if (typeof window === "undefined") return { resource: null, path: null };
+    const queryStart = window.location.hash.indexOf("?");
+    if (queryStart === -1) return { resource: null, path: null };
+    const params = new URLSearchParams(window.location.hash.slice(queryStart + 1));
+    return {
+      resource: params.get("resource"),
+      path: params.get("path"),
+    };
+  }
+
+  function updateDeepLink() {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams();
+    if (selectedResource) params.set("resource", selectedResource);
+    if (selectedResource && selectedPath) params.set("path", selectedPath);
+    const nextHash = params.toString()
+      ? `/external?${params.toString()}`
+      : "/external";
+    if (window.location.hash.slice(1) === nextHash) return;
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}${window.location.search}#${nextHash}`,
+    );
+  }
+
+  async function expandAncestors(path: string) {
+    const parts = path.split("/").filter(Boolean);
+    let prefix = "";
+    for (const part of parts.slice(0, -1)) {
+      prefix += `${part}/`;
+      expanded = { ...expanded, [prefix]: true };
+      await loadChildren(prefix);
+    }
+  }
+
+  async function hydrateDeepLink() {
+    applyingDeepLink = true;
+    try {
+      const { resource, path } = readDeepLink();
+      if (!resource || !resources.some((r) => r.name === resource)) return;
+      await selectResource(resource);
+      if (path) {
+        await expandAncestors(path);
+        await openPath(path);
+      }
+    } finally {
+      applyingDeepLink = false;
+      deepLinkHydrated = true;
+    }
+  }
+
+  $effect(() => {
+    if (!canManage || !booted || deepLinkHydrationStarted) return;
+    deepLinkHydrationStarted = true;
+    void hydrateDeepLink();
+  });
+
+  $effect(() => {
+    if (!deepLinkHydrated || applyingDeepLink) return;
+    updateDeepLink();
+  });
 
   // Lazy-load children under a prefix. Cached in pathTree; concurrent
   // calls deduped by pathTreeLoading.
