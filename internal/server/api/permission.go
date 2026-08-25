@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/rakunlabs/ada"
+	"github.com/rakunlabs/ada/middleware/auth/identity"
 	"github.com/rakunlabs/pika/internal/service"
 )
 
@@ -98,6 +99,35 @@ func (a *api) withPerm(need string, handler func(*ada.Context) error) func(*ada.
 		caps := service.CapabilitiesFromContext(c.Request.Context())
 		if !caps.Has(need) {
 			return fmt.Errorf("capability %q required: %w", need, service.ErrForbidden)
+		}
+		return handler(c)
+	}
+}
+
+// withAccountSecurityAccess applies the runtime policy for passkey and TOTP
+// self-service. The UI mirrors this decision, but this gate is authoritative.
+func (a *api) withAccountSecurityAccess(handler func(*ada.Context) error) func(*ada.Context) error {
+	return func(c *ada.Context) error {
+		ctx := c.Request.Context()
+		settings := a.svc.GetAuthSettings(ctx)
+		isSuperadmin := false
+		if id := identity.FromContext(ctx); id != nil && settings != nil {
+			for _, subject := range settings.Capabilities.Superadmins {
+				if subject == id.Subject {
+					isSuperadmin = true
+					break
+				}
+			}
+		}
+		if !isSuperadmin {
+			if userID := service.UserIDFromContext(ctx); userID != "" {
+				if user, err := a.svc.GetUserByID(ctx, userID); err == nil && user != nil {
+					isSuperadmin = user.IsSuperadmin
+				}
+			}
+		}
+		if !settings.AccountSecurityAllowed(isSuperadmin) {
+			return fmt.Errorf("account security is restricted to superadmins: %w", service.ErrForbidden)
 		}
 		return handler(c)
 	}

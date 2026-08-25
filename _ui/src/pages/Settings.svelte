@@ -51,10 +51,9 @@
         | "backup"
         | "about";
 
-    // Section → required capability. `null` means always visible (e.g.
-    // About, Appearance, Account Security — these are per-user and
-    // intentionally require no capability). 'vault' is per-user too;
-    // its visibility is also further filtered below by vault_enabled.
+    // Section → required capability. `null` means no capability requirement.
+    // Account Security has a separate runtime policy below; 'vault' is also
+    // further filtered by vault_enabled.
     const sectionCaps: Record<Section, string | null> = {
         appearance: null,
         account_security: null,
@@ -98,6 +97,12 @@
     // don't show a panel that 503s its own data fetches.
     const sections = $derived(
         allSections.filter((s) => {
+            if (
+                s.key === "account_security" &&
+                appStore.info?.account_security_available === false
+            ) {
+                return false;
+            }
             if (s.key === "vault" && !(appStore.info?.vault_enabled ?? false)) {
                 return false;
             }

@@ -31,6 +31,12 @@ export interface AppInfo {
   // Certificates settings section is hidden to avoid presenting no-op
   // runtime toggles.
   managed_tls_enabled?: boolean;
+  // Login presentation policy. The local strategy remains usable when the
+  // form is collapsed; Login.svelte exposes a compact reveal control.
+  local_login_name?: string;
+  local_login_form_collapsed?: boolean;
+  // Effective server-side Account Security access for the current caller.
+  account_security_available?: boolean;
   // VaultItemTypes is the server's known item-type vocabulary, used by
   // the new-item picker. Empty when vault is disabled.
   vault_item_types?: string[];

@@ -8,6 +8,8 @@
         Key,
         ShieldCheck,
         ArrowLeft,
+        ChevronDown,
+        ChevronRight,
     } from "lucide-svelte";
     import { onMount, onDestroy } from "svelte";
     import type { LoginStrategy } from "@/lib/store/store.svelte";
@@ -28,6 +30,7 @@
 
     // signup_first: show register form first when the server requests it
     let showRegister = $state(false);
+    let showCollapsedLocalLogin = $state(false);
 
     // Track form field values keyed by field name
     let loginFields = $state<Record<string, string>>({});
@@ -61,8 +64,31 @@
         Array.isArray(loginInfo?.strategies) ? loginInfo!.strategies : [],
     );
 
-    const passwordStrategy = $derived(
+    const firstPasswordStrategy = $derived(
         strategies.find((s) => s.kind === "password") ?? null,
+    );
+    const localPasswordStrategy = $derived(
+        strategies.find(
+            (s) =>
+                s.kind === "password" &&
+                s.name === appStore.info?.local_login_name,
+        ) ?? null,
+    );
+    const localLoginIsCollapsed = $derived(
+        !!localPasswordStrategy &&
+            !!appStore.info?.local_login_form_collapsed &&
+            !loginInfo?.signup_first,
+    );
+    const passwordStrategy = $derived(
+        localLoginIsCollapsed
+            ? showCollapsedLocalLogin
+                ? localPasswordStrategy
+                : (strategies.find(
+                      (s) =>
+                          s.kind === "password" &&
+                          s.name !== appStore.info?.local_login_name,
+                  ) ?? null)
+            : firstPasswordStrategy,
     );
 
     // All oauth2 strategies
@@ -611,6 +637,25 @@
  circular. Same component is reused in the navbar (dark variant)
  after login so the toggle is always available. -->
             <ThemeSwitcher class="absolute top-3 right-3" />
+
+            {#if localLoginIsCollapsed}
+                <button
+                    type="button"
+                    aria-expanded={showCollapsedLocalLogin}
+                    onclick={() => {
+                        showCollapsedLocalLogin = !showCollapsedLocalLogin;
+                        showRegister = false;
+                        error = "";
+                    }}
+                    class="absolute top-3 right-12 inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-warm-700 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+                >
+                    <Key size={11} />
+                    Local login
+                    {#if showCollapsedLocalLogin}<ChevronDown
+                            size={11}
+                        />{:else}<ChevronRight size={11} />{/if}
+                </button>
+            {/if}
 
             <!-- Logo -->
             <div class="flex items-center justify-center gap-3 mb-6">

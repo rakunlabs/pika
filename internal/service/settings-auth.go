@@ -42,7 +42,17 @@ type AuthSettings struct {
 	// pika user that an admin can later link manually.
 	LinkByVerifiedEmail *bool `json:"link_by_verified_email,omitempty"`
 
+	// AccountSecurityAdminOnly restricts passkey and TOTP self-service to
+	// superadmins. The default false preserves self-service for every user.
+	AccountSecurityAdminOnly bool `json:"account_security_admin_only,omitempty"`
+
 	Capabilities CapabilityMapping `json:"capabilities"`
+}
+
+// AccountSecurityAllowed reports whether the current caller may use the
+// passkey and TOTP self-service endpoints under this configuration.
+func (s *AuthSettings) AccountSecurityAllowed(superadmin bool) bool {
+	return s == nil || !s.AccountSecurityAdminOnly || superadmin
 }
 
 // LinkByVerifiedEmailEnabled returns the effective value (default true)
@@ -174,8 +184,9 @@ type AuthIssuer struct {
 }
 
 type LocalStrategySettings struct {
-	Enabled bool   `json:"enabled"`
-	Name    string `json:"name,omitempty"`
+	Enabled            bool   `json:"enabled"`
+	Name               string `json:"name,omitempty"`
+	LoginFormCollapsed bool   `json:"login_form_collapsed,omitempty"`
 }
 
 type OAuth2StrategySettings struct {

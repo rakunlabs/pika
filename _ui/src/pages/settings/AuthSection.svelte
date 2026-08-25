@@ -69,7 +69,12 @@
             refresh_ttl?: number;
             rotate_refresh?: boolean;
         };
-        local?: { enabled: boolean; name?: string };
+        local?: {
+            enabled: boolean;
+            name?: string;
+            login_form_collapsed?: boolean;
+        };
+        account_security_admin_only?: boolean;
         oauth2?: OAuth2Entry[];
         ldap?: {
             name?: string;
@@ -177,6 +182,8 @@
     // Local strategy
     let localEnabled = $state(false);
     let localName = $state("");
+    let localLoginFormCollapsed = $state(false);
+    let accountSecurityAdminOnly = $state(false);
 
     // OAuth2 entries
     let oauth2Entries = $state<OAuth2Entry[]>([]);
@@ -383,6 +390,8 @@
 
         localEnabled = auth.local?.enabled ?? false;
         localName = auth.local?.name ?? "";
+        localLoginFormCollapsed = auth.local?.login_form_collapsed ?? false;
+        accountSecurityAdminOnly = auth.account_security_admin_only ?? false;
 
         oauth2Entries = (auth.oauth2 ?? []).map((e) => ({
             ...e,
@@ -479,6 +488,10 @@
         // Local
         auth.local = { enabled: localEnabled };
         if (localName) auth.local.name = localName;
+        if (localLoginFormCollapsed)
+            auth.local.login_form_collapsed = true;
+        if (accountSecurityAdminOnly)
+            auth.account_security_admin_only = true;
 
         // OAuth2
         if (oauth2Entries.length > 0) {
@@ -601,6 +614,7 @@
             if (response.data?.restart_required) {
                 restartRequired = true;
             }
+            await appStore.loadInfo();
             addToast("Auth settings saved", "success");
         } catch (err: any) {
             const msg =
@@ -1061,6 +1075,25 @@
                     />
                     Enable local username/password authentication
                 </label>
+                <label
+                    class="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-200 cursor-pointer"
+                >
+                    <input
+                        type="checkbox"
+                        bind:checked={localLoginFormCollapsed}
+                        disabled={!localEnabled}
+                        class="mt-0.5 rounded border-slate-300 disabled:opacity-40"
+                    />
+                    <span>
+                        Collapse the local login form by default
+                        <span
+                            class="block mt-0.5 text-xs text-slate-500 dark:text-slate-400"
+                        >
+                            Users can reveal it from the compact Local login control.
+                            Authentication remains available to every local user.
+                        </span>
+                    </span>
+                </label>
                 <div>
                     <!-- svelte-ignore a11y_label_has_associated_control -->
                     <label
@@ -1073,6 +1106,28 @@
                         placeholder="Local"
                         class="w-full px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
                     />
+                </div>
+                <div
+                    class="pt-3 border-t border-slate-200 dark:border-warm-700"
+                >
+                    <label
+                        class="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-200 cursor-pointer"
+                    >
+                        <input
+                            type="checkbox"
+                            bind:checked={accountSecurityAdminOnly}
+                            class="mt-0.5 rounded border-slate-300"
+                        />
+                        <span>
+                            Restrict Account Security to superadmins
+                            <span
+                                class="block mt-0.5 text-xs text-slate-500 dark:text-slate-400"
+                            >
+                                Hides the section and blocks its passkey and TOTP
+                                APIs for other users.
+                            </span>
+                        </span>
+                    </label>
                 </div>
             </div>
         {/if}

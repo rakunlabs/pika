@@ -56,4 +56,3 @@ func UserIDFromContext(ctx context.Context) string {
 	}
 	return ""
 }
-

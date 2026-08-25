@@ -91,28 +91,29 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.PUT("/api/v1/me/preferences", m.Wrap(api.updateMyPreferences))
 	m.DELETE("/api/v1/me/preferences", m.Wrap(api.resetMyPreferences))
 
-	// Passkey self-service: enroll, list, rename, delete. All scoped to
-	// the calling user — the service layer verifies ownership on every
+	// Passkey self-service: enroll, list, rename, delete. Scoped to the
+	// calling user and optionally restricted to superadmins by auth settings.
+	// The service layer verifies ownership on every
 	// rename/delete so an attacker who guesses another user's credential
 	// id can't act on it. Begin/finish enrollment lives on the same /me
 	// namespace because it's a per-user action; the actual login
 	// ceremony goes through ada's strategy mux instead (see authx).
-	m.POST("/api/v1/me/passkeys/begin", m.Wrap(api.beginPasskeyEnroll))
-	m.POST("/api/v1/me/passkeys/finish", m.Wrap(api.finishPasskeyEnroll))
-	m.GET("/api/v1/me/passkeys", m.Wrap(api.listMyPasskeys))
-	m.PATCH("/api/v1/me/passkeys/*", m.Wrap(api.renameMyPasskey))
-	m.DELETE("/api/v1/me/passkeys/*", m.Wrap(api.deleteMyPasskey))
+	m.POST("/api/v1/me/passkeys/begin", m.Wrap(api.withAccountSecurityAccess(api.beginPasskeyEnroll)))
+	m.POST("/api/v1/me/passkeys/finish", m.Wrap(api.withAccountSecurityAccess(api.finishPasskeyEnroll)))
+	m.GET("/api/v1/me/passkeys", m.Wrap(api.withAccountSecurityAccess(api.listMyPasskeys)))
+	m.PATCH("/api/v1/me/passkeys/*", m.Wrap(api.withAccountSecurityAccess(api.renameMyPasskey)))
+	m.DELETE("/api/v1/me/passkeys/*", m.Wrap(api.withAccountSecurityAccess(api.deleteMyPasskey)))
 
 	// TOTP / 2FA self-service: status, enroll (begin/finish),
 	// disable, regenerate recovery codes. The login-time step-up
 	// verification is owned by ada's strategy mux via the MFA
 	// wrapper in authx — not these endpoints. These only manage the
-	// enrollment lifecycle.
-	m.GET("/api/v1/me/totp", m.Wrap(api.getMyTOTPStatus))
-	m.POST("/api/v1/me/totp/begin", m.Wrap(api.beginMyTOTPEnroll))
-	m.POST("/api/v1/me/totp/finish", m.Wrap(api.finishMyTOTPEnroll))
-	m.DELETE("/api/v1/me/totp", m.Wrap(api.disableMyTOTP))
-	m.POST("/api/v1/me/totp/recovery-codes", m.Wrap(api.regenerateMyTOTPRecoveryCodes))
+	// enrollment lifecycle. Auth settings may restrict them to superadmins.
+	m.GET("/api/v1/me/totp", m.Wrap(api.withAccountSecurityAccess(api.getMyTOTPStatus)))
+	m.POST("/api/v1/me/totp/begin", m.Wrap(api.withAccountSecurityAccess(api.beginMyTOTPEnroll)))
+	m.POST("/api/v1/me/totp/finish", m.Wrap(api.withAccountSecurityAccess(api.finishMyTOTPEnroll)))
+	m.DELETE("/api/v1/me/totp", m.Wrap(api.withAccountSecurityAccess(api.disableMyTOTP)))
+	m.POST("/api/v1/me/totp/recovery-codes", m.Wrap(api.withAccountSecurityAccess(api.regenerateMyTOTPRecoveryCodes)))
 
 	// Personal vault self-service. Every endpoint is scoped to the
 	// calling user — the server resolves user_id from the session,
@@ -351,22 +352,19 @@ func (a *api) infoHandler(c *ada.Context) error {
 	username := ""
 	var caps []string
 	isSuperadmin := false
+	userID := ""
+	var resolvedIdentitySubject string
 
 	if a.mgr != nil {
-		id, capKeys, resolvedUser, _, _ := a.mgr.ResolveRequest(c.Request)
+		id, capKeys, resolvedUser, resolvedUserID, _ := a.mgr.ResolveRequest(c.Request)
 		if id != nil {
+			resolvedIdentitySubject = id.Subject
+			userID = resolvedUserID
 			username = resolvedUser
 			if username == "" {
 				username = id.Subject
 			}
 			caps = capKeys
-			// Superadmin equivalence: the cap resolver returns the full
-			// known-key set for both local is_superadmin users and members
-			// of the Superadmins allowlist — both should set is_superadmin
-			// in the response so the UI can grant unconditional access.
-			if len(caps) == len(service.KnownCapabilityKeys()) {
-				isSuperadmin = true
-			}
 		}
 	}
 
@@ -379,9 +377,6 @@ func (a *api) infoHandler(c *ada.Context) error {
 	if len(caps) == 0 {
 		if c := service.CapabilitiesFromContext(ctx); len(c) > 0 {
 			caps = []string(c)
-			if len(caps) == len(service.KnownCapabilityKeys()) {
-				isSuperadmin = true
-			}
 		}
 	}
 
@@ -396,10 +391,31 @@ func (a *api) infoHandler(c *ada.Context) error {
 	// sync automatically when an operator edits the setting. nil is
 	// treated as "not configured": Subtitle stays empty and omitempty
 	// drops it from the JSON.
-	var subtitle string
-	if as := a.svc.GetAuthSettings(ctx); as != nil {
+	var subtitle, localLoginName string
+	localLoginFormCollapsed := false
+	authSettings := a.svc.GetAuthSettings(ctx)
+	if as := authSettings; as != nil {
 		subtitle = as.UI.Subtitle
+		if as.Local != nil && as.Local.Enabled {
+			localLoginName = as.Local.Name
+			if localLoginName == "" {
+				localLoginName = "local"
+			}
+			localLoginFormCollapsed = as.Local.LoginFormCollapsed
+		}
+		for _, subject := range as.Capabilities.Superadmins {
+			if subject == resolvedIdentitySubject {
+				isSuperadmin = true
+				break
+			}
+		}
 	}
+	if !isSuperadmin && userID != "" {
+		if user, err := a.svc.GetUserByID(ctx, userID); err == nil && user != nil {
+			isSuperadmin = user.IsSuperadmin
+		}
+	}
+	accountSecurityAvailable := authSettings.AccountSecurityAllowed(isSuperadmin)
 
 	// VaultEnabled mirrors a.svc.VaultEnabled(ctx) so the SPA can
 	// gate the /vault link in the navigation. This combines the
@@ -410,27 +426,33 @@ func (a *api) infoHandler(c *ada.Context) error {
 
 	resp := struct {
 		Info
-		Subtitle       string                  `json:"subtitle,omitempty"`
-		User           string                  `json:"user,omitempty"`
-		AuthEnabled    bool                    `json:"auth_enabled"`
-		BuiltinAuth    bool                    `json:"builtin_auth"`
-		IsSuperadmin   bool                    `json:"is_superadmin"`
-		Permissions    []string                `json:"permissions"`
-		Capabilities   []service.Capability    `json:"capabilities"`
-		SetupRequired  bool                    `json:"setup_required,omitempty"`
-		VaultEnabled   bool                    `json:"vault_enabled"`
-		VaultItemTypes []service.VaultItemType `json:"vault_item_types,omitempty"`
+		Subtitle                 string                  `json:"subtitle,omitempty"`
+		User                     string                  `json:"user,omitempty"`
+		AuthEnabled              bool                    `json:"auth_enabled"`
+		BuiltinAuth              bool                    `json:"builtin_auth"`
+		IsSuperadmin             bool                    `json:"is_superadmin"`
+		Permissions              []string                `json:"permissions"`
+		Capabilities             []service.Capability    `json:"capabilities"`
+		SetupRequired            bool                    `json:"setup_required,omitempty"`
+		VaultEnabled             bool                    `json:"vault_enabled"`
+		VaultItemTypes           []service.VaultItemType `json:"vault_item_types,omitempty"`
+		LocalLoginName           string                  `json:"local_login_name,omitempty"`
+		LocalLoginFormCollapsed  bool                    `json:"local_login_form_collapsed"`
+		AccountSecurityAvailable bool                    `json:"account_security_available"`
 	}{
-		Info:           a.info,
-		Subtitle:       subtitle,
-		User:           username,
-		AuthEnabled:    true,
-		BuiltinAuth:    true,
-		IsSuperadmin:   isSuperadmin,
-		Permissions:    caps,
-		Capabilities:   service.KnownCapabilities,
-		VaultEnabled:   vaultEnabled,
-		VaultItemTypes: service.KnownVaultItemTypes,
+		Info:                     a.info,
+		Subtitle:                 subtitle,
+		User:                     username,
+		AuthEnabled:              true,
+		BuiltinAuth:              true,
+		IsSuperadmin:             isSuperadmin,
+		Permissions:              caps,
+		Capabilities:             service.KnownCapabilities,
+		VaultEnabled:             vaultEnabled,
+		VaultItemTypes:           service.KnownVaultItemTypes,
+		LocalLoginName:           localLoginName,
+		LocalLoginFormCollapsed:  localLoginFormCollapsed,
+		AccountSecurityAvailable: accountSecurityAvailable,
 	}
 
 	// Fresh-install detection: no users exist yet.
