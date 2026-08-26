@@ -110,11 +110,22 @@ func (m *Manager) Require() func(next http.Handler) http.Handler {
 	return m.authMW.Require()
 }
 
-// CapMiddleware returns the current capability-resolver middleware.
+// CapMiddleware returns a stable middleware that loads the current resolver on
+// every request. Reload replaces m.capResolver, so a middleware mounted once at
+// server boot must not close over the resolver that existed at mount time.
 func (m *Manager) CapMiddleware() ada.MiddlewareFunc {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.capResolver.Middleware()
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			m.mu.Lock()
+			resolver := m.capResolver
+			m.mu.Unlock()
+			if resolver == nil {
+				writeJSONErr(w, http.StatusInternalServerError, "auth_not_initialized", "authentication not initialized")
+				return
+			}
+			resolver.serveHTTP(next, w, req)
+		})
+	}
 }
 
 // ResolveRequest attempts to identify the caller without requiring the

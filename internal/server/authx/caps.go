@@ -38,19 +38,23 @@ func NewCapResolver(svc *service.Service, m service.CapabilityMapping, rolePaths
 func (r *CapResolver) Middleware() ada.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			id := identity.FromContext(req.Context())
-			if id == nil {
-				writeJSONErr(w, http.StatusUnauthorized, "no_identity", "not authenticated")
-				return
-			}
-			caps, username, userID, patterns := r.resolve(req.Context(), id)
-
-			ctx := service.WithCapabilities(req.Context(), caps)
-			ctx = service.WithUserInfo(ctx, username, userID)
-			ctx = service.WithCapabilityPatterns(ctx, patterns)
-			next.ServeHTTP(w, req.WithContext(ctx))
+			r.serveHTTP(next, w, req)
 		})
 	}
+}
+
+func (r *CapResolver) serveHTTP(next http.Handler, w http.ResponseWriter, req *http.Request) {
+	id := identity.FromContext(req.Context())
+	if id == nil {
+		writeJSONErr(w, http.StatusUnauthorized, "no_identity", "not authenticated")
+		return
+	}
+	caps, username, userID, patterns := r.resolve(req.Context(), id)
+
+	ctx := service.WithCapabilities(req.Context(), caps)
+	ctx = service.WithUserInfo(ctx, username, userID)
+	ctx = service.WithCapabilityPatterns(ctx, patterns)
+	next.ServeHTTP(w, req.WithContext(ctx))
 }
 
 // resolve computes the capability set for an authenticated identity and

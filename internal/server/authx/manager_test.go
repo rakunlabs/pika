@@ -2,7 +2,11 @@ package authx
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/rakunlabs/ada/middleware/auth/identity"
 
 	"github.com/rakunlabs/pika/internal/service"
 )
@@ -61,6 +65,54 @@ func TestManager_ReloadSwapsStrategies(t *testing.T) {
 		if n == "local" {
 			t.Errorf("local strategy should be gone after reload, got %v", names)
 		}
+	}
+}
+
+func TestManager_CapMiddlewareUsesReloadedResolver(t *testing.T) {
+	m := newTestManager(t)
+	ctx := context.Background()
+	if err := m.Boot(ctx, &service.AuthSettings{
+		Local: &service.LocalStrategySettings{Enabled: true},
+	}); err != nil {
+		t.Fatalf("Boot: %v", err)
+	}
+	if _, err := m.deps.Svc.CreatePermission(ctx, &service.CreatePermissionRequest{
+		Key:  "editor",
+		Name: "Editor",
+		Keys: []string{service.CapFilesWrite},
+	}); err != nil {
+		t.Fatalf("create permission: %v", err)
+	}
+
+	// The server mounts this handler once at boot, before later settings reloads.
+	var got service.Capabilities
+	h := m.CapMiddleware()(http.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) {
+		got = service.CapabilitiesFromContext(req.Context())
+	}))
+
+	if err := m.Reload(ctx, &service.AuthSettings{
+		Local: &service.LocalStrategySettings{Enabled: true},
+		Capabilities: service.CapabilityMapping{
+			RoleMapping: map[string][]string{"pika-editor": {"editor"}},
+		},
+	}); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req = req.WithContext(identity.WithContext(req.Context(), &identity.Identity{
+		Subject:  "alice",
+		Provider: "oauth2",
+		Roles:    []string{"pika-editor"},
+	}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if !got.Has(service.CapFilesWrite) {
+		t.Fatalf("reloaded role mapping was not applied: %v", got)
 	}
 }
 

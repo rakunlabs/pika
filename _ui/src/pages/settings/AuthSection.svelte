@@ -200,7 +200,8 @@
     let ldapUserSyncSource = $state("");
     let ldapSyncSources = $state<{ id: string; name: string }[]>([]);
 
-    // Header
+    // Header settings remain in state so saving another authentication option
+    // preserves the existing strategy even though it is no longer editable here.
     let headerName = $state("");
     let headerUser = $state("");
     let headerEmail = $state("");
@@ -208,42 +209,17 @@
     let headerRoles = $state("");
     let headerGroups = $state("");
     let headerTrustedProxies = $state<string[]>([]);
-    let headerTrustedProxyInput = $state("");
 
-    // Passkey (WebAuthn). RP ID + Origins are required for the feature to
-    // actually run; the BuildPasskeyEngine helper on the backend treats
-    // empty RPID / origins as "feature off" silently, so the form flags
-    // them as required when Enable is checked.
+    // Passkey settings are also round-tripped to avoid clearing an existing
+    // deployment configuration when another authentication option is saved.
     let passkeyEnabled = $state(false);
     let passkeyName = $state("");
     let passkeyLabel = $state("");
     let passkeyRPID = $state("");
     let passkeyRPDisplayName = $state("");
     let passkeyRPOrigins = $state<string[]>([]);
-    let passkeyRPOriginInput = $state("");
     let passkeyUserVerification = $state("");
     let passkeyChallengeTTLSec = $state<number | "">("");
-
-    function addPasskeyOrigin() {
-        const v = passkeyRPOriginInput.trim();
-        if (!v) return;
-        if (passkeyRPOrigins.includes(v)) return;
-        passkeyRPOrigins = [...passkeyRPOrigins, v];
-        passkeyRPOriginInput = "";
-    }
-    function removePasskeyOrigin(i: number) {
-        passkeyRPOrigins = passkeyRPOrigins.filter((_, idx) => idx !== i);
-    }
-
-    // Validation surfaces: RPID must be a bare host (ada rejects /:?#),
-    // and at least one origin is required when Enable is checked.
-    const passkeyRPIDInvalid = $derived(
-        passkeyEnabled && passkeyRPID.length > 0 && /[\/:?#]/.test(passkeyRPID),
-    );
-    const passkeyOriginsMissing = $derived(
-        passkeyEnabled && passkeyRPOrigins.length === 0,
-    );
-    const passkeyRPIDMissing = $derived(passkeyEnabled && !passkeyRPID.trim());
 
     // Capabilities — Superadmins (Identity.Subject allowlist)
     let capSuperadmins = $state<string[]>([]);
@@ -421,7 +397,6 @@
         headerRoles = auth.header?.roles ?? "";
         headerGroups = auth.header?.groups ?? "";
         headerTrustedProxies = [...(auth.header?.trusted_proxies ?? [])];
-        headerTrustedProxyInput = "";
 
         // Passkey
         passkeyEnabled = auth.passkey?.enabled ?? false;
@@ -430,7 +405,6 @@
         passkeyRPID = auth.passkey?.rp_id ?? "";
         passkeyRPDisplayName = auth.passkey?.rp_display_name ?? "";
         passkeyRPOrigins = [...(auth.passkey?.rp_origins ?? [])];
-        passkeyRPOriginInput = "";
         passkeyUserVerification = auth.passkey?.user_verification ?? "";
         passkeyChallengeTTLSec = nsToSec(auth.passkey?.challenge_ttl);
 
@@ -682,20 +656,6 @@
         if (!entry) return;
         entry.scopes = (entry.scopes ?? []).filter((_, i) => i !== scopeIdx);
         oauth2Entries = [...oauth2Entries];
-    }
-
-    // Trusted proxy helpers
-    function addTrustedProxy() {
-        const v = headerTrustedProxyInput.trim();
-        if (!v) return;
-        headerTrustedProxies = [...headerTrustedProxies, v];
-        headerTrustedProxyInput = "";
-    }
-
-    function removeTrustedProxy(i: number) {
-        headerTrustedProxies = headerTrustedProxies.filter(
-            (_, idx) => idx !== i,
-        );
     }
 
     // Capabilities helpers
@@ -1635,425 +1595,6 @@
                         and applies source-owned group permissions. Existing
                         users are reused first.
                     </p>
-                </div>
-            </div>
-        {/if}
-    </div>
-
-    <!-- ── Header strategy ── -->
-    <div
-        class="mb-3 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm overflow-hidden"
-    >
-        <button
-            type="button"
-            class="w-full flex items-center justify-between px-5 py-3 text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:bg-warm-900 transition-colors cursor-pointer"
-            onclick={() => toggleSection("header")}
-        >
-            Header / Proxy Auth
-            {#if openSections.has("header")}<ChevronDown
-                    size={15}
-                />{:else}<ChevronRight size={15} />{/if}
-        </button>
-        {#if openSections.has("header")}
-            <div
-                class="px-5 pb-5 pt-1 space-y-3 border-t border-slate-100 dark:border-warm-700"
-            >
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <!-- svelte-ignore a11y_label_has_associated_control -->
-                        <label
-                            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >Strategy label</label
-                        >
-                        <input
-                            type="text"
-                            bind:value={headerName}
-                            placeholder="Header"
-                            class="w-full px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                        />
-                    </div>
-                    <div>
-                        <!-- svelte-ignore a11y_label_has_associated_control -->
-                        <label
-                            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >User Header</label
-                        >
-                        <input
-                            type="text"
-                            bind:value={headerUser}
-                            placeholder="X-Remote-User"
-                            class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                        />
-                    </div>
-                </div>
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <!-- svelte-ignore a11y_label_has_associated_control -->
-                        <label
-                            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >Email Header</label
-                        >
-                        <input
-                            type="text"
-                            bind:value={headerEmail}
-                            placeholder="X-Remote-Email"
-                            class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                        />
-                    </div>
-                    <div>
-                        <!-- svelte-ignore a11y_label_has_associated_control -->
-                        <label
-                            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >Display Name Header</label
-                        >
-                        <input
-                            type="text"
-                            bind:value={headerDisplayName}
-                            placeholder="X-Remote-Name"
-                            class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                        />
-                    </div>
-                </div>
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <!-- svelte-ignore a11y_label_has_associated_control -->
-                        <label
-                            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >Roles Header</label
-                        >
-                        <input
-                            type="text"
-                            bind:value={headerRoles}
-                            placeholder="X-Remote-Roles"
-                            class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                        />
-                    </div>
-                    <div>
-                        <!-- svelte-ignore a11y_label_has_associated_control -->
-                        <label
-                            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >Groups Header</label
-                        >
-                        <input
-                            type="text"
-                            bind:value={headerGroups}
-                            placeholder="X-Remote-Groups"
-                            class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                        />
-                    </div>
-                </div>
-                <!-- Trusted Proxies -->
-                <div>
-                    <!-- svelte-ignore a11y_label_has_associated_control -->
-                    <label
-                        class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                        >Trusted Proxies (CIDR / IP)</label
-                    >
-                    <div class="flex gap-2">
-                        <input
-                            type="text"
-                            bind:value={headerTrustedProxyInput}
-                            placeholder="10.0.0.0/8"
-                            onkeydown={(e) => {
-                                if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    addTrustedProxy();
-                                }
-                            }}
-                            class="flex-1 px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                        />
-                        <button
-                            type="button"
-                            class="px-3 py-2 text-sm text-white bg-accent-600 rounded-md hover:bg-accent-700 transition-colors cursor-pointer"
-                            onclick={addTrustedProxy}>Add</button
-                        >
-                    </div>
-                    {#if headerTrustedProxies.length > 0}
-                        <div class="mt-2 flex flex-wrap gap-1.5">
-                            {#each headerTrustedProxies as proxy, i}
-                                <span
-                                    class="inline-flex items-center gap-1 px-2 py-1 bg-slate-50 dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded text-xs font-mono text-slate-600 dark:text-slate-300"
-                                >
-                                    {proxy}
-                                    <button
-                                        type="button"
-                                        class="w-3.5 h-3.5 flex items-center justify-center bg-transparent border-none cursor-pointer text-slate-400 dark:text-slate-500 hover:text-red-500"
-                                        onclick={() => removeTrustedProxy(i)}
-                                        >&times;</button
-                                    >
-                                </span>
-                            {/each}
-                        </div>
-                    {/if}
-                </div>
-            </div>
-        {/if}
-    </div>
-
-    <!-- ── Passkey strategy ── -->
-    <div
-        class="mb-3 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm overflow-hidden"
-    >
-        <button
-            type="button"
-            class="w-full flex items-center justify-between px-5 py-3 text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:bg-warm-900 transition-colors cursor-pointer"
-            onclick={() => toggleSection("passkey")}
-        >
-            Passkey (WebAuthn)
-            {#if openSections.has("passkey")}<ChevronDown
-                    size={15}
-                />{:else}<ChevronRight size={15} />{/if}
-        </button>
-        {#if openSections.has("passkey")}
-            <div
-                class="px-5 pb-5 pt-1 space-y-3 border-t border-slate-100 dark:border-warm-700"
-            >
-                <p
-                    class="text-xs text-slate-500 dark:text-slate-400 mt-3 leading-relaxed"
-                >
-                    Lets users sign in with a platform biometric (Touch ID /
-                    Windows Hello) or a hardware security key instead of a
-                    password. Per-user enrollment happens in
-                    <span class="font-medium">Settings → Account Security</span
-                    >; this section only configures how the WebAuthn ceremony is
-                    bootstrapped. The feature is silently inactive when
-                    <em>Enable</em>
-                    is off, or when
-                    <em>RP ID</em> / <em>RP Origins</em> are blank.
-                </p>
-
-                <label
-                    class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200 cursor-pointer"
-                >
-                    <input
-                        type="checkbox"
-                        bind:checked={passkeyEnabled}
-                        class="rounded border-slate-300"
-                    />
-                    Enable passkey login
-                </label>
-
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <!-- svelte-ignore a11y_label_has_associated_control -->
-                        <label
-                            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >Name (URL key)</label
-                        >
-                        <input
-                            type="text"
-                            bind:value={passkeyName}
-                            placeholder="passkey"
-                            class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                        />
-                        <p
-                            class="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500"
-                        >
-                            Login endpoint becomes <code
-                                class="px-1 bg-slate-100 dark:bg-warm-800 rounded"
-                                >/login/pass/&lt;name&gt;</code
-                            >. Default <code>passkey</code>.
-                        </p>
-                    </div>
-                    <div>
-                        <!-- svelte-ignore a11y_label_has_associated_control -->
-                        <label
-                            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >Display label</label
-                        >
-                        <input
-                            type="text"
-                            bind:value={passkeyLabel}
-                            placeholder="Passkey"
-                            class="w-full px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                        />
-                        <p
-                            class="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500"
-                        >
-                            Button text on the login page. Default <code
-                                >Passkey</code
-                            >.
-                        </p>
-                    </div>
-                </div>
-
-                <div>
-                    <!-- svelte-ignore a11y_label_has_associated_control -->
-                    <label
-                        class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                    >
-                        RP ID {#if passkeyEnabled}<span
-                                class="text-red-500"
-                                title="Required when passkey is enabled">*</span
-                            >{/if}
-                    </label>
-                    <input
-                        type="text"
-                        bind:value={passkeyRPID}
-                        placeholder="example.com"
-                        class="w-full px-3 py-2 text-sm font-mono border rounded-md focus:outline-none focus:ring-2 focus:ring-accent-500/10 {passkeyRPIDInvalid ||
-                        passkeyRPIDMissing
-                            ? 'border-red-400 dark:border-red-500 focus:border-red-500'
-                            : 'border-slate-200 dark:border-warm-700 focus:border-accent-500'}"
-                    />
-                    <p
-                        class="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500"
-                    >
-                        The effective domain credentials are bound to — bare
-                        host only, no scheme or port. Use <code>localhost</code>
-                        for local dev. Empty silently disables the feature.
-                    </p>
-                    {#if passkeyRPIDInvalid}
-                        <p
-                            class="mt-1 text-[11px] text-red-600 dark:text-red-400"
-                        >
-                            RP ID must be a bare host (no <code>/</code>,
-                            <code>:</code>, <code>?</code>, or <code>#</code>).
-                            Use the domain only.
-                        </p>
-                    {/if}
-                    {#if passkeyRPIDMissing}
-                        <p
-                            class="mt-1 text-[11px] text-red-600 dark:text-red-400"
-                        >
-                            RP ID is required when passkey is enabled.
-                        </p>
-                    {/if}
-                </div>
-
-                <div>
-                    <!-- svelte-ignore a11y_label_has_associated_control -->
-                    <label
-                        class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                        >RP display name</label
-                    >
-                    <input
-                        type="text"
-                        bind:value={passkeyRPDisplayName}
-                        placeholder="Pika"
-                        class="w-full px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                    />
-                    <p
-                        class="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500"
-                    >
-                        Shown in the platform passkey UI (e.g. "Sign in to <em
-                            >…</em
-                        >?"). Falls back to the login title, then "Pika".
-                    </p>
-                </div>
-
-                <div>
-                    <!-- svelte-ignore a11y_label_has_associated_control -->
-                    <label
-                        class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                    >
-                        RP Origins {#if passkeyEnabled}<span
-                                class="text-red-500"
-                                title="At least one origin is required when passkey is enabled"
-                                >*</span
-                            >{/if}
-                    </label>
-                    <div class="flex gap-2">
-                        <input
-                            type="text"
-                            bind:value={passkeyRPOriginInput}
-                            placeholder="https://example.com"
-                            onkeydown={(e) => {
-                                if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    addPasskeyOrigin();
-                                }
-                            }}
-                            class="flex-1 px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                        />
-                        <button
-                            type="button"
-                            class="px-3 py-2 text-sm text-white bg-accent-600 rounded-md hover:bg-accent-700 transition-colors cursor-pointer"
-                            onclick={addPasskeyOrigin}>Add</button
-                        >
-                    </div>
-                    <p
-                        class="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500"
-                    >
-                        Full origins (scheme + host + optional port) the browser
-                        may report in <code>clientDataJSON</code>. Add every
-                        origin pika is reachable from.
-                    </p>
-                    {#if passkeyRPOrigins.length > 0}
-                        <div class="mt-2 flex flex-wrap gap-1.5">
-                            {#each passkeyRPOrigins as origin, i}
-                                <span
-                                    class="inline-flex items-center gap-1 px-2 py-1 bg-accent-50 border border-accent-200 rounded text-xs font-mono text-brand-700"
-                                >
-                                    {origin}
-                                    <button
-                                        type="button"
-                                        class="w-3.5 h-3.5 flex items-center justify-center bg-transparent border-none cursor-pointer text-brand-400 hover:text-red-500"
-                                        onclick={() => removePasskeyOrigin(i)}
-                                        >&times;</button
-                                    >
-                                </span>
-                            {/each}
-                        </div>
-                    {/if}
-                    {#if passkeyOriginsMissing}
-                        <p
-                            class="mt-1 text-[11px] text-red-600 dark:text-red-400"
-                        >
-                            At least one origin is required when passkey is
-                            enabled.
-                        </p>
-                    {/if}
-                </div>
-
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <!-- svelte-ignore a11y_label_has_associated_control -->
-                        <label
-                            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >User verification</label
-                        >
-                        <select
-                            bind:value={passkeyUserVerification}
-                            class="w-full px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                        >
-                            <option value="">preferred (default)</option>
-                            <option value="required">required</option>
-                            <option value="preferred">preferred</option>
-                            <option value="discouraged">discouraged</option>
-                        </select>
-                        <p
-                            class="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed"
-                        >
-                            <span class="font-medium">required:</span> biometric
-                            / PIN must succeed (passkey as sole factor).<br />
-                            <span class="font-medium">preferred:</span>
-                            biometric if the authenticator supports it, else
-                            user-presence only.<br />
-                            <span class="font-medium">discouraged:</span> presence
-                            only (tap a key).
-                        </p>
-                    </div>
-                    <div>
-                        <!-- svelte-ignore a11y_label_has_associated_control -->
-                        <label
-                            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >Challenge TTL (seconds)</label
-                        >
-                        <input
-                            type="number"
-                            min="1"
-                            bind:value={passkeyChallengeTTLSec}
-                            placeholder="300"
-                            class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                        />
-                        <p
-                            class="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500"
-                        >
-                            How long a registration / login ceremony stays
-                            valid. Default 300 (5 min).
-                        </p>
-                    </div>
                 </div>
             </div>
         {/if}
