@@ -83,4 +83,4 @@ A **hook** is a subscription to events. When a file or config changes, pika disp
 
 ## Settings
 
-Almost everything beyond ports and storage paths is stored in the database and edited from the UI under **Settings**. That includes auth strategies, external resources, hooks, and user-sync schedules. The settings document itself is fetched and patched via `GET`/`POST /api/v1/settings`.
+Almost everything beyond ports and storage paths is stored in the database and edited from the UI under **Settings**. That includes auth strategies, external resources, and hooks. The settings document itself is fetched and patched via `GET`/`POST /api/v1/settings`.

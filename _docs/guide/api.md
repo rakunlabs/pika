@@ -98,9 +98,6 @@ Browse and operate on configured external backends (Vault, Consul, etcd, AWS, Az
 | `POST`        | `/api/v1/public-endpoints/test-rules`         | `settings.manage` | Dry-run draft Endpoint request rules and return a trace.      |
 | `POST`        | `/api/v1/public-endpoints/{id}/test`          | `settings.manage` | Synthetic probe against a saved Endpoint.                     |
 | `GET`,`POST`  | `/api/v1/backup[/info]`                       | `settings.manage` | Export / inspect / import a full backup archive.              |
-| `GET`         | `/api/v1/user-sync/status`                    | `settings.manage` | Last-run report for every configured user-sync source.        |
-| `POST`        | `/api/v1/user-sync/run/*`                     | `settings.manage` | Trigger a one-shot user-sync run.                             |
-| `POST`        | `/api/v1/user-sync/test/*`                    | `settings.manage` | Dry-run a user-sync source — no writes performed.             |
 
 ## Per-user endpoints
 
@@ -122,7 +119,7 @@ Provided by the [ada](https://rakunlabs.github.io/ada/) auth manager — paths a
 | --------------------- | ---------------------------------------------------------------------------------------- |
 | `GET  /login/info`    | Public — discover enabled strategies and login UI metadata. Allowed while locked.        |
 | `GET  /login/me`      | Current session — username, capabilities, MFA state. Returns 401 when not signed in.     |
-| `POST /login/pass/{strategy}` | Password-style strategies (`local`, `ldap`, etc.). Rate-limited by `login_guard`.|
+| `POST /login/pass/{strategy}` | Password-style strategies such as `local`. Rate-limited by `login_guard`.|
 | `GET  /login/{strategy}` | OAuth2 / OIDC redirect start.                                                         |
 | `POST /login/register/{strategy}` | Self-registration (when enabled by the strategy).                              |
 | `POST /logout`        | Invalidates the current session.                                                         |

@@ -212,19 +212,19 @@ func TestSessionStore_SaveCapturesUserIDFromPair(t *testing.T) {
 
 // TestSessionStore_BindsExistingExternalUser verifies the happy path
 // for an OAuth2 session whose (provider, subject) is already linked
-// to a pika user — typically created up-front by the user-sync
+// to a pika user — typically created up-front by an administrator or
 // engine. The session row must be bound to that existing user so
 // admin operations like kick work uniformly across strategies.
 //
 // Pre-condition: the user + identity link have been provisioned by
-// user-sync (simulated here via FindOrCreateExternalUser, which is
+// provider auto-provisioning (simulated here via FindOrCreateExternalUser, which is
 // the legitimate caller). The session-save path itself MUST NOT
 // create users — that invariant is covered by
 // TestSessionStore_DoesNotProvisionUnknownExternal.
 func TestSessionStore_BindsExistingExternalUser(t *testing.T) {
 	svc := newTestService(t)
 
-	// Pre-provision the external user as user-sync would.
+	// Pre-provision the external user as an enabled OAuth2 provider would.
 	preInfo, err := svc.FindOrCreateExternalUser(context.Background(), service.ExternalIdentityInput{
 		Provider:      "google",
 		Subject:       "google-sub-777",

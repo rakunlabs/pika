@@ -72,10 +72,10 @@ type TOTPFinishResult struct {
 // recovery hashes, just metadata the user can see in the security
 // settings page.
 type TOTPStatus struct {
-	Enabled            bool      `json:"enabled"`
-	CreatedAt          time.Time `json:"created_at,omitempty"`
-	LastUsedAt         time.Time `json:"last_used_at,omitempty"`
-	RecoveryCodesLeft  int       `json:"recovery_codes_left"`
+	Enabled           bool      `json:"enabled"`
+	CreatedAt         time.Time `json:"created_at,omitempty"`
+	LastUsedAt        time.Time `json:"last_used_at,omitempty"`
+	RecoveryCodesLeft int       `json:"recovery_codes_left"`
 	// PendingEnrollment is true when a row exists but Enabled=false —
 	// the UI uses this to distinguish "you started, finish your QR
 	// scan" from "you haven't started yet".
@@ -127,7 +127,7 @@ type TOTPService struct {
 // back verbatim at phase 2 so the user's roles and provider don't
 // shift between phases.
 type totpPending struct {
-	identityJSON []byte    // marshaled to bytes so map mutations can't reach inside
+	identityJSON []byte // marshaled to bytes so map mutations can't reach inside
 	expires      time.Time
 }
 
@@ -294,7 +294,7 @@ func (ts *TOTPService) FinishEnroll(ctx context.Context, userID, code string) (*
 // has hijacked the cookie (but not the password) from clearing the
 // second factor.
 //
-// LDAP-provisioned users have no local password — Disable rejects
+// External-only users have no local password — Disable rejects
 // them with ErrForbidden so the only way out is the admin force-reset
 // path (not in this PR).
 func (ts *TOTPService) Disable(ctx context.Context, userID, password string) error {
@@ -303,7 +303,7 @@ func (ts *TOTPService) Disable(ctx context.Context, userID, password string) err
 		return err
 	}
 	if user.PasswordHash == "" {
-		// No local password set (e.g. LDAP-only user). Disabling
+		// No local password set (e.g. an external-only user). Disabling
 		// requires admin help.
 		return fmt.Errorf("totp: account has no password to confirm: %w", ErrForbidden)
 	}

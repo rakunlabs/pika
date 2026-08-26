@@ -11,7 +11,7 @@ import (
 )
 
 // ExternalIdentityInput carries what a strategy learned about a user from
-// an external IdP (OAuth2, LDAP, Header). The service layer maps this onto
+// an external IdP (OAuth2 or Header). The service layer maps this onto
 // a pika users row + user_identities link.
 type ExternalIdentityInput struct {
 	Provider      string // stable provider name, e.g. "google"
@@ -42,8 +42,8 @@ type ExternalIdentityInput struct {
 //
 // Returns ErrNotFound when neither path matches. Callers in the auth
 // path use this to bind sessions only to pre-existing users; the
-// user-sync engine is the only legitimate caller that goes further and
-// invokes FindOrCreateExternalUser to provision missing users.
+// OAuth2 providers may opt in to provisioning through
+// FindOrCreateExternalUser.
 func (s *Service) FindExternalUser(ctx context.Context, in ExternalIdentityInput) (*UserInfo, error) {
 	if in.Provider == "" || in.Subject == "" {
 		return nil, fmt.Errorf("provider and subject are required: %w", ErrBadRequest)
@@ -118,12 +118,9 @@ func (s *Service) FindExternalUser(ctx context.Context, in ExternalIdentityInput
 // (preferred_username → email local part → "<provider>:<subject>")
 // with collision-suffixing.
 //
-// IMPORTANT: this method is the only auth-path entry point that can
-// create users, and is reserved for the user-sync engine
-// (`internal/usersync`). The live auth flow (session save, login
-// callbacks) MUST use FindExternalUser so that unrecognized identities
-// fail closed instead of silently provisioning. See sessionstore.go
-// resolveSessionUser for the call site that enforces this.
+// IMPORTANT: this method is the only auth-path entry point that can create
+// users. Only providers with AutoCreateUser enabled may call it. Other live
+// auth flows MUST use FindExternalUser so unrecognized identities fail closed.
 func (s *Service) FindOrCreateExternalUser(ctx context.Context, in ExternalIdentityInput) (*UserInfo, error) {
 	if info, err := s.FindExternalUser(ctx, in); err == nil {
 		return info, nil
@@ -190,41 +187,12 @@ func (s *Service) FindOrCreateExternalUser(ctx context.Context, in ExternalIdent
 	return &info, nil
 }
 
-// RefreshExternalIdentity updates the stored snapshot for an already-linked
-// external identity. Sync engines use this when they resolve a user through the
-// identity index directly (for example to re-enable a disabled LDAP user)
-// instead of going through FindExternalUser.
-func (s *Service) RefreshExternalIdentity(ctx context.Context, userID string, in ExternalIdentityInput) error {
-	if userID == "" || in.Provider == "" || in.Subject == "" {
-		return fmt.Errorf("user_id, provider and subject are required: %w", ErrBadRequest)
-	}
-	_, err := s.store.UserIdentities().Upsert(ctx, &UserIdentity{
-		UserID:      userID,
-		Provider:    in.Provider,
-		Subject:     in.Subject,
-		Email:       normalizeEmail(in.Email),
-		DisplayName: in.DisplayName,
-	})
-	if err != nil {
-		return fmt.Errorf("refresh external identity: %w", err)
-	}
-	return nil
-}
-
 // GetUserIdentities returns every identity linked to a user.
 func (s *Service) GetUserIdentities(ctx context.Context, userID string) ([]UserIdentity, error) {
 	return s.store.UserIdentities().ListByUserID(ctx, userID)
 }
 
-// ListIdentitiesByProvider returns every identity issued by a given provider
-// (typically a sync source ID). Used by the user-sync reconciliation pass.
-func (s *Service) ListIdentitiesByProvider(ctx context.Context, provider string) ([]UserIdentity, error) {
-	return s.store.UserIdentities().ListByProvider(ctx, provider)
-}
-
-// GetUserByID is the public-shaped (UserInfo) accessor for the typed user
-// row. Used by the sync engine and any other callers that need the
-// projection without having to call store.Users() directly.
+// GetUserByID is the public-shaped (UserInfo) accessor for the typed user row.
 func (s *Service) GetUserByID(ctx context.Context, id string) (*UserInfo, error) {
 	user, err := s.store.Users().Get(ctx, id)
 	if err != nil {
@@ -232,13 +200,6 @@ func (s *Service) GetUserByID(ctx context.Context, id string) (*UserInfo, error)
 	}
 	info := user.toInfo()
 	return &info, nil
-}
-
-// SetUserPermissionsBySource replaces only the user_permissions rows
-// tagged with the given source. Used by the sync engine so a sync run
-// owns its own grants without trampling admin-curated 'local' rows.
-func (s *Service) SetUserPermissionsBySource(ctx context.Context, userID, source string, permissionIDs []string) error {
-	return s.store.Permissions().SetUserPermissionsBySource(ctx, userID, source, permissionIDs)
 }
 
 // GetUserByIdentity resolves a (provider, subject) pair to the pika user
@@ -270,7 +231,7 @@ func (s *Service) UnlinkUserIdentity(ctx context.Context, identityID string) err
 }
 
 // ListUserIdentities returns every external identity linked to a user
-// (OAuth2/LDAP/Header). Empty for a pure local-password user. Used by the
+// (OAuth2/Header). Empty for a pure local-password user. Used by the
 // admin UI to show "linked accounts" and distinguish external users.
 func (s *Service) ListUserIdentities(ctx context.Context, userID string) ([]UserIdentity, error) {
 	return s.store.UserIdentities().ListByUserID(ctx, userID)

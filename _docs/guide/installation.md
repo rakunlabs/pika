@@ -90,7 +90,7 @@ make build       # builds the UI and the Go binary into ./dist/pika
 On first launch, open `https://localhost:8080`. The default certificate is self-signed, so your browser will ask you to trust it. The UI presents a setup screen to create the initial admin account. After that, sign in and head to **Settings** to:
 
 - Mint your first [API token](/guide/tokens-and-scopes).
-- (Optional) Enable [external auth](./authentication) — OAuth2/OIDC, LDAP, or forward-auth headers.
+- (Optional) Enable [external auth](./authentication) — OAuth2/OIDC or forward-auth headers.
 - (Optional) Configure [external resources](./inheritance/) for inheritance.
 - (Optional) Add an [Endpoint](./endpoints) — direct config data, External resource, Consul KV, or custom Go-template — for clients that don't speak pika's Bearer-auth `/data/*` API.
 

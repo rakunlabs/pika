@@ -119,19 +119,6 @@ func buildStrategies(d Deps, s *service.AuthSettings, onRegister func()) ([]stra
 	}
 	out = append(out, oa2...)
 
-	l, err := BuildLDAP(s.LDAP)
-	if err != nil {
-		return nil, err
-	}
-	if l != nil {
-		// LDAP wrapped with MFA. LDAP doesn't support signup (no
-		// Registerer interface satisfaction), so we use the plain
-		// MFAStrategy — that way ada's handleRegister returns 404
-		// for /login/register/<ldap-name>, matching the pre-wrap
-		// behavior.
-		out = append(out, NewMFAStrategy(l, d.Svc, totpCoord))
-	}
-
 	// Passkey: wire the engine + service if the settings have it on.
 	// Disabled (nil engine) means we skip registration AND tear down
 	// any previously-bound PasskeyService so the /api/v1/me/passkeys

@@ -6,7 +6,6 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/dgraph-io/badger/v4 v4.9.1
-	github.com/go-ldap/ldap/v3 v3.4.13
 	github.com/goccy/go-yaml v1.19.2
 	github.com/nats-io/nats.go v1.50.0
 	github.com/rakunlabs/ada v0.4.5
@@ -46,7 +45,6 @@ require (
 	cloud.google.com/go/parametermanager v0.4.0 // indirect
 	cloud.google.com/go/secretmanager v1.16.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
-	github.com/Azure/go-ntlmssp v0.1.0 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
@@ -60,7 +58,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
-	github.com/go-asn1-ber/asn1-ber v1.5.8-0.20250403174932-29230038a667 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

@@ -76,14 +76,6 @@
         };
         account_security_admin_only?: boolean;
         oauth2?: OAuth2Entry[];
-        ldap?: {
-            name?: string;
-            addr?: string;
-            bind_dn?: string;
-            bind_password?: string;
-            auto_create_user?: boolean;
-            user_sync_source?: string;
-        };
         header?: {
             name?: string;
             user?: string;
@@ -190,16 +182,6 @@
     let oauth2ScopeInputs = $state<string[]>([]);
     let oauth2RolesClaimInputs = $state<string[]>([]);
 
-    // LDAP
-    let ldapName = $state("");
-    let ldapAddr = $state("");
-    let ldapBindDN = $state("");
-    let ldapBindPassword = $state("");
-    let ldapBindPasswordChanged = $state(false);
-    let ldapAutoCreateUser = $state(false);
-    let ldapUserSyncSource = $state("");
-    let ldapSyncSources = $state<{ id: string; name: string }[]>([]);
-
     // Header settings remain in state so saving another authentication option
     // preserves the existing strategy even though it is no longer editable here.
     let headerName = $state("");
@@ -225,8 +207,8 @@
     let capSuperadmins = $state<string[]>([]);
     let capSuperadminInput = $state("");
 
-    // Capabilities — role/scope mappings (for external identities: OAuth2,
-    // Header, LDAP). Rows are the edit-time UI representation; each row is a
+    // Capabilities — role/scope mappings (for external identities: OAuth2 and
+    // Header). Rows are the edit-time UI representation; each row is a
     // key (role or scope name as it appears in the identity) paired with a set
     // of pika Permission bundle keys granted when that role/scope is present.
     type MappingRow = { key: string; permissions: string[] };
@@ -382,14 +364,6 @@
         oauth2ScopeInputs = oauth2Entries.map(() => "");
         oauth2RolesClaimInputs = oauth2Entries.map(() => "");
 
-        ldapName = auth.ldap?.name ?? "";
-        ldapAddr = auth.ldap?.addr ?? "";
-        ldapBindDN = auth.ldap?.bind_dn ?? "";
-        ldapBindPassword = "";
-        ldapBindPasswordChanged = false;
-        ldapAutoCreateUser = auth.ldap?.auto_create_user ?? false;
-        ldapUserSyncSource = auth.ldap?.user_sync_source ?? "";
-
         headerName = auth.header?.name ?? "";
         headerUser = auth.header?.user ?? "";
         headerEmail = auth.header?.email ?? "";
@@ -502,17 +476,6 @@
                 return entry;
             });
         }
-
-        // LDAP
-        const ldapBlock: AuthSettings["ldap"] = {};
-        if (ldapName) ldapBlock.name = ldapName;
-        if (ldapAddr) ldapBlock.addr = ldapAddr;
-        if (ldapBindDN) ldapBlock.bind_dn = ldapBindDN;
-        if (ldapBindPasswordChanged && ldapBindPassword)
-            ldapBlock.bind_password = ldapBindPassword;
-        if (ldapAutoCreateUser) ldapBlock.auto_create_user = true;
-        if (ldapUserSyncSource) ldapBlock.user_sync_source = ldapUserSyncSource;
-        if (Object.keys(ldapBlock).length > 0) auth.ldap = ldapBlock;
 
         // Header
         const headerBlock: AuthSettings["header"] = {};
@@ -678,9 +641,6 @@
         void appStore.loadPermissions();
         try {
             const response = await axios.get("/api/v1/settings");
-            ldapSyncSources = (response.data?.user_sync?.sources ?? [])
-                .filter((s: any) => s?.type === "ldap" && s?.id)
-                .map((s: any) => ({ id: s.id, name: s.name || s.id }));
             loadFromSettings(response.data?.auth || {});
         } catch (err: any) {
             loadError =
@@ -1477,129 +1437,6 @@
         {/if}
     </div>
 
-    <!-- ── LDAP ── -->
-    <div
-        class="mb-3 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm overflow-hidden"
-    >
-        <button
-            type="button"
-            class="w-full flex items-center justify-between px-5 py-3 text-sm font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:bg-warm-900 transition-colors cursor-pointer"
-            onclick={() => toggleSection("ldap")}
-        >
-            LDAP
-            {#if openSections.has("ldap")}<ChevronDown
-                    size={15}
-                />{:else}<ChevronRight size={15} />{/if}
-        </button>
-        {#if openSections.has("ldap")}
-            <div
-                class="px-5 pb-5 pt-1 space-y-3 border-t border-slate-100 dark:border-warm-700"
-            >
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <!-- svelte-ignore a11y_label_has_associated_control -->
-                        <label
-                            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >Strategy label</label
-                        >
-                        <input
-                            type="text"
-                            bind:value={ldapName}
-                            placeholder="LDAP"
-                            class="w-full px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                        />
-                    </div>
-                    <div>
-                        <!-- svelte-ignore a11y_label_has_associated_control -->
-                        <label
-                            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >Server Address</label
-                        >
-                        <input
-                            type="text"
-                            bind:value={ldapAddr}
-                            placeholder="ldap://ldap.example.com:389"
-                            class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                        />
-                    </div>
-                </div>
-                <div>
-                    <!-- svelte-ignore a11y_label_has_associated_control -->
-                    <label
-                        class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                        >Bind DN</label
-                    >
-                    <input
-                        type="text"
-                        bind:value={ldapBindDN}
-                        placeholder="cn=admin,dc=example,dc=com"
-                        class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                    />
-                </div>
-                <div>
-                    <!-- svelte-ignore a11y_label_has_associated_control -->
-                    <label
-                        class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                        >Bind Password</label
-                    >
-                    <input
-                        type="password"
-                        bind:value={ldapBindPassword}
-                        oninput={() => (ldapBindPasswordChanged = true)}
-                        placeholder="(secret set — leave blank to keep)"
-                        class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
-                    />
-                    <p
-                        class="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500"
-                    >
-                        Leave blank to keep existing password.
-                    </p>
-                </div>
-                <div
-                    class="border border-slate-200 dark:border-warm-700 rounded-md p-3 bg-slate-50 dark:bg-warm-900 space-y-2"
-                >
-                    <label
-                        class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
-                    >
-                        <input
-                            type="checkbox"
-                            bind:checked={ldapAutoCreateUser}
-                            class="rounded border-slate-300"
-                        />
-                        Auto-create users from LDAP sync source
-                    </label>
-                    <div>
-                        <!-- svelte-ignore a11y_label_has_associated_control -->
-                        <label
-                            class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                            >User sync source</label
-                        >
-                        <select
-                            bind:value={ldapUserSyncSource}
-                            class="w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-accent-500"
-                        >
-                            <option value="">Use strategy name as source</option>
-                            {#each ldapSyncSources as src (src.id)}
-                                <option value={src.id}>{src.name} ({src.id})</option>
-                            {/each}
-                            {#if ldapUserSyncSource && !ldapSyncSources.some((s) => s.id === ldapUserSyncSource)}
-                                <option value={ldapUserSyncSource}>
-                                    {ldapUserSyncSource} (not found)
-                                </option>
-                            {/if}
-                        </select>
-                    </div>
-                    <p class="text-[11px] text-slate-400 dark:text-slate-500">
-                        When enabled, first LDAP login runs a single-user sync
-                        from this source, creates the external user if needed,
-                        and applies source-owned group permissions. Existing
-                        users are reused first.
-                    </p>
-                </div>
-            </div>
-        {/if}
-    </div>
-
     <!-- ── Rate Limiting ── -->
     <div
         class="mb-3 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm overflow-hidden"
@@ -1924,7 +1761,7 @@
                             class="mt-3 text-[11px] text-slate-400 dark:text-slate-500 italic"
                         >
                             No role mappings configured. External identities
-                            (OAuth2, LDAP, Header) will get zero permissions
+                            (OAuth2 and Header) will get zero permissions
                             unless listed as superadmins.
                         </p>
                     {:else}

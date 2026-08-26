@@ -153,8 +153,11 @@ func (s *Storage) registerBuckets() error {
 	//        modifier endpoints. New field; existing rows decode
 	//        with PublicEndpoints == nil so deployments that never
 	//        configured one keep working without migration.
+	//   v6 — removed the retired external-directory authentication and
+	//        reconciliation settings. Existing rows are rewritten with
+	//        the current shape, dropping those configuration fields.
 	if s.settings, err = bw.RegisterBucket[settingsRow](s.db, bucketSettings,
-		bw.WithVersion[settingsRow](5),
+		bw.WithVersion[settingsRow](6),
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketSettings, err)
 	}

@@ -142,8 +142,7 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	// operator-defined compatibility / custom-modifier listener.
 	// Constructed before the API routes register so postSettings'
 	// reload hook can reach into it; the initial Reload happens
-	// once the API is in place, mirroring the user-sync scheduler
-	// boot sequence.
+	// once the API is in place.
 	tlsMgr := newTLSManager(cfg)
 	if cfg.Server.TLS.Enabled {
 		if err := tlsMgr.EnsureSelfSigned(); err != nil {

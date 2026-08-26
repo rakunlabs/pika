@@ -120,18 +120,6 @@ func (s *userIdentityStorage) ListByUserID(ctx context.Context, userID string) (
 	return out, nil
 }
 
-func (s *userIdentityStorage) ListByProvider(ctx context.Context, provider string) ([]service.UserIdentity, error) {
-	rows, err := s.findByField(ctx, "provider", provider)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]service.UserIdentity, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, *r.toService())
-	}
-	return out, nil
-}
-
 func (s *userIdentityStorage) findByField(ctx context.Context, field, value string) ([]*userIdentityRow, error) {
 	q, err := query.Parse(field + "=" + value + "&_sort=created_at")
 	if err != nil {

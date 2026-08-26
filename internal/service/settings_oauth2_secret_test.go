@@ -129,31 +129,3 @@ func TestOAuth2SecretMatchesByName(t *testing.T) {
 		t.Errorf("github secret cross-wired or lost: %q", got)
 	}
 }
-
-// TestLDAPBindPasswordBlankKeeps verifies the same keep-on-blank contract for
-// the LDAP bind password.
-func TestLDAPBindPasswordBlankKeeps(t *testing.T) {
-	svc := newTestService(t)
-
-	saveAuth(t, svc, &service.AuthSettings{
-		LDAP: &service.LDAPStrategySettings{
-			Name: "corp", Addr: "ldap://x", BindPassword: "p@ss",
-		},
-	})
-	saveAuth(t, svc, &service.AuthSettings{
-		LDAP: &service.LDAPStrategySettings{
-			Name: "corp", Addr: "ldap://x", BindPassword: "",
-		},
-	})
-
-	got, err := svc.Settings(t.Context())
-	if err != nil {
-		t.Fatalf("Settings: %v", err)
-	}
-	if got.Auth == nil || got.Auth.LDAP == nil {
-		t.Fatal("LDAP block lost")
-	}
-	if got.Auth.LDAP.BindPassword != "p@ss" {
-		t.Errorf("blank save should keep LDAP bind password, got %q", got.Auth.LDAP.BindPassword)
-	}
-}

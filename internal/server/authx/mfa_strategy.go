@@ -90,7 +90,7 @@ func (m *MFAStrategy) Logout(ctx context.Context, id *identity.Identity) error {
 // satisfies strategy.Registerer — see the MFAStrategyWithRegister
 // wrapper below. The split exists because Go interface satisfaction
 // is structural, and a wrapper that always implements Register would
-// claim signup support for strategies (LDAP) that don't have it.
+// claim signup support for strategies that don't have it.
 func (m *MFAStrategy) registerPassthrough(w http.ResponseWriter, r *http.Request) (*identity.Identity, strategy.Outcome, error) {
 	reg, ok := m.inner.(strategy.Registerer)
 	if !ok {
@@ -262,15 +262,15 @@ func (m *MFAStrategy) handleFinish(w http.ResponseWriter, r *http.Request, body 
 	return &id, strategy.OutcomeContinue, nil
 }
 
-// resolveUserID converts an identity (which carries the username as
-// Subject for local/LDAP) into the stable user_id. Returns an error
+// resolveUserID converts a local identity (which carries the username as
+// Subject) into the stable user_id. Returns an error
 // when the user has been deleted between phases.
 //
 // For external strategies that haven't been linked yet to a pika
 // user row (e.g. first-time OAuth2 callback), the user_id lookup
-// would fail — but those strategies don't get wrapped (the wiring
-// at build.go only wraps Local and LDAP, which always resolve to a
-// pika user before returning OutcomeContinue).
+// would fail, but those strategies don't get wrapped. The wiring in build.go
+// only wraps Local, which resolves to a pika user before returning
+// OutcomeContinue.
 func (m *MFAStrategy) resolveUserID(ctx context.Context, id *identity.Identity) (string, error) {
 	if id == nil || id.Subject == "" {
 		return "", errors.New("empty identity subject")
@@ -307,11 +307,11 @@ func isMFAFinishBody(body []byte) bool {
 
 // MFAStrategyWithRegister is the strategy.Registerer-implementing
 // variant of MFAStrategy. We expose two types so a wrapper around a
-// strategy that doesn't support signup (LDAP) doesn't accidentally
+// strategy that doesn't support signup doesn't accidentally
 // claim it does — interface satisfaction is structural in Go, and
 // ada checks for it with a type assertion at register-handler time.
 //
-// Use NewMFAStrategy when the inner is signup-less (LDAP, OAuth2);
+// Use NewMFAStrategy when the inner is signup-less;
 // use NewMFAStrategyWithRegister when the inner has WithRegistrar
 // (local). The latter forwards Register straight to the inner so
 // the first-user bootstrap continues to work.

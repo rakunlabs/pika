@@ -86,8 +86,7 @@ When the server is unlocked, pika encrypts (see `internal/secret/settings_seal.g
   secrets, Kubernetes inline kubeconfig, HTTP header-auth values.
 - **Hook target secrets** — Kafka SASL/SCRAM passwords, Redis
   passwords, NATS tokens & passwords.
-- **Auth-strategy secrets** — OAuth2 client secrets and LDAP bind
-  passwords.
+- **Auth-strategy secrets** — OAuth2 client secrets.
 - **Endpoint static tokens** — the bearer tokens that
   `static_token`-auth Endpoints accept.
 - **Verifier record** — the randomized known-plaintext used to

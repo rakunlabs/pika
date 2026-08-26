@@ -266,7 +266,7 @@ func (s *Service) ResolveLocalCapabilityKeys(
 
 // ResolveUserCapabilityKeysByID returns (keys, isSuperadmin, source, err) for
 // a user identified by their stable pika user ID. Used by CapResolver for
-// external identities (OAuth2, LDAP, Header) after FindOrCreateExternalUser
+// external identities (OAuth2 or Header) after FindOrCreateExternalUser
 // has resolved the session to a concrete user row. An empty userID yields
 // PermissionSourceNone with no error (absent — not a failure).
 func (s *Service) ResolveUserCapabilityKeysByID(

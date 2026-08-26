@@ -120,12 +120,6 @@ func buildFixture() *service.Settings {
 					ClientSecret: "gh-client-secret",
 				},
 			},
-			LDAP: &service.LDAPStrategySettings{
-				Name:         "corp-ldap",
-				Addr:         "ldap.example.com:389",
-				BindDN:       "cn=admin,dc=example,dc=com",
-				BindPassword: "ldap-bind-secret",
-			},
 		},
 	}
 }
@@ -193,8 +187,8 @@ func TestPublicEndpointTokenRoundTrip(t *testing.T) {
 	}
 }
 
-// TestAuthSecretRoundTrip — OAuth2 ClientSecret and LDAP BindPassword
-// must survive an extract→inject pass identically.
+// TestAuthSecretRoundTrip verifies OAuth2 client secrets survive an
+// extract→inject pass identically.
 func TestAuthSecretRoundTrip(t *testing.T) {
 	working := buildFixture()
 	original := buildFixture()
@@ -203,9 +197,6 @@ func TestAuthSecretRoundTrip(t *testing.T) {
 
 	if working.Auth.OAuth2[0].ClientSecret != "" || working.Auth.OAuth2[1].ClientSecret != "" {
 		t.Errorf("OAuth2 client secret not cleared after extract")
-	}
-	if working.Auth.LDAP.BindPassword != "" {
-		t.Errorf("LDAP bind password not cleared after extract")
 	}
 	if len(payload.OAuth2ClientSecrets) != 2 {
 		t.Fatalf("payload OAuth2ClientSecrets len=%d, want 2", len(payload.OAuth2ClientSecrets))
@@ -218,8 +209,5 @@ func TestAuthSecretRoundTrip(t *testing.T) {
 	}
 	if working.Auth.OAuth2[1].ClientSecret != original.Auth.OAuth2[1].ClientSecret {
 		t.Errorf("OAuth2 secret #1 lost in round-trip")
-	}
-	if working.Auth.LDAP.BindPassword != original.Auth.LDAP.BindPassword {
-		t.Errorf("LDAP bind password lost in round-trip")
 	}
 }

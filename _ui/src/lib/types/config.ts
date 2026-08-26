@@ -441,7 +441,6 @@ export interface Settings {
   hooks?: Hook[];
   external_permissions?: ExternalPermissionsSettings;
   forward_auth?: ForwardAuthSettings;
-  user_sync?: UserSyncSettings;
   vault?: VaultSettings;
   server_tls?: ServerTLSSettings;
   public_endpoints?: PublicEndpoint[];
@@ -738,83 +737,6 @@ export interface ClusterNode {
 // it accessible again without any migration.
 export interface VaultSettings {
   disabled?: boolean;
-}
-
-// User-sync settings: top-level array of sources (LDAP, future SCIM, etc.).
-// Each source owns its provisioned users via user_identities.provider = source.id
-// and its synced permissions via user_permissions.source = source.id.
-export interface UserSyncSettings {
-  sources?: SyncSource[];
-}
-
-export interface SyncSource {
-  id: string;            // stable, becomes user_identities.provider
-  name: string;          // human label
-  type: 'ldap';          // future: 'scim' etc.
-  enabled: boolean;
-  ldap?: LDAPSyncSpec;
-  schedule: SyncSchedule;
-  on_missing?: 'disable' | 'ignore'; // default 'disable'
-}
-
-export interface SyncSchedule {
-  mode: 'manual' | 'interval';
-  interval_minutes?: number;
-}
-
-export interface LDAPSyncSpec {
-  address: string;
-  tls?: boolean;
-  insecure_skip?: boolean;
-  bind_dn: string;
-  bind_password?: string;
-  user_base_dn: string;
-  user_filter?: string;
-  page_size?: number;
-  group_searches?: LDAPGroupSearchSpec[];
-  attributes: LDAPAttributeMap;
-  // LDAP group value (e.g. full DN as it appears in memberOf) → list of pika permission IDs.
-  group_permissions?: Record<string, string[]>;
-}
-
-export interface LDAPGroupSearchSpec {
-  base_dn: string;
-  filter?: string;
-  attributes?: string[];
-  name_attribute?: string;
-  member_attribute?: string;
-  member_uid_attribute?: string;
-}
-
-export interface LDAPAttributeMap {
-  username: string;
-  subject?: string;
-  email?: string;
-  display_name?: string;
-  given_name?: string;
-  surname?: string;
-  groups?: string;
-}
-
-// /api/v1/user-sync/status response entry
-export interface SyncSourceStatus {
-  id: string;
-  name: string;
-  enabled: boolean;
-  schedule_human?: string;
-  last?: SyncReport;
-}
-
-export interface SyncReport {
-  source_id: string;
-  started_at: string;
-  finished_at: string;
-  found: number;
-  created: number;
-  updated: number;
-  disabled: number;
-  perms_applied: number;
-  errors?: string[];
 }
 
 // Capability descriptor returned by /api/v1/info

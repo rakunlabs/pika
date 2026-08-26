@@ -220,12 +220,12 @@ server:
 
 ### External Authentication Strategies
 
-Beyond built-in local accounts, pika supports OAuth2/OIDC providers, LDAP, and header-based forward authentication (e.g., with Turna, Authelia, Authentik). All strategies are configured and toggled at runtime from **Settings > Authentication** in the UI — no server restart required. The middleware is hot-swapped via an [ada Slot](https://rakunlabs.github.io/ada/guide/runtime-reload.html).
+Beyond built-in local accounts, pika supports OAuth2/OIDC providers and header-based forward authentication (e.g., with Turna, Authelia, Authentik). All strategies are configured and toggled at runtime from **Settings > Authentication** in the UI — no server restart required. The middleware is hot-swapped via an [ada Slot](https://rakunlabs.github.io/ada/guide/runtime-reload.html).
 
 When any external strategy is enabled, pika uses a **session-first** approach:
 
 1. If the request has a valid local session cookie, the user is authenticated immediately (external strategies are skipped).
-2. If no session cookie is present, pika delegates authentication to the configured strategy (OAuth2, LDAP, or forward-auth headers).
+2. If no session cookie is present, pika delegates authentication to the configured strategy (OAuth2 or forward-auth headers).
 3. If neither succeeds, the request gets a 401.
 
 This means local login always works — even when external auth is active. The `/api/v1/info` endpoint is always accessible so the SPA can boot and show the local login page regardless of external auth redirects.
@@ -258,9 +258,9 @@ grants that user the union of both sets. A user in multiple groups gets the unio
 
 When external permissions are **disabled** (the default), externally-authenticated users have no permission checks applied — pika trusts the gateway/IdP completely. Enable enforcement from the **Permissions** section once the mapping is in place.
 
-The groups header name and value separator are configurable. If your gateway uses `X-Pika-Roles` with `|` separators, set both fields in the Permissions form; pika also accepts repeated header lines as a single concatenated list. The same role/scope mapping applies to OAuth2 (token claims) and LDAP (group membership) strategies.
+The groups header name and value separator are configurable. If your gateway uses `X-Pika-Roles` with `|` separators, set both fields in the Permissions form; pika also accepts repeated header lines as a single concatenated list. The same role/scope mapping applies to OAuth2 token claims.
 
-Externally-authenticated users are identified by provider + subject and can be linked to local `users` rows by sync, verified-email auto-linking, or OAuth2 auto-create. User and Permission bundle management in the UI remains available only under built-in auth.
+Externally-authenticated users are identified by provider + subject and can be linked to local `users` rows by verified-email auto-linking or OAuth2 auto-create. User and Permission bundle management in the UI remains available only under built-in auth.
 
 ## Kubernetes Deployment
 

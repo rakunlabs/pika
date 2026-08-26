@@ -192,44 +192,19 @@ func (s *permissionStorage) SetPermissionKeyPatterns(ctx context.Context, permis
 	return bucketUpdate(ctx, s.scope, s.bucket, row)
 }
 
-// SetUserPermissions replaces every grant for a user with rows tagged
-// 'local'. Used by the admin UI permission editor.
+// SetUserPermissions replaces every grant for a user with locally managed rows.
 func (s *permissionStorage) SetUserPermissions(ctx context.Context, userID string, permissionIDs []string) error {
 	users := s.store.usersAt(s.scope)
 	row, err := users.getRow(ctx, userID)
 	if err != nil {
 		return err
 	}
-	row.Grants = buildGrants("local", permissionIDs)
+	row.Grants = buildGrants(permissionIDs)
 	return users.updateRow(ctx, row)
 }
 
-// SetUserPermissionsBySource replaces only the grants whose source
-// matches; rows from other sources are preserved.
-func (s *permissionStorage) SetUserPermissionsBySource(ctx context.Context, userID, source string, permissionIDs []string) error {
-	if source == "" {
-		source = "local"
-	}
-	users := s.store.usersAt(s.scope)
-	row, err := users.getRow(ctx, userID)
-	if err != nil {
-		return err
-	}
-
-	// Keep grants from other sources verbatim.
-	preserved := make([]userGrant, 0, len(row.Grants))
-	for _, g := range row.Grants {
-		if g.Source != source {
-			preserved = append(preserved, g)
-		}
-	}
-	preserved = append(preserved, buildGrants(source, permissionIDs)...)
-	row.Grants = preserved
-	return users.updateRow(ctx, row)
-}
-
-// buildGrants dedupes permission IDs and tags each with the source.
-func buildGrants(source string, permissionIDs []string) []userGrant {
+// buildGrants dedupes permission IDs and tags them as locally managed.
+func buildGrants(permissionIDs []string) []userGrant {
 	if len(permissionIDs) == 0 {
 		return nil
 	}
@@ -243,7 +218,7 @@ func buildGrants(source string, permissionIDs []string) []userGrant {
 			continue
 		}
 		seen[pid] = struct{}{}
-		out = append(out, userGrant{PermissionID: pid, Source: source})
+		out = append(out, userGrant{PermissionID: pid, Source: "local"})
 	}
 	return out
 }
@@ -259,10 +234,13 @@ func (s *permissionStorage) GetUserPermissions(ctx context.Context, userID strin
 		return []service.Permission{}, nil
 	}
 
-	// Dedupe permission IDs across sources before fetching.
+	// Ignore legacy externally sourced grants left by removed integrations.
 	wanted := make(map[string]struct{}, len(row.Grants))
 	ids := make([]string, 0, len(row.Grants))
 	for _, g := range row.Grants {
+		if g.Source != "" && g.Source != "local" {
+			continue
+		}
 		if _, dup := wanted[g.PermissionID]; dup {
 			continue
 		}
@@ -305,7 +283,7 @@ func (s *permissionStorage) ListUserIDsByPermission(ctx context.Context, permiss
 	out := make([]string, 0)
 	for _, r := range rows {
 		for _, g := range r.Grants {
-			if g.PermissionID == permissionID {
+			if (g.Source == "" || g.Source == "local") && g.PermissionID == permissionID {
 				out = append(out, r.ID)
 				break
 			}

@@ -9,9 +9,8 @@ import (
 )
 
 // userGrant denormalizes one row of the SQL user_permissions table onto
-// the user record that owns it. The (PermissionID, Source) pair is unique
-// per user: the same permission may be granted by multiple sources
-// (admin-curated 'local' and a user-sync source) without collapsing.
+// the user record that owns it. Source remains in the persisted shape so
+// grants written by removed external-sync integrations can be ignored safely.
 type userGrant struct {
 	PermissionID string `bw:"permission_id"`
 	Source       string `bw:"source"`
@@ -80,7 +79,7 @@ func userRowFromService(u *service.User, grants []userGrant) *userRow {
 	}
 }
 
-// userIdentityRow stores one OAuth/LDAP/Header link. (Provider, Subject)
+// userIdentityRow stores one OAuth/Header link. (Provider, Subject)
 // is enforced unique through a composite group named "providersubject".
 type userIdentityRow struct {
 	ID          string     `bw:"id,pk"`
@@ -740,7 +739,6 @@ type settingsRow struct {
 	ExternalPermissions *service.ExternalPermissionsSettings `bw:"external_permissions"`
 	ForwardAuth         *service.ForwardAuthSettings         `bw:"forward_auth"`
 	Auth                *service.AuthSettings                `bw:"auth"`
-	UserSync            *service.UserSyncSettings            `bw:"user_sync"`
 	Vault               *service.VaultSettings               `bw:"vault"`
 	ServerTLS           *service.ServerTLSSettings           `bw:"server_tls"`
 	// PublicEndpoints carries the operator-defined public-port

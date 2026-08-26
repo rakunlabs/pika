@@ -22,7 +22,6 @@ import (
 	"github.com/rakunlabs/pika/internal/server/publicendpoint"
 	"github.com/rakunlabs/pika/internal/server/servertls"
 	"github.com/rakunlabs/pika/internal/service"
-	"github.com/rakunlabs/pika/internal/usersync"
 )
 
 // Info holds server metadata returned by the info endpoint.
@@ -52,11 +51,9 @@ type api struct {
 	encStore        *secret.Storage         // nil if encryption is disabled
 	mgr             *authx.Manager          // auth manager (login/logout/cap resolution)
 	dispatcher      *hook.Dispatcher        // hook event bus; nil only in tests
-	syncScheduler   *usersync.Scheduler     // nil until set by server.go
 	cluster         *pcluster.Cluster       // nil only in tests or custom embeddings
 	publicEndpoints *publicendpoint.Manager // nil only in tests
 	tlsMgr          *servertls.Manager      // nil only in tests
-	appCtx          context.Context         // root context used for background loops
 }
 
 type response struct {
@@ -68,12 +65,7 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	hook.ServiceName = config.ServiceName
 	hook.Version = config.Version
 
-	// User-sync scheduler runs LDAP sync sources on a per-source ticker.
-	// Constructed here so the api handlers and the postSettings reload
-	// path share one instance. Started below after the routes register.
-	syncSched := usersync.NewScheduler(svc)
-
-	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, dispatcher: dispatcher, syncScheduler: syncSched, cluster: cl, publicEndpoints: peMgr, tlsMgr: tlsMgr, appCtx: context.Background()}
+	api := &api{svc: svc, info: info, encStore: encStore, mgr: mgr, dispatcher: dispatcher, cluster: cl, publicEndpoints: peMgr, tlsMgr: tlsMgr}
 
 	m.ErrorHandler(api.errorHandler)
 
@@ -291,26 +283,12 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.POST("/api/v1/external/{name}/version", m.Wrap(api.withPerm(service.CapExternalRead, api.readExternalVersion)))
 	m.GET("/api/v1/external/{name}/search", m.Wrap(api.withPerm(service.CapExternalRead, api.searchExternal)))
 
-	// User-sync endpoints (LDAP and future drivers). The endpoints
-	// inspect/run the scheduler that's owned by this api struct.
-	// Gated by settings management since they touch credentials and
-	// reshape user_permissions wholesale.
-	m.GET("/api/v1/user-sync/status", m.Wrap(api.withPerm(service.CapSettingsManage, api.listUserSyncStatus)))
-	m.POST("/api/v1/user-sync/run/*", m.Wrap(api.withPerm(service.CapSettingsManage, api.runUserSync)))
-	m.POST("/api/v1/user-sync/test/*", m.Wrap(api.withPerm(service.CapSettingsManage, api.testUserSync)))
-
 	// info and healthz are registered on the unprotected mux so the SPA
 	// can always boot (even when forward-auth would redirect API calls).
 	// The handler itself checks context for user identity and returns
 	// appropriate info — full details when authenticated, minimal when not.
 	mAuth.GET("/api/v1/info", mAuth.Wrap(api.infoHandler))
 	mAuth.GET("/healthz", mAuth.Wrap(api.healthzHandler))
-
-	// Boot the user-sync scheduler with current settings. Reload happens
-	// inside postSettings whenever PatchSettings.UserSync is set.
-	if curSettings, err := svc.Settings(api.appCtx); err == nil {
-		syncSched.Start(api.appCtx, curSettings.UserSync)
-	}
 
 	return nil
 }
@@ -489,9 +467,9 @@ func (a *api) getSettings(c *ada.Context) error {
 }
 
 // maskAuthSecrets strips stored auth secrets from a settings response,
-// replacing OAuth2 client secrets with the ClientSecretSet indicator and
-// blanking the LDAP bind password. Operates on the per-request settings copy
-// returned by Settings(), so it never mutates stored state.
+// replacing OAuth2 client secrets with the ClientSecretSet indicator. Operates
+// on the per-request settings copy returned by Settings(), so it never mutates
+// stored state.
 func maskAuthSecrets(a *service.AuthSettings) {
 	if a == nil {
 		return
@@ -499,9 +477,6 @@ func maskAuthSecrets(a *service.AuthSettings) {
 	for i := range a.OAuth2 {
 		a.OAuth2[i].ClientSecretSet = a.OAuth2[i].ClientSecret != ""
 		a.OAuth2[i].ClientSecret = ""
-	}
-	if a.LDAP != nil {
-		a.LDAP.BindPassword = ""
 	}
 }
 
@@ -541,13 +516,6 @@ func (a *api) postSettings(c *ada.Context) error {
 		if err := a.mgr.Reload(c.Request.Context(), reloadAuth); err != nil {
 			return fmt.Errorf("auth reload failed: %w", err)
 		}
-	}
-
-	// If user-sync sources were updated, reload the scheduler so periodic
-	// jobs pick up the new config (or get stopped, or fire for the first
-	// time on a freshly-enabled source).
-	if patchSettings.UserSync != nil && a.syncScheduler != nil {
-		a.syncScheduler.Reload(patchSettings.UserSync)
 	}
 
 	// If public endpoints were updated, reconcile the live listener

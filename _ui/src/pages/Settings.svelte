@@ -8,7 +8,6 @@
         HardDrive,
         ShieldCheck,
         Info,
-        Users,
         Palette,
         KeyRound,
         Vault,
@@ -25,7 +24,6 @@
     import ExternalResourcesSection from "@/pages/settings/ExternalResourcesSection.svelte";
     import HooksSection from "@/pages/settings/HooksSection.svelte";
     import AuthSection from "@/pages/settings/AuthSection.svelte";
-    import UserSyncSection from "@/pages/settings/UserSyncSection.svelte";
     import KeyRotationSection from "@/pages/settings/KeyRotationSection.svelte";
     import FeaturesSection from "@/pages/settings/FeaturesSection.svelte";
     import ClusterSection from "@/pages/settings/ClusterSection.svelte";
@@ -42,7 +40,6 @@
         | "external"
         | "hooks"
         | "auth"
-        | "user_sync"
         | "rotation"
         | "features"
         | "cluster"
@@ -62,7 +59,6 @@
         external: "settings.manage",
         hooks: "settings.manage",
         auth: "settings.manage",
-        user_sync: "settings.manage",
         rotation: "settings.manage",
         features: "settings.manage",
         cluster: "settings.manage",
@@ -80,7 +76,6 @@
         { key: "external", label: "External Resources", icon: Globe },
         { key: "hooks", label: "Hooks", icon: Webhook },
         { key: "auth", label: "Authentication", icon: ShieldCheck },
-        { key: "user_sync", label: "User Sync", icon: Users },
         { key: "rotation", label: "Key Rotation", icon: RotateCw },
         { key: "features", label: "Features", icon: ToggleLeft },
         { key: "cluster", label: "Cluster", icon: Network },
@@ -164,8 +159,6 @@
                 <HooksSection />
             {:else if activeSection === "auth"}
                 <AuthSection />
-            {:else if activeSection === "user_sync"}
-                <UserSyncSection />
             {:else if activeSection === "rotation"}
                 <KeyRotationSection />
             {:else if activeSection === "features"}

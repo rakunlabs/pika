@@ -84,7 +84,6 @@ type Settings struct {
 	ExternalPermissions *ExternalPermissionsSettings `json:"external_permissions,omitempty"`
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 	Auth                *AuthSettings                `json:"auth,omitempty"`
-	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
 	// ServerTLS controls runtime transport policy for the main admin
 	// listener. The certificate itself stays on disk so HTTPS is
@@ -158,7 +157,6 @@ type PatchSettings struct {
 	ExternalPermissions *ExternalPermissionsSettings `json:"external_permissions,omitempty"`
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 	Auth                *AuthSettings                `json:"auth,omitempty"`
-	UserSync            *UserSyncSettings            `json:"user_sync,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
 	ServerTLS           *ServerTLSSettings           `json:"server_tls,omitempty"`
 	// PublicEndpoints is a full-replace patch — pointer-to-slice so
@@ -275,7 +273,7 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 
 	// Handle auth settings update (if provided).
 	//
-	// OAuth2 client secrets and the LDAP bind password get special treatment:
+	// OAuth2 client secrets get special treatment:
 	// the SPA never re-sends a stored secret (it can't read it back — see
 	// getSettings masking), so an empty secret on an incoming entry means
 	// "keep what's stored", not "wipe it". Without this, any settings save
@@ -285,11 +283,6 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 	if patch.Auth != nil {
 		preserveAuthSecrets(settings.Auth, patch.Auth)
 		settings.Auth = patch.Auth
-	}
-
-	// Handle user-sync settings update (if provided)
-	if patch.UserSync != nil {
-		settings.UserSync = patch.UserSync
 	}
 
 	// Handle vault settings update (if provided). The struct only
@@ -372,9 +365,6 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 //   - non-empty ClientSecret      → operator typed a new value; use it
 //   - ClearClientSecret == true   → deliberate wipe; leave it empty
 //   - empty ClientSecret          → keep the stored value for that Name
-//
-// The LDAP bind password follows the same keep-on-blank rule (the SPA only
-// sends it when the operator types a new one).
 func preserveAuthSecrets(old, incoming *AuthSettings) {
 	if incoming == nil {
 		return
@@ -405,11 +395,6 @@ func preserveAuthSecrets(old, incoming *AuthSettings) {
 				e.ClientSecret = prev
 			}
 		}
-	}
-
-	if incoming.LDAP != nil && incoming.LDAP.BindPassword == "" &&
-		old != nil && old.LDAP != nil && old.LDAP.BindPassword != "" {
-		incoming.LDAP.BindPassword = old.LDAP.BindPassword
 	}
 }
 

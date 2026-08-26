@@ -126,10 +126,6 @@ type UserIdentityStorage interface {
 	FindByProviderSubject(ctx context.Context, provider, subject string) (*UserIdentity, error)
 	// ListByUserID returns every identity linked to a user, oldest first.
 	ListByUserID(ctx context.Context, userID string) ([]UserIdentity, error)
-	// ListByProvider returns every identity issued by a given provider,
-	// oldest first. Used by the user-sync reconciliation pass to find
-	// previously-synced users that the directory no longer returns.
-	ListByProvider(ctx context.Context, provider string) ([]UserIdentity, error)
 	// Delete removes a single (provider, subject) link. Used for admin
 	// "unlink" operations.
 	Delete(ctx context.Context, id string) error
@@ -195,18 +191,11 @@ type PermissionStorage interface {
 	// exist in permission_keys. Passing an empty slice clears all
 	// patterns (grant becomes unrestricted again).
 	SetPermissionKeyPatterns(ctx context.Context, permissionID, key string, patterns []string) error
-	// SetUserPermissions replaces every assignment for a user, regardless
-	// of source. Use SetUserPermissionsBySource for sync-engine rewrites
-	// that must leave 'local' (admin-curated) rows alone.
+	// SetUserPermissions replaces every assignment for a user.
 	SetUserPermissions(ctx context.Context, userID string, permissionIDs []string) error
-	// SetUserPermissionsBySource replaces only the rows whose source
-	// matches the given tag. Rows with other source values are preserved.
-	// Used by the user-sync engine: it owns rows tagged with its source
-	// ID, and must never delete rows tagged 'local'.
-	SetUserPermissionsBySource(ctx context.Context, userID, source string, permissionIDs []string) error
 	GetUserPermissions(ctx context.Context, userID string) ([]Permission, error)
 	// ListUserIDsByPermission returns the IDs of every user that has been
-	// granted the given permission bundle (regardless of grant source).
+	// granted the given permission bundle.
 	// Used by the admin UI to filter the user list by permission. Returns
 	// an empty slice (not nil) when no users hold the permission.
 	ListUserIDsByPermission(ctx context.Context, permissionID string) ([]string, error)

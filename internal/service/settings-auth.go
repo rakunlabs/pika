@@ -21,7 +21,6 @@ type AuthSettings struct {
 	//     token. Tokens are managed under Settings → Access Tokens.
 	Local   *LocalStrategySettings   `json:"local,omitempty"`
 	OAuth2  []OAuth2StrategySettings `json:"oauth2,omitempty"`
-	LDAP    *LDAPStrategySettings    `json:"ldap,omitempty"`
 	Header  *HeaderStrategySettings  `json:"header,omitempty"`
 	Passkey *PasskeyStrategySettings `json:"passkey,omitempty"`
 
@@ -30,7 +29,7 @@ type AuthSettings struct {
 	RateLimit *AuthRateLimitSettings `json:"rate_limit,omitempty"`
 
 	// LinkByVerifiedEmail, when true (default), merges an incoming
-	// external identity (OAuth2, LDAP, Header) into an existing user row
+	// external identity (OAuth2 or Header) into an existing user row
 	// whose email matches the IdP-asserted email — but only if the IdP
 	// marks the email as verified (OIDC `email_verified: true`). Without
 	// this, two logins by the same person from different providers
@@ -289,47 +288,6 @@ func (s *AuthSettings) OAuth2AutoCreateUserEnabled(provider string) bool {
 	return false
 }
 
-type LDAPStrategySettings struct {
-	Name         string `json:"name,omitempty"`
-	Addr         string `json:"addr,omitempty"`
-	BindDN       string `json:"bind_dn,omitempty"`
-	BindPassword string `json:"bind_password,omitempty"`
-	UserBaseDN   string `json:"user_base_dn,omitempty"`
-	UserFilter   string `json:"user_filter,omitempty"`
-	GroupBaseDN  string `json:"group_base_dn,omitempty"`
-	GroupFilter  string `json:"group_filter,omitempty"`
-	TLS          bool   `json:"tls,omitempty"`
-	InsecureSkip bool   `json:"insecure_skip,omitempty"`
-	// AutoCreateUser allows LDAP login to JIT-sync a missing user from the
-	// configured UserSyncSource and attach source-owned permissions.
-	AutoCreateUser bool `json:"auto_create_user,omitempty"`
-	// UserSyncSource points at UserSyncSettings.Sources[].ID. When set, LDAP
-	// login resolves identities using that source ID instead of the strategy
-	// name so login and batch sync share one provider namespace.
-	UserSyncSource string `json:"user_sync_source,omitempty"`
-}
-
-// LDAPLoginSyncSource returns the user-sync source ID that should own users
-// logging in through the named LDAP strategy. ok=false means this provider is
-// not the configured LDAP strategy.
-func (s *AuthSettings) LDAPLoginSyncSource(provider string) (sourceID string, autoCreate bool, ok bool) {
-	if s == nil || s.LDAP == nil || provider == "" {
-		return "", false, false
-	}
-	name := s.LDAP.Name
-	if name == "" {
-		name = "ldap"
-	}
-	if provider != name {
-		return "", false, false
-	}
-	sourceID = s.LDAP.UserSyncSource
-	if sourceID == "" {
-		sourceID = provider
-	}
-	return sourceID, s.LDAP.AutoCreateUser, true
-}
-
 type HeaderStrategySettings struct {
 	Name           string   `json:"name,omitempty"`
 	User           string   `json:"user,omitempty"`
@@ -375,7 +333,7 @@ type PasskeyStrategySettings struct {
 	ChallengeTTL     time.Duration `json:"challenge_ttl,omitempty"`
 }
 
-// CapabilityMapping declares how external identities (OAuth2, LDAP, Header)
+// CapabilityMapping declares how external identities (OAuth2 or Header)
 // gain pika capabilities without a per-user DB row.
 //
 // RoleMapping/ScopeMapping keys are the external role/scope names as they
@@ -393,139 +351,6 @@ type CapabilityMapping struct {
 	Superadmins  []string            `json:"superadmins,omitempty"`
 	RoleMapping  map[string][]string `json:"role_mapping,omitempty"`
 	ScopeMapping map[string][]string `json:"scope_mapping,omitempty"`
-}
-
-// UserSyncSettings holds every configured user-sync source. Top-level on
-// purpose (not nested under a single LDAP strategy) so the same install
-// can pull from multiple LDAP servers, and so future sources (SCIM,
-// CSV upload, etc.) plug in at the same level.
-type UserSyncSettings struct {
-	Sources []SyncSource `json:"sources,omitempty"`
-}
-
-// SyncSource is one user provider that pika reconciles its local user
-// table against. Each source's (provider, subject) tuples form a
-// namespace inside user_identities — changing a source's ID after rows
-// exist will orphan those rows, which is intentional: it's how an admin
-// "removes" an LDAP source without losing audit history.
-type SyncSource struct {
-	// ID is the stable handle used as user_identities.provider for users
-	// provisioned by this source. Pattern: lowercase, no spaces.
-	// Example: "ldap-prod".
-	ID string `json:"id"`
-	// Name is the human label shown in the UI.
-	Name string `json:"name"`
-	// Type is the source kind. Currently only "ldap"; reserved for future
-	// drivers (e.g. "scim").
-	Type string `json:"type"`
-	// Enabled gates the periodic schedule. Manual sync and explicit LDAP login
-	// JIT provisioning can still use the source so an operator can keep sync
-	// on-demand only.
-	Enabled bool `json:"enabled"`
-	// LDAP is the source-specific config when Type="ldap". Other Type
-	// values would carry their own pointer here in the future.
-	LDAP *LDAPSyncSpec `json:"ldap,omitempty"`
-	// Schedule controls the periodic batch sync. Manual ("Sync now") and
-	// JIT (first-login) paths run regardless of schedule.
-	Schedule SyncSchedule `json:"schedule"`
-	// OnMissing decides what happens to local users provisioned by this
-	// source who are no longer returned by the search filter.
-	//   "disable" — set users.disabled=true (default; reversible)
-	//   "ignore"  — leave the user row alone
-	OnMissing string `json:"on_missing,omitempty"`
-}
-
-// SyncSchedule controls when the periodic sync goroutine fires.
-type SyncSchedule struct {
-	// Mode: "manual" (no ticker) or "interval" (every IntervalMinutes).
-	Mode string `json:"mode"`
-	// IntervalMinutes is the cadence when Mode="interval". Minimum 1.
-	IntervalMinutes int `json:"interval_minutes,omitempty"`
-}
-
-// LDAPSyncSpec holds the LDAP-specific fields of a SyncSource: how to
-// connect, what to search for, and how to map LDAP attributes onto
-// pika's user fields.
-//
-// Keeping connection params here (rather than referencing the login-side
-// AuthSettings.LDAP) lets sync run against a different bind/base than
-// the login flow if an operator wants e.g. a service account with broader
-// search rights.
-type LDAPSyncSpec struct {
-	Address      string `json:"address"`
-	TLS          bool   `json:"tls,omitempty"`
-	InsecureSkip bool   `json:"insecure_skip,omitempty"`
-	BindDN       string `json:"bind_dn"`
-	BindPassword string `json:"bind_password,omitempty"`
-
-	// UserBaseDN is the search root, e.g. "ou=people,dc=example,dc=com".
-	UserBaseDN string `json:"user_base_dn"`
-	// UserFilter is an LDAP search filter, e.g. "(objectClass=person)".
-	// Defaults to "(objectClass=*)" when empty.
-	UserFilter string `json:"user_filter,omitempty"`
-	// PageSize controls paged search; 0 = library default (500).
-	PageSize uint32 `json:"page_size,omitempty"`
-
-	// GroupSearches optionally searches LDAP group entries separately and maps
-	// member DN values (e.g. uniqueMember=uid=alice,...) back to user entries.
-	// This supports directories that do not expose memberOf on the user object.
-	GroupSearches []LDAPGroupSearchSpec `json:"group_searches,omitempty"`
-
-	// Attributes maps LDAP attribute names onto pika user fields. Every
-	// field is optional; an empty value means "don't read this".
-	Attributes LDAPAttributeMap `json:"attributes"`
-
-	// GroupPermissions maps an LDAP group value onto a list of pika permission
-	// IDs to grant. The value can come directly from Attributes.Groups (typically
-	// a full memberOf DN) or from GroupSearches' group name attribute (typically
-	// cn).
-	//
-	// At sync time, each user's groups are looked up here; the union of
-	// matched permission IDs is written to user_permissions with
-	// source=<SyncSource.ID>. Permissions assigned via the admin UI
-	// (source='local') are untouched.
-	GroupPermissions map[string][]string `json:"group_permissions,omitempty"`
-}
-
-// LDAPGroupSearchSpec describes one LDAP search that returns group entries.
-// Defaults match common OpenLDAP groupOfUniqueNames style entries and Turna's
-// historical IAM sync shape: cn as the group name and uniqueMember as member DN.
-type LDAPGroupSearchSpec struct {
-	BaseDN             string   `json:"base_dn"`
-	Filter             string   `json:"filter,omitempty"`
-	Attributes         []string `json:"attributes,omitempty"`
-	NameAttribute      string   `json:"name_attribute,omitempty"`
-	MemberAttribute    string   `json:"member_attribute,omitempty"`
-	MemberUIDAttribute string   `json:"member_uid_attribute,omitempty"`
-}
-
-// LDAPAttributeMap binds LDAP attribute names to pika user fields. Each
-// non-empty field tells the sync engine "read this LDAP attribute and
-// store its (first) value in the matching pika field". Multi-valued
-// attributes (groups) take the full list.
-type LDAPAttributeMap struct {
-	// Username is the LDAP attribute used as the pika username.
-	// Common: "uid" (OpenLDAP), "sAMAccountName" (AD), "cn".
-	Username string `json:"username"`
-	// Subject is the stable provider-side identifier stored in
-	// user_identities.subject. Defaults to the value of Username when
-	// empty. For directories that expose a stable opaque ID, prefer
-	// "entryUUID" (OpenLDAP) or "objectGUID" (AD).
-	Subject string `json:"subject,omitempty"`
-	// Email is the LDAP attribute used as users.email.
-	// Common: "mail".
-	Email string `json:"email,omitempty"`
-	// DisplayName is the LDAP attribute used as users.display_name.
-	// Common: "displayName", "cn", "gecos".
-	DisplayName string `json:"display_name,omitempty"`
-	// GivenName / Surname are read for use as fallbacks when DisplayName
-	// is missing — DisplayName takes precedence; if absent and these
-	// are set, sync uses "GivenName Surname".
-	GivenName string `json:"given_name,omitempty"`
-	Surname   string `json:"surname,omitempty"`
-	// Groups is a multi-valued attribute (typically "memberOf") whose
-	// values feed GroupPermissions.
-	Groups string `json:"groups,omitempty"`
 }
 
 // GetAuthSettings returns the current AuthSettings from DB settings, or nil
@@ -597,9 +422,6 @@ func (s *AuthSettings) hasAnyStrategy() bool {
 		return true
 	}
 	if len(s.OAuth2) > 0 {
-		return true
-	}
-	if s.LDAP != nil {
 		return true
 	}
 	if s.Header != nil {

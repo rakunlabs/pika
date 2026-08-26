@@ -29,7 +29,7 @@ var ErrSealedCorrupt = errors.New("settings: sealed payload corrupt or unreadabl
 // payload covers only the secrets that remain in the configuration
 // server: hook delivery target credentials, external-resource auth
 // (Vault tokens, AWS secret keys, etc.), and auth-strategy secrets
-// (OAuth2 client secret, LDAP bind password).
+// (OAuth2 client secrets).
 
 // sensitivePayload is the in-memory, JSON-serializable container
 // for every secret value pulled out of *service.Settings before
@@ -42,7 +42,6 @@ type sensitivePayload struct {
 	// to Settings.Auth.OAuth2 so index ordering carries the matching
 	// secret back to the right strategy entry.
 	OAuth2ClientSecrets []string `json:"oauth2_client_secrets,omitempty"`
-	LDAPBindPassword    string   `json:"ldap_bind_password,omitempty"`
 
 	// PublicEndpointStaticTokens is the secret slot for
 	// Settings.PublicEndpoints[*].Auth.StaticTokens. Keyed by the
@@ -146,10 +145,6 @@ func extractSecrets(s *service.Settings) *sensitivePayload {
 				p.OAuth2ClientSecrets[i] = s.Auth.OAuth2[i].ClientSecret
 				s.Auth.OAuth2[i].ClientSecret = ""
 			}
-		}
-		if s.Auth.LDAP != nil && s.Auth.LDAP.BindPassword != "" {
-			p.LDAPBindPassword = s.Auth.LDAP.BindPassword
-			s.Auth.LDAP.BindPassword = ""
 		}
 	}
 
@@ -276,9 +271,6 @@ func injectSecrets(s *service.Settings, p *sensitivePayload) {
 	if s.Auth != nil {
 		for i := 0; i < len(s.Auth.OAuth2) && i < len(p.OAuth2ClientSecrets); i++ {
 			s.Auth.OAuth2[i].ClientSecret = p.OAuth2ClientSecrets[i]
-		}
-		if s.Auth.LDAP != nil && p.LDAPBindPassword != "" {
-			s.Auth.LDAP.BindPassword = p.LDAPBindPassword
 		}
 	}
 
@@ -448,9 +440,6 @@ func isEmptyPayload(p *sensitivePayload) bool {
 				return false
 			}
 		}
-	}
-	if p.LDAPBindPassword != "" {
-		return false
 	}
 	if len(p.PublicEndpointStaticTokens) > 0 {
 		for _, toks := range p.PublicEndpointStaticTokens {

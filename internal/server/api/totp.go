@@ -35,7 +35,7 @@ type totpFinishRequest struct {
 // totpPasswordRequest is the body shape for password-gated mutations
 // (Disable, RegenerateRecoveryCodes). Re-auth via password
 // confirms the user is at the keyboard, not an attacker holding a
-// stolen cookie. LDAP-only users have no password — the service
+// stolen cookie. External-only users have no password — the service
 // layer rejects them with ErrForbidden so they can't accidentally
 // disable their own TOTP and then not know how to re-enable.
 type totpPasswordRequest struct {
@@ -166,7 +166,7 @@ func (a *api) disableMyTOTP(c *ada.Context) error {
 
 	if err := coord.Disable(ctx, userID, req.Password); err != nil {
 		// ErrUnauthorized (wrong password) and ErrForbidden (no
-		// local password / LDAP-only user) bubble through the
+		// local password / external-only user) bubble through the
 		// standard error mapping.
 		return err
 	}

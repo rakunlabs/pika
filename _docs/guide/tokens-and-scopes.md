@@ -117,7 +117,7 @@ Tokens used against the admin API (`/api/v1/...`) check **capabilities**, not sc
 A token with no capabilities can still consume `/data/*` (subject to its scopes); it just can't call any admin endpoint.
 
 ::: info Superadmin
-A "superadmin" user holds every key in the list above implicitly. The forward-auth / OAuth2 / LDAP **Superadmins** allowlist promotes matching identities to the same status. There is no separate `*` capability — superadmin is a user attribute, not a token attribute.
+A "superadmin" user holds every key in the list above implicitly. The forward-auth / OAuth2 **Superadmins** allowlist promotes matching identities to the same status. There is no separate `*` capability — superadmin is a user attribute, not a token attribute.
 :::
 
 ## Rotation and revocation

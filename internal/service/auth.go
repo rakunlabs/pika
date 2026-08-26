@@ -45,7 +45,7 @@ func init() {
 }
 
 // User represents an application user stored in the database. A user may
-// have zero or many linked external identities (OAuth2, LDAP, Header) and
+// have zero or many linked external identities (OAuth2 or Header) and
 // optionally a local password. External-only users have External=true and
 // an empty PasswordHash — they can never be authenticated via local.
 type User struct {

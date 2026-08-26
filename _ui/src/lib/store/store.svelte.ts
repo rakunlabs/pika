@@ -66,7 +66,7 @@ export interface UserInfo {
   email?: string;
   display_name?: string;
   // external is true for users authenticated by an external IdP
-  // (OAuth2/LDAP/Header) rather than a local password.
+  // (OAuth2/Header) rather than a local password.
   external?: boolean;
   disabled: boolean;
   is_superadmin: boolean;
@@ -118,7 +118,7 @@ export interface SessionView {
   expires_at: string;
 }
 
-// UserIdentity is a linked external credential (OAuth2/LDAP/Header).
+// UserIdentity is a linked external credential (OAuth2/Header).
 export interface UserIdentity {
   id: string;
   user_id: string;

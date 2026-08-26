@@ -24,8 +24,8 @@ func (a *api) getUserEffectivePermissions(c *ada.Context) error {
 	return c.SetStatus(http.StatusOK).SendJSON(rep)
 }
 
-// getUserIdentities lists a user's linked external identities (OAuth2/LDAP/
-// Header). Empty for a pure local-password user. Lets the admin UI show
+// getUserIdentities lists a user's linked external identities (OAuth2/Header).
+// Empty for a pure local-password user. Lets the admin UI show
 // "linked accounts" and tell external users apart from local ones.
 func (a *api) getUserIdentities(c *ada.Context) error {
 	userID := c.Request.PathValue("user")

@@ -37,7 +37,7 @@ features:
     details: Push config and personal-vault changes to HTTP webhooks, Kafka, Redis Pub/Sub, or NATS — with custom Go templates for the payload.
   - icon: 🔑
     title: Token-based access
-    details: Issue API tokens with glob-scoped read/write/delete permissions. Plug in OAuth2/OIDC, LDAP, or header-based forward auth.
+    details: Issue API tokens with glob-scoped read/write/delete permissions. Plug in OAuth2/OIDC or header-based forward auth.
   - icon: 🌐
     title: Cluster-ready
     details: Run a 3+ node HA cluster with QUIC peer discovery and leader-elected writes. Drop-in Kubernetes manifests included.

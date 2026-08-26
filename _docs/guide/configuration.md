@@ -134,7 +134,7 @@ telemetry:
 ```
 
 ::: tip
-Most production deployments only set a handful of these. The Docker Compose example in [Installation](./installation) uses just `PIKA_LOG_LEVEL`. Authentication, login UI, cookie behaviour, token issuance, OAuth2/LDAP/passkey providers, and rate limits are **runtime settings** — configure them under **Settings → Authentication**, not in this file.
+Most production deployments only set a handful of these. The Docker Compose example in [Installation](./installation) uses just `PIKA_LOG_LEVEL`. Authentication, login UI, cookie behaviour, token issuance, OAuth2/passkey providers, and rate limits are **runtime settings** — configure them under **Settings → Authentication**, not in this file.
 :::
 
 ## At-rest encryption passphrase
@@ -246,7 +246,7 @@ See [Endpoints](/guide/endpoints) for the wire format, template variables, and a
 
 ## Authentication, sessions, and cookies
 
-Authentication strategies (local, OAuth2, LDAP, passkey, header/proxy), session TTL, cookie behaviour, token issuance, and rate limiting are **runtime settings**, not process-level config — there is no `server.auth` block in `Config`. Configure them under **Settings → Authentication** in the UI, or via `PUT /api/v1/settings` (see [Admin API](/guide/api)). Changes apply without restarting.
+Authentication strategies (local, OAuth2, passkey, header/proxy), session TTL, cookie behaviour, token issuance, and rate limiting are **runtime settings**, not process-level config — there is no `server.auth` block in `Config`. Configure them under **Settings → Authentication** in the UI, or via `PUT /api/v1/settings` (see [Admin API](/guide/api)). Changes apply without restarting.
 
 ## Reverse proxies and base paths
 
