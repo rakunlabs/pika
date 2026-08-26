@@ -13,9 +13,9 @@ docs: ## Serve docs locally
 	cd _docs && pnpm run docs:dev
 
 .PHONY: build
-build: build-ui ## Build the Go binary
+build: build-ui ## Build the Linux amd64 Go binary
 	@echo "> Building $(PROJECT) binary with goreleaser"
-	goreleaser build --snapshot --clean --single-target
+	GOOS=linux GOARCH=amd64 goreleaser build --snapshot --clean --single-target
 
 .PHONY: install-ui
 install-ui: ## Install UI dependencies
@@ -30,7 +30,7 @@ build-ui: install-ui ## Build the frontend assets
 
 .PHONY: build-container
 build-container: build ## Build the container image with test tag
-	docker build -t $(PROJECT):test -f ci/Dockerfile dist/$(PROJECT)_linux_amd64_v1/
+	docker build --platform=linux/amd64 -t $(PROJECT):test -f ci/Dockerfile dist/$(PROJECT)_linux_amd64_v1/
 
 .PHONY: run
 run: export LOG_LEVEL := debug
