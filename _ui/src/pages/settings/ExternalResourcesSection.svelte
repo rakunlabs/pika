@@ -10,10 +10,11 @@
           X,
           Lock,
           AlertCircle,
-          Pencil,
-          Play,
-          Loader2,
-     } from "lucide-svelte";
+           Pencil,
+           Play,
+           Loader2,
+           Download,
+      } from "lucide-svelte";
      import type { ExternalResource, ProxyMode } from "@/lib/types/config";
      import ExternalResourceEditor from "@/lib/components/external/ExternalResourceEditor.svelte";
      import { backdropClose } from "@/lib/actions/backdropClose";
@@ -383,22 +384,68 @@
      // Inline Test feedback. We don't bother spinning up a banner per row;
      // toast is enough since the user is typically running it to confirm
      // something worked, not to debug a deep failure.
-     let testingName = $state<string | null>(null);
-     async function handleTest(name: string) {
-          if (testingName) return;
-          testingName = name;
-          try {
-               const r = await configStore.testExternal(name);
-               addToast(
-                    r.ok
-                         ? `${name}: ${r.message || "OK"}`
-                         : `${name}: ${r.message || "Failed"}`,
-                    r.ok ? "success" : "alert",
-               );
-          } finally {
-               testingName = null;
-          }
-     }
+      let testingName = $state<string | null>(null);
+      async function handleTest(name: string) {
+           if (testingName) return;
+           testingName = name;
+           try {
+                const r = await configStore.testExternal(name);
+                addToast(
+                     r.ok
+                          ? `${name}: ${r.message || "OK"}`
+                          : `${name}: ${r.message || "Failed"}`,
+                     r.ok ? "success" : "alert",
+                );
+           } finally {
+                testingName = null;
+           }
+      }
+
+      // ── Bulk export ──
+      // Walks the resource's entire key space server-side and streams a
+      // zip back. Deliberately lives only here, in Settings: the route
+      // requires settings.manage (one archive = every secret in the
+      // backend), unlike the per-key reads the External browser page
+      // does with external.read.
+      //
+      // Only Consul and Vault are exportable today — the other backends
+      // either can't be listed (HTTP), bill per API call (AWS/GCP/Azure)
+      // or need scoping decisions we haven't made (Kubernetes). The
+      // button is hidden rather than disabled for the rest, since
+      // "export" is not a thing those resources will ever grow into on
+      // this screen.
+      function isExportable(resource: ExternalResource): boolean {
+           return Boolean(resource.consul || resource.vault);
+      }
+
+      let exportingName = $state<string | null>(null);
+      async function handleExport(name: string) {
+           if (exportingName) return;
+           exportingName = name;
+           try {
+                const { blob, filename } =
+                     await configStore.exportExternalResource(name);
+
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                addToast(`${name}: export downloaded`, "success");
+           } catch (error: any) {
+                addToast(
+                     `${name}: ${error?.message || "Export failed"}`,
+                     "alert",
+                );
+           } finally {
+                exportingName = null;
+           }
+      }
+
 </script>
 
 <div>
@@ -1554,10 +1601,27 @@
                                    {/if}
                               </div>
                          </div>
-                         <div class="flex items-center gap-1 shrink-0">
-                              <button
-                                   class="p-1.5 text-slate-500 dark:text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-950/30 rounded transition-colors cursor-pointer disabled:opacity-50"
-                                   onclick={() => handleTest(name)}
+                          <div class="flex items-center gap-1 shrink-0">
+                               {#if isExportable(resource)}
+                                    <button
+                                         class="p-1.5 text-slate-500 dark:text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-950/30 rounded transition-colors cursor-pointer disabled:opacity-50"
+                                         onclick={() => handleExport(name)}
+                                         disabled={exportingName !== null}
+                                         title="Export all keys as a zip archive"
+                                    >
+                                         {#if exportingName === name}
+                                              <Loader2
+                                                   size={14}
+                                                   class="animate-spin"
+                                              />
+                                         {:else}
+                                              <Download size={14} />
+                                         {/if}
+                                    </button>
+                               {/if}
+                               <button
+                                    class="p-1.5 text-slate-500 dark:text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-950/30 rounded transition-colors cursor-pointer disabled:opacity-50"
+                                    onclick={() => handleTest(name)}
                                    disabled={testingName === name}
                                    title="Test connection"
                               >

@@ -942,6 +942,54 @@ function createConfigStore() {
     }
   }
 
+  // Bulk-export one external resource as a zip archive. The backend
+  // walks the whole key space and streams the archive; the response is
+  // a Blob, so error bodies arrive as Blobs too and have to be decoded
+  // before they can be shown.
+  //
+  // Server-side this route needs settings.manage (not external.read) —
+  // one archive carries every secret the backend holds. Only Consul and
+  // Vault resources are exportable; anything else 400s.
+  //
+  // Returns the archive plus the server-chosen filename so the caller
+  // owns the anchor-click download step.
+  async function exportExternalResource(
+    name: string,
+    prefix?: string,
+  ): Promise<{ blob: Blob; filename: string }> {
+    try {
+      const response = await axios.get(
+        `/api/v1/external/${encodeURIComponent(name)}/export`,
+        { params: prefix ? { prefix } : undefined, responseType: 'blob' }
+      );
+
+      let filename = '';
+      const cd = response.headers['content-disposition'] || '';
+      const m = cd.match(/filename="([^"]+)"/);
+      if (m) filename = m[1];
+      if (!filename) {
+        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        filename = `pika-external-${name}-${ts}.zip`;
+      }
+
+      return {
+        blob: new Blob([response.data], { type: 'application/zip' }),
+        filename,
+      };
+    } catch (error: any) {
+      let msg = error?.response?.data?.message || error?.response?.statusText || error?.message || 'Export failed';
+      if (error?.response?.data instanceof Blob) {
+        try {
+          const parsed = JSON.parse(await error.response.data.text());
+          if (parsed?.message) msg = parsed.message;
+        } catch {
+          // Non-JSON error body — keep the status-derived message.
+        }
+      }
+      throw new Error(msg);
+    }
+  }
+
   // Replace or insert a single external resource entry while preserving the
   // rest of settings.external. Centralised here so the new External page,
   // the existing Settings section, and any future caller all hit the same
@@ -1383,6 +1431,7 @@ function createConfigStore() {
     listExternalPaths,
     searchExternal,
     testExternal,
+    exportExternalResource,
     saveExternalResource,
     renameExternalResource,
     removeExternalResource,

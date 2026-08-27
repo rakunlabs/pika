@@ -168,18 +168,47 @@ type AuthUI struct {
 }
 
 type AuthCookie struct {
-	Name     string `json:"name,omitempty"`
-	Domain   string `json:"domain,omitempty"`
-	Path     string `json:"path,omitempty"`
-	Secure   bool   `json:"secure,omitempty"`
-	HttpOnly bool   `json:"http_only,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Domain string `json:"domain,omitempty"`
+	Path   string `json:"path,omitempty"`
+
+	// Secure forces the Secure attribute on. Leaving it off does not mean
+	// "never": the cookie is marked Secure whenever the request arrived
+	// over TLS. Turn this on when TLS terminates upstream and the proxy
+	// does not forward a protocol hint, so the automatic detection cannot
+	// see it.
+	Secure bool `json:"secure,omitempty"`
+
+	// DisableHTTPOnly exposes the session cookie to JavaScript.
+	//
+	// This is an opt-out, and the reason it is phrased that way: pika
+	// used to carry an opt-in `http_only` flag that defaulted to off,
+	// which meant every install that never opened the setting shipped a
+	// script-readable session cookie. Nothing in the SPA reads it, so
+	// there is no reason to turn this on.
+	DisableHTTPOnly bool `json:"disable_http_only,omitempty"`
+
+	// SameSite is "lax" (default), "strict" or "none".
 	SameSite string `json:"same_site,omitempty"`
 }
 
 type AuthIssuer struct {
-	AccessTTL     time.Duration `json:"access_ttl,omitempty"`
-	RefreshTTL    time.Duration `json:"refresh_ttl,omitempty"`
-	RotateRefresh bool          `json:"rotate_refresh,omitempty"`
+	AccessTTL  time.Duration `json:"access_ttl,omitempty"`
+	RefreshTTL time.Duration `json:"refresh_ttl,omitempty"`
+
+	// DisableRefreshRotation turns off refresh-token rotation.
+	//
+	// Rotation is on by default: each refresh mints a new token and
+	// invalidates the old one, so a stolen refresh token is usable at
+	// most once. Turn it off only if several clients share one session
+	// and would race each other out of it — not a shape pika's browser
+	// sessions take.
+	//
+	// Like DisableHTTPOnly, this replaces an opt-in flag (`rotate_refresh`)
+	// that defaulted to the weaker behaviour. Settings persisted with
+	// either value of the old field land on rotation-enabled after the
+	// rename, which is the safe direction.
+	DisableRefreshRotation bool `json:"disable_refresh_rotation,omitempty"`
 }
 
 type LocalStrategySettings struct {

@@ -6,13 +6,15 @@ This page is a high-level map. For the consumer-facing read endpoint, see [Consu
 
 ## Authentication
 
-Two equivalent options:
+Two options:
 
-- **Session cookie** — set automatically after you log in to the UI. Useful when scripting against your own browser session.
-- **Bearer token** — `Authorization: Bearer pika_...`. The token must hold a capability that covers the requested operation.
+- **Session cookie** — set automatically after you log in to the UI. Authorized by the user's [capabilities](./tokens-and-scopes#tokens-on-the-admin-api) and path patterns.
+- **Bearer token** — `Authorization: Bearer pika_...`. Authorized by the token's path [scopes](./tokens-and-scopes) and their operations.
 
-::: tip
-Token capabilities for admin operations are different from path scopes used on `/data/*`. A token holds a list of capabilities (`files.read`, `settings.manage`, …). The list is set when the token is created.
+A request carrying a Bearer token is authorized as that token even if it also carries a session cookie, so a narrow token never inherits a wider browser session. A request with no credentials is redirected to the login UI; a request with a rejected token gets `401`.
+
+::: warning Tokens reach configurations only
+A token's scopes map onto `files.read` / `files.write` and stop there. Every endpoint below gated on `settings.manage`, `tokens.manage`, `users.manage`, `permissions.manage` or `external.*` returns `403` for a token, whatever its scopes. See [Tokens on the admin API](./tokens-and-scopes#tokens-on-the-admin-api).
 :::
 
 ## Discovery
@@ -67,6 +69,17 @@ Browse and operate on configured external backends (Vault, Consul, etcd, AWS, Az
 | `POST` | `/api/v1/external/{name}/versions`    | `external.read`  | List historical versions (KV backends that support it).              |
 | `POST` | `/api/v1/external/{name}/version`     | `external.read`  | Read a specific version of an entry.                                 |
 | `GET`  | `/api/v1/external/{name}/search`      | `external.read`  | Search within the resource.                                          |
+| `GET`  | `/api/v1/external/{name}/export`      | `settings.manage` | Download the whole resource as a zip archive (Consul / Vault only). Optional `prefix` and `limit` query params. |
+
+Bulk export is the one exception to the `external.*` gating above: a single read exposes one secret, an export hands the caller every secret the backend holds in one file, so it requires `settings.manage` and is surfaced only in **Settings → External Resources**. Archive layout mirrors the key space — `myapp/db/password` becomes a file at that path (raw value for Consul, `<path>.json` for Vault secret maps). Unreadable paths and truncation (`limit`, default 20000 keys) are reported in `_errors.txt` inside the archive.
+
+## MCP
+
+| Method | Path          | Capability                                    | Purpose                                                                                    |
+| ------ | ------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `POST` | `/api/v1/mcp` | token scopes _or_ `files.*` / `external.*`     | Model Context Protocol endpoint (streamable HTTP) for AI agents — see [MCP server](./mcp). |
+
+Like `/data/*`, this endpoint authenticates itself and accepts either credential: an API token (authorized by its path scopes and operations) or a UI session (authorized by capabilities and path patterns). Bearer takes precedence over a cookie. The tool list an agent receives is filtered to what the caller may actually do, so a read-only token gets a read-only tool set and a token — which holds no capabilities — never sees the external-resource tools.
 
 ## Users, permissions, tokens
 

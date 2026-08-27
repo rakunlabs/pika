@@ -7,19 +7,20 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/dgraph-io/badger/v4 v4.9.1
 	github.com/goccy/go-yaml v1.19.2
+	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/nats-io/nats.go v1.50.0
-	github.com/rakunlabs/ada v0.4.5
-	github.com/rakunlabs/ada/handler/folder v0.4.5
-	github.com/rakunlabs/ada/middleware/auth v0.4.5
-	github.com/rakunlabs/ada/middleware/cors v0.4.5
-	github.com/rakunlabs/ada/middleware/log v0.4.5
-	github.com/rakunlabs/ada/middleware/ratelimit v0.4.5
-	github.com/rakunlabs/ada/middleware/recover v0.4.5
-	github.com/rakunlabs/ada/middleware/requestid v0.4.5
-	github.com/rakunlabs/ada/middleware/server v0.4.5
-	github.com/rakunlabs/ada/middleware/telemetry v0.4.5
+	github.com/rakunlabs/ada v0.4.7
+	github.com/rakunlabs/ada/handler/folder v0.4.7
+	github.com/rakunlabs/ada/middleware/auth v0.4.9
+	github.com/rakunlabs/ada/middleware/cors v0.4.7
+	github.com/rakunlabs/ada/middleware/log v0.4.7
+	github.com/rakunlabs/ada/middleware/ratelimit v0.4.7
+	github.com/rakunlabs/ada/middleware/recover v0.4.7
+	github.com/rakunlabs/ada/middleware/requestid v0.4.7
+	github.com/rakunlabs/ada/middleware/server v0.4.7
+	github.com/rakunlabs/ada/middleware/telemetry v0.4.7
 	github.com/rakunlabs/alan v0.5.0
-	github.com/rakunlabs/bw v0.3.0
+	github.com/rakunlabs/bw v0.3.14
 	github.com/rakunlabs/chu v0.4.7
 	github.com/rakunlabs/chu/loader/external/loaderconsul v0.0.0-20260528194425-7d41650a9186
 	github.com/rakunlabs/chu/loader/external/loadergcpparameter v0.0.0-20260528194425-7d41650a9186
@@ -28,7 +29,7 @@ require (
 	github.com/rakunlabs/into v0.5.3
 	github.com/rakunlabs/logi v0.4.5
 	github.com/rakunlabs/ok v0.1.0
-	github.com/rakunlabs/query v0.4.6
+	github.com/rakunlabs/query v0.4.10
 	github.com/rakunlabs/tell v0.1.5
 	github.com/rakunlabs/tummy v0.1.2
 	github.com/redis/go-redis/v9 v9.18.0
@@ -62,9 +63,10 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/gomarkdown/markdown v0.0.0-20250810172220-2e2c11897d1a // indirect
 	github.com/google/flatbuffers v25.2.10+incompatible // indirect
+	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.14 // indirect
@@ -108,6 +110,8 @@ require (
 	github.com/ryanuber/go-glob v1.0.0 // indirect
 	github.com/rytsh/liz/file v0.1.4 // indirect
 	github.com/rytsh/liz/shutdown v0.1.0 // indirect
+	github.com/segmentio/asm v1.1.3 // indirect
+	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
@@ -119,6 +123,7 @@ require (
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/worldline-go/struct2 v1.4.0 // indirect
 	github.com/xhit/go-str2duration/v2 v2.1.0 // indirect
+	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.61.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.68.0 // indirect

@@ -1,12 +1,11 @@
 package authx
 
 import (
-	"context"
 	"encoding/json"
-	"net"
+	"log/slog"
 	"net/http"
 
-	"github.com/rakunlabs/ada/middleware/auth/identity"
+	"github.com/rakunlabs/ada/middleware/auth/guard"
 	"github.com/rakunlabs/ada/middleware/auth/strategy"
 	authheader "github.com/rakunlabs/ada/middleware/auth/strategy/header"
 
@@ -14,106 +13,56 @@ import (
 )
 
 // BuildHeader constructs the header strategy from settings. Returns nil when
-// settings are absent. When TrustedProxies is non-empty, wraps the strategy
-// with a CIDR guard that rejects requests from untrusted source IPs.
+// settings are absent.
+//
+// The trust boundary is ada's now. pika used to wrap the strategy in its own
+// CIDR guard; the strategy enforces the same check internally, and doing it
+// there means the shared-secret option composes with it and a rejected caller
+// gets the same answer as one with no header at all — an outsider learns
+// nothing about why it failed.
+//
+// Header auth has no verifier by construction: whoever can set
+// X-Forwarded-User is whoever the request claims to be. Without
+// TrustedProxies that is only sound on a network where nothing but the proxy
+// can reach this port, so a deployment that leaves it empty gets a warning
+// from ada at construction — worth reading rather than silencing.
 func BuildHeader(s *service.HeaderStrategySettings) strategy.Authenticator {
 	if s == nil {
 		return nil
 	}
+
 	name := s.Name
 	if name == "" {
 		name = "header"
 	}
 
-	m := authheader.HeaderMap{
-		User:   s.User,
-		Email:  s.Email,
-		Name:   s.DisplayName,
-		Roles:  s.Roles,
-		Groups: s.Groups,
+	opts := []authheader.Option{
+		authheader.WithHeaderMap(authheader.HeaderMap{
+			User:   s.User,
+			Email:  s.Email,
+			Name:   s.DisplayName,
+			Roles:  s.Roles,
+			Groups: s.Groups,
+		}),
 	}
 
-	base := authheader.New(name, authheader.WithHeaderMap(m))
-	if len(s.TrustedProxies) == 0 {
-		return base
-	}
-	return &trustedProxiesStrategy{inner: base, cidrs: parseCIDRs(s.TrustedProxies)}
-}
-
-type trustedProxiesStrategy struct {
-	inner strategy.Authenticator
-	cidrs []*net.IPNet
-}
-
-func (t *trustedProxiesStrategy) Name() string { return t.inner.Name() }
-func (t *trustedProxiesStrategy) Descriptor() strategy.Descriptor {
-	return t.inner.Descriptor()
-}
-
-func (t *trustedProxiesStrategy) Login(w http.ResponseWriter, r *http.Request) (*identity.Identity, strategy.Outcome, error) {
-	if !t.trusted(r) {
-		writeJSONErr(w, http.StatusForbidden, "untrusted_proxy", "request from untrusted source")
-		return nil, strategy.OutcomeFailed, nil
-	}
-	return t.inner.Login(w, r)
-}
-
-func (t *trustedProxiesStrategy) Logout(ctx context.Context, id *identity.Identity) error {
-	return t.inner.Logout(ctx, id)
-}
-
-func (t *trustedProxiesStrategy) trusted(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-	for _, c := range t.cidrs {
-		if c.Contains(ip) {
-			return true
+	// Validate before handing the list over: ada panics on a malformed
+	// CIDR, and these values come from an editable settings form that is
+	// re-applied on every hot reload. A typo must not take the server
+	// down — but it must not silently widen the boundary either, so an
+	// unusable list is dropped whole and logged.
+	if len(s.TrustedProxies) > 0 {
+		if _, err := guard.ParseCIDRs(s.TrustedProxies); err != nil {
+			slog.Error("header strategy: ignoring trusted_proxies, list is not parseable",
+				"strategy", name,
+				"error", err.Error(),
+			)
+		} else {
+			opts = append(opts, authheader.WithTrustedProxies(s.TrustedProxies...))
 		}
 	}
-	return false
-}
 
-// wrapTrustedProxies is a test helper — exposes the CIDR check as an
-// http.Handler wrapper for unit-test isolation.
-func wrapTrustedProxies(next http.Handler, cidrs []string) http.Handler {
-	parsed := parseCIDRs(cidrs)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if len(parsed) == 0 {
-			next.ServeHTTP(w, r)
-			return
-		}
-		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if host == "" {
-			host = r.RemoteAddr
-		}
-		ip := net.ParseIP(host)
-		if ip != nil {
-			for _, c := range parsed {
-				if c.Contains(ip) {
-					next.ServeHTTP(w, r)
-					return
-				}
-			}
-		}
-		w.WriteHeader(http.StatusForbidden)
-	})
-}
-
-func parseCIDRs(raw []string) []*net.IPNet {
-	out := make([]*net.IPNet, 0, len(raw))
-	for _, s := range raw {
-		_, n, err := net.ParseCIDR(s)
-		if err == nil {
-			out = append(out, n)
-		}
-	}
-	return out
+	return authheader.New(name, opts...)
 }
 
 func writeJSONErr(w http.ResponseWriter, status int, code, msg string) {

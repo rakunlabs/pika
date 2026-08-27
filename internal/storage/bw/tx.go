@@ -77,6 +77,13 @@ func (t *txStorage) Restore(r io.Reader) error {
 	return t.base.Restore(r)
 }
 
+// ApplyBackup forwards to the underlying *bw.DB. Like Restore, this is
+// never called from inside a Tx in practice — the interface requires
+// the method, so it forwards.
+func (t *txStorage) ApplyBackup(r io.Reader) error {
+	return t.base.ApplyBackup(r)
+}
+
 // Wipe forwards to the underlying *bw.DB. Calling Wipe inside a tx
 // is pathological — Badger's DropAll blocks all writes — but the
 // interface requires the method, so we forward it. The caller is

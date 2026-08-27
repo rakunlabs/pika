@@ -138,6 +138,15 @@ type EffectiveReport struct {
 // for the operator Superadmins allowlist, which is an explicit break-glass
 // escape hatch and is never reduced by deny.
 func (r *CapResolver) resolveDetailed(ctx context.Context, id *identity.Identity) *EffectiveReport {
+	// API tokens are resolved from their own scope model and share none
+	// of the machinery below. This branch must come first: a token is
+	// named by its operator, and the superadmin allowlist matches on
+	// id.Subject — so a token merely named after a superadmin would
+	// otherwise be handed the full capability set.
+	if id.Provider == service.TokenProvider {
+		return tokenReport(id)
+	}
+
 	rep := &EffectiveReport{
 		Username:     id.Subject,
 		Roles:        []string{},

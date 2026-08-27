@@ -1,6 +1,6 @@
 # Tokens & scopes
 
-API tokens authenticate non-human consumers against `/data/*` (resolved configs) and the admin API (`/api/v1/*`). Each token has a list of **scopes** (path-based read/write/delete on data plane) and an optional list of **capabilities** (named permissions for admin operations).
+API tokens authenticate non-human consumers against `/data/*` (resolved configs), the configuration endpoints of the admin API (`/api/v1/*`), and the [MCP endpoint](./mcp). A token carries one thing: a list of **scopes**, each pairing a path glob with a set of operations.
 
 ## Token format
 
@@ -52,14 +52,16 @@ Scopes apply to `/data/{path}` on the admin port and to `static` / `consul` / `c
 
 ### Operations
 
-| Operation | Effect on `/data/*`                              |
-| --------- | ------------------------------------------------ |
-| `read`    | `GET /data/...` succeeds.                        |
-| `write`   | Reserved. The HTTP data plane is read-only — config writes go through `/api/v1/file/...` and are gated by **capabilities**, not scopes. |
-| `delete`  | Reserved (same reason).                          |
-| `*`       | All of the above.                                |
+| Operation | Grants                                                                                          |
+| --------- | ----------------------------------------------------------------------------------------------- |
+| `read`    | `GET /data/...`, and reading configurations through `/api/v1/*` and MCP.                         |
+| `write`   | Creating and updating configurations through `/api/v1/file/...`, `/api/v1/folder/...` and MCP.   |
+| `delete`  | Deleting configurations and folders.                                                            |
+| `*`       | All of the above.                                                                               |
 
 A token without any matching `read` scope gets `403 Forbidden` from `/data/*`.
+
+The data plane itself is read-only — there is no `POST /data/...` — so `write` and `delete` only ever take effect on the admin API and MCP.
 
 ### Examples
 
@@ -97,27 +99,28 @@ Mint one token per tenant with a scope like:
 ]
 ```
 
-Use sparingly — `**` + `*` is a master key for `/data/*`.
+Use sparingly — `**` + `*` is a master key for every configuration in the server.
 
-## Capabilities (admin operations)
+## Tokens on the admin API
 
-Tokens used against the admin API (`/api/v1/...`) check **capabilities**, not scopes. Set them when creating the token. The keys are the same as for [user permissions](/guide/authentication#capabilities) — `internal/service/capabilities.go` is the source of truth:
+Users are authorized by named [capabilities](/guide/authentication#capabilities); tokens are authorized by scopes. When a token calls `/api/v1/*`, pika projects its scopes onto the capability vocabulary the routes check:
 
-| Key                  | Grants                                                                       |
-| -------------------- | ---------------------------------------------------------------------------- |
-| `files.read`         | View folders, files, versions, variants, render and search configurations.    |
-| `files.write`        | Create, update and delete folders and configuration files.                    |
-| `external.read`      | Browse, search and read entries from configured external resources (Vault, Consul, etcd, AWS, Azure, GCP, Kubernetes, HTTP, ...). |
-| `external.write`     | Create, update and delete entries on configured external resources.           |
-| `settings.manage`    | View and modify server settings, run backup/restore, drive the server encryption-key lifecycle (initialize / unlock / lock / rotate). |
-| `tokens.manage`      | Create, edit and revoke API access tokens.                                    |
-| `users.manage`       | Create, edit, delete and kick users (built-in auth only).                     |
-| `permissions.manage` | Define permission bundles and assign them to users.                           |
+| Token operation | Derived capability | Restricted to             |
+| --------------- | ------------------ | ------------------------- |
+| `read`          | `files.read`       | the paths granting `read` |
+| `write`         | `files.write`      | the paths granting `write` |
+| `delete`        | `files.write`      | the paths granting `delete` |
 
-A token with no capabilities can still consume `/data/*` (subject to its scopes); it just can't call any admin endpoint.
+So a token scoped `{ "path": "team-a/**", "operations": ["read"] }` can list and read configurations under `team-a/`, and nothing else.
+
+::: warning Tokens cannot administer the server
+The derivation stops at `files.*`. There is no scope that yields `settings.manage`, `tokens.manage`, `users.manage`, `permissions.manage`, `external.read` or `external.write`, so those endpoints return `403` for every token regardless of its scopes. Server administration, external secret backends and token management require a logged-in user.
+
+This is the ceiling on a leaked token: configuration data within its paths, never the server itself.
+:::
 
 ::: info Superadmin
-A "superadmin" user holds every key in the list above implicitly. The forward-auth / OAuth2 **Superadmins** allowlist promotes matching identities to the same status. There is no separate `*` capability — superadmin is a user attribute, not a token attribute.
+Superadmin is a user attribute, not a token attribute. A superadmin user holds every capability implicitly; the forward-auth / OAuth2 **Superadmins** allowlist promotes matching identities to the same status. A token named after a superadmin gets nothing from that — token identities are resolved from their scopes before the allowlist is ever consulted.
 :::
 
 ## Rotation and revocation

@@ -31,6 +31,7 @@ Open `http://localhost:8080` to access the web UI.
 - Event hooks (HTTP webhooks, Kafka, Redis Pub/Sub, NATS)
 - Inline editor with syntax validation (JSON, YAML, TOML)
 - Personal vault (client-side end-to-end encrypted passwords, TOTP, SSH keys, …)
+- Built-in MCP server so AI agents can browse and edit configs under your existing token permissions
 
 ## Consuming Configs
 
@@ -185,6 +186,27 @@ Targets support a Go `text/template` body template for customizing the event pay
 TLS certificate file paths in hook targets (Kafka, Redis) support references to files stored in Pika itself:
 - `config://key` — read from the config store
 - Plain file paths are also supported
+
+## MCP Server
+
+Pika serves a [Model Context Protocol](https://modelcontextprotocol.io) endpoint so AI agents can search, read and edit configurations without you pasting them into a chat. It is part of the binary — nothing extra to run.
+
+```
+POST /api/v1/mcp
+```
+
+Connect with an API token, for example with Claude Code:
+
+```sh
+claude mcp add --transport http pika http://localhost:8080/api/v1/mcp \
+  --header "Authorization: Bearer pika_abc123..."
+```
+
+The endpoint reuses pika's existing authorization rather than adding a parallel one. It accepts the same two credentials as `/data/*` — an API token (authorized by its path scopes and operations) or a UI session cookie (authorized by capabilities and path patterns) — and enforces them per tool call. The tool list is filtered to what the caller may actually do, folder listings hide out-of-scope entries, search never leaks a path you cannot read, and writes are attributed in version history.
+
+So a token scoped `read` on `team-a/**` yields an agent with a read-only tool set that cannot see, search or even list anything outside that subtree.
+
+Tools cover config search, folder browsing, reading stored source vs. fully resolved values, version and variant history, writes and deletes, plus the same operations against configured external backends. See [docs/guide/mcp.md](_docs/guide/mcp.md).
 
 ## Configuration
 

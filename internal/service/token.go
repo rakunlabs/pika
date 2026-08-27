@@ -189,29 +189,62 @@ func (s *Service) PatchToken(ctx context.Context, id string, req *PatchTokenRequ
 	return s.store.Tokens().Update(ctx, token)
 }
 
+// TokenAuth is the validated, non-secret view of an API token. It exists
+// for callers that make several authorization decisions for a single
+// request (the MCP endpoint resolves one tool call against the tree, then
+// filters a whole result set) and would otherwise re-read and re-validate
+// the token for each one.
+type TokenAuth struct {
+	ID     string       `json:"id"`
+	Name   string       `json:"name"`
+	Scopes []TokenScope `json:"scopes"`
+}
+
+// AuthenticateToken validates a raw token key and returns its identity and
+// scope list. It performs the existence / active / expiry checks only —
+// per-path authorization is left to TokenScopesAllow so the caller can
+// evaluate many paths against one lookup.
+func (s *Service) AuthenticateToken(ctx context.Context, rawKey string) (*TokenAuth, error) {
+	token, err := s.store.Tokens().FindByHash(ctx, hashKey(rawKey))
+	if err != nil {
+		return nil, fmt.Errorf("invalid token: %w", ErrUnauthorized)
+	}
+
+	if !token.Active {
+		return nil, fmt.Errorf("token is disabled: %w", ErrForbidden)
+	}
+
+	if token.ExpiresAt != nil && time.Now().After(*token.ExpiresAt) {
+		return nil, fmt.Errorf("token has expired: %w", ErrForbidden)
+	}
+
+	return &TokenAuth{ID: token.ID, Name: token.Name, Scopes: token.Scopes}, nil
+}
+
+// TokenScopesAllow reports whether the scope set permits the operation on
+// configPath. This is the single definition of token path authorization —
+// ValidateToken and every other caller share it so no second, subtly
+// different matcher can drift into existence.
+func TokenScopesAllow(scopes []TokenScope, configPath, operation string) bool {
+	for _, scope := range scopes {
+		if matchPath(scope.Path, configPath) && containsOperation(scope.Operations, operation) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // ValidateToken validates a raw token key and checks if it has permission
 // for the given config path and operation.
 func (s *Service) ValidateToken(ctx context.Context, rawKey string, configPath string, operation string) error {
-	hashed := hashKey(rawKey)
-
-	matchedToken, err := s.store.Tokens().FindByHash(ctx, hashed)
+	auth, err := s.AuthenticateToken(ctx, rawKey)
 	if err != nil {
-		return fmt.Errorf("invalid token: %w", ErrUnauthorized)
+		return err
 	}
 
-	if !matchedToken.Active {
-		return fmt.Errorf("token is disabled: %w", ErrForbidden)
-	}
-
-	if matchedToken.ExpiresAt != nil && time.Now().After(*matchedToken.ExpiresAt) {
-		return fmt.Errorf("token has expired: %w", ErrForbidden)
-	}
-
-	// Check scopes
-	for _, scope := range matchedToken.Scopes {
-		if matchPath(scope.Path, configPath) && containsOperation(scope.Operations, operation) {
-			return nil // Authorized
-		}
+	if TokenScopesAllow(auth.Scopes, configPath, operation) {
+		return nil
 	}
 
 	return fmt.Errorf("token does not have permission for %s on %q: %w", operation, configPath, ErrForbidden)
@@ -291,34 +324,61 @@ func (s *Service) findTokenByHash(ctx context.Context, hashed string) (*Token, e
 	return s.store.Tokens().FindByHash(ctx, hashed)
 }
 
+// TokenProvider is the Identity.Provider value stamped on an API-token
+// identity. Consumers key off this to tell a token apart from a human
+// session — the two are authorized by different models (scopes vs
+// capability bundles) and must never be conflated.
+const TokenProvider = "apikey"
+
+// TokenScopesClaim is the identity-claim key carrying the token's
+// validated scope list.
+//
+// The flat "operations" and Identity.Scopes claims below lose the
+// path↔operation pairing, which is exactly the part authorization needs:
+// a token may be read-only on one prefix and writable on another.
+// Carrying the structured scopes lets the capability resolver reproduce
+// the token's real reach instead of approximating it.
+//
+// API-token identities are never persisted (no session is minted for
+// them), so this claim stays an in-process value and never has to
+// survive a JSON round-trip.
+const TokenScopesClaim = "pika_token_scopes"
+
+// TokenScopesFromIdentity returns the scope list stamped on an API-token
+// identity, or nil for any other identity.
+func TokenScopesFromIdentity(id *identity.Identity) []TokenScope {
+	if id == nil || id.Provider != TokenProvider {
+		return nil
+	}
+
+	scopes, _ := id.Claims[TokenScopesClaim].([]TokenScope)
+
+	return scopes
+}
+
 // ValidateTokenIdentity validates the raw key and returns an *identity.Identity
 // populated with the token's metadata. Returns ErrUnauthorized for unknown
 // keys, ErrForbidden for disabled/expired tokens.
 func (s *Service) ValidateTokenIdentity(ctx context.Context, rawKey string) (*identity.Identity, error) {
-	hashed := hashKey(rawKey)
-	token, err := s.store.Tokens().FindByHash(ctx, hashed)
+	auth, err := s.AuthenticateToken(ctx, rawKey)
 	if err != nil {
-		return nil, fmt.Errorf("invalid token: %w", ErrUnauthorized)
-	}
-	if !token.Active {
-		return nil, fmt.Errorf("token disabled: %w", ErrForbidden)
-	}
-	if token.ExpiresAt != nil && time.Now().After(*token.ExpiresAt) {
-		return nil, fmt.Errorf("token expired: %w", ErrForbidden)
+		return nil, err
 	}
 
-	scopes := make([]string, 0, len(token.Scopes))
-	for _, sc := range token.Scopes {
+	scopes := make([]string, 0, len(auth.Scopes))
+	for _, sc := range auth.Scopes {
 		scopes = append(scopes, sc.Path)
 	}
+
 	return &identity.Identity{
-		Subject:  token.Name,
-		Name:     token.Name,
-		Provider: "apikey",
+		Subject:  auth.Name,
+		Name:     auth.Name,
+		Provider: TokenProvider,
 		Scopes:   scopes,
 		Claims: map[string]any{
-			"token_id":   token.ID,
-			"operations": flatOps(token.Scopes),
+			"token_id":       auth.ID,
+			"operations":     flatOps(auth.Scopes),
+			TokenScopesClaim: auth.Scopes,
 		},
 		IssuedAt: time.Now(),
 	}, nil

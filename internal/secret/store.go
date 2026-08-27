@@ -151,6 +151,11 @@ func (s *Storage) Restore(r io.Reader) error {
 	return s.backend.Restore(r)
 }
 
+// ApplyBackup forwards to the backend's merge-restore.
+func (s *Storage) ApplyBackup(r io.Reader) error {
+	return s.backend.ApplyBackup(r)
+}
+
 // Wipe forwards to the backend's Wipe.
 func (s *Storage) Wipe() error {
 	return s.backend.Wipe()

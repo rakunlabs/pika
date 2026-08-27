@@ -185,13 +185,19 @@ func (s *Service) Restore(ctx context.Context, r io.Reader, opts RestoreOptions)
 	// already cover the realistic failure modes (truncation,
 	// corruption, wrong password).
 
+	// The two options map onto two distinct storage operations. Restore
+	// drops the database before loading the stream, which is exactly
+	// what Wipe asks for — issuing a separate Wipe first would only
+	// double the DropAll. ApplyBackup is the merge.
+	//
+	// Keeping these apart is the whole point: reaching for Restore on
+	// the merge path would silently delete every key the backup does
+	// not mention, which is data loss the caller explicitly opted out of.
 	if opts.Wipe {
-		if err := s.store.Wipe(); err != nil {
-			return fmt.Errorf("wipe before restore: %w", err)
-		}
+		return s.store.Restore(bytes.NewReader(payload))
 	}
 
-	return s.store.Restore(bytes.NewReader(payload))
+	return s.store.ApplyBackup(bytes.NewReader(payload))
 }
 
 // PeekBackup parses just the header of r and returns it. The reader is

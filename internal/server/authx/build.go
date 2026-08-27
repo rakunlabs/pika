@@ -2,9 +2,12 @@ package authx
 
 import (
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rakunlabs/ada/middleware/auth"
+	"github.com/rakunlabs/ada/middleware/auth/cookie"
 	"github.com/rakunlabs/ada/middleware/auth/issuer"
 	"github.com/rakunlabs/ada/middleware/auth/session"
 	"github.com/rakunlabs/ada/middleware/auth/sessionstore"
@@ -53,18 +56,61 @@ func buildAuthConfig(s *service.AuthSettings, base, version string, signupFirstF
 		},
 		CookieName: cookieName,
 		Cookie: session.CookieOptions{
-			Path:     s.Cookie.Path,
-			Domain:   s.Cookie.Domain,
-			Secure:   s.Cookie.Secure,
-			HttpOnly: s.Cookie.HttpOnly,
+			Path:   s.Cookie.Path,
+			Domain: s.Cookie.Domain,
+			// ada's Secure is a tri-state; pika's setting stays a
+			// checkbox. Ticked means "always", which is what an operator
+			// asking for Secure wants. Unticked means "auto" rather than
+			// "never": Secure is set when the request came over TLS and
+			// omitted when it did not, so an https deployment stops
+			// leaking its session cookie over a stray plaintext request
+			// without anyone having to notice the setting, and local
+			// http development keeps working.
+			//
+			// "never" is deliberately unreachable — it differs from
+			// "auto" only on TLS requests, where dropping Secure is
+			// never the right answer.
+			Secure:   secureMode(s.Cookie.Secure),
+			SameSite: sameSite(s.Cookie.SameSite),
+			// DisableHTTPOnly is an opt-out; the zero value keeps the
+			// session cookie hidden from scripts.
+			DisableHTTPOnly: s.Cookie.DisableHTTPOnly,
 		},
 		IssuerConfig: issuer.Config{
-			AccessTTL:     s.Issuer.AccessTTL,
-			RefreshTTL:    s.Issuer.RefreshTTL,
-			RotateRefresh: s.Issuer.RotateRefresh,
+			AccessTTL:  s.Issuer.AccessTTL,
+			RefreshTTL: s.Issuer.RefreshTTL,
+			// Also an opt-out: refresh rotation is on unless a
+			// deployment turns it off, so a leaked refresh token is
+			// usable at most once.
+			DisableRefreshRotation: s.Issuer.DisableRefreshRotation,
 		},
 	}
 	return cfg
+}
+
+func secureMode(always bool) cookie.SecureMode {
+	if always {
+		return cookie.SecureAlways
+	}
+
+	return cookie.SecureAuto
+}
+
+// sameSite parses the persisted setting. An unset or unrecognized value
+// falls through to ada's Lax default rather than failing the boot — a typo
+// in a settings field should not take the server down, and Lax is the safe
+// end of the range.
+func sameSite(v string) http.SameSite {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "strict":
+		return http.SameSiteStrictMode
+	case "lax":
+		return http.SameSiteLaxMode
+	case "none":
+		return http.SameSiteNoneMode
+	default:
+		return 0
+	}
 }
 
 // buildStrategies translates AuthSettings → concrete strategies.

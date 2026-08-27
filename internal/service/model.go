@@ -62,11 +62,19 @@ type Storage interface {
 	// database to the exact state it had at a known checkpoint.
 	BackupUntil(w io.Writer, until uint64) (uint64, error)
 
-	// Restore replays a backup stream into the database. Restore is an
-	// upsert: existing keys are overwritten where they overlap with the
-	// stream, but keys absent from the stream are NOT removed. Callers
-	// that want a true "replace" must call Wipe first.
+	// Restore replaces the database with the contents of the stream.
+	// Keys present in the running database but absent from the stream
+	// are removed — this is a swap, not a merge. Use ApplyBackup for
+	// merge semantics.
+	//
+	// Destructive and irreversible; callers gating it behind a
+	// confirmation prompt is strongly recommended.
 	Restore(r io.Reader) error
+
+	// ApplyBackup merges a backup stream into the database. Existing
+	// keys are overwritten where they overlap with the stream, but keys
+	// absent from the stream are preserved.
+	ApplyBackup(r io.Reader) error
 
 	// Wipe removes every key from the database in one operation —
 	// data, indexes, unique reservations, and bw schema metadata.

@@ -86,6 +86,7 @@ export default defineConfig({
           text: 'API',
           items: [
             { text: 'Admin API', link: '/guide/api' },
+            { text: 'MCP server', link: '/guide/mcp' },
           ],
         },
       ],

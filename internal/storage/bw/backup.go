@@ -1,6 +1,7 @@
 package bw
 
 import (
+	"fmt"
 	"io"
 )
 
@@ -27,16 +28,51 @@ func (s *Storage) BackupUntil(w io.Writer, until uint64) (uint64, error) {
 	return s.db.BackupUntil(w, until)
 }
 
-// Restore replays a Badger streaming backup into the database. Existing
-// data with overlapping keys is overwritten by the restore stream.
-//
-// Important: Restore does NOT wipe keys that exist in the current DB but
-// are absent from the backup stream — it's an upsert, not a swap.
+// Restore replaces the database with the contents of a Badger streaming
+// backup: bw drops every existing key first, so keys absent from the
+// stream do not survive. Use ApplyBackup when you want a merge.
 func (s *Storage) Restore(r io.Reader) error {
 	if s == nil || s.db == nil {
 		return nil
 	}
-	return s.db.Restore(r)
+
+	return s.reregisterAfter(s.db.Restore(r))
+}
+
+// ApplyBackup merges a Badger streaming backup into the database.
+// Existing data with overlapping keys is overwritten by the stream, but
+// keys absent from it are preserved.
+func (s *Storage) ApplyBackup(r io.Reader) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+
+	return s.reregisterAfter(s.db.ApplyBackup(r))
+}
+
+// reregisterAfter re-opens every bucket once a restore has settled.
+//
+// bw invalidates the cached bucket handles whenever a restore replaces
+// the on-disk schema state underneath them (Restore always, ApplyBackup
+// for the buckets whose schema actually changed), and every subsequent
+// operation on a stale handle fails with bw.ErrStaleBucket. The handles
+// are long-lived fields on Storage, so without this the process would
+// keep serving errors until it was restarted.
+//
+// Re-registration runs even when the restore failed: bw invalidates on
+// its error paths too, and a half-applied restore that leaves the
+// process permanently broken is worse than one that leaves it merely
+// inconsistent — which the caller already has to handle.
+func (s *Storage) reregisterAfter(restoreErr error) error {
+	if err := s.registerBuckets(); err != nil {
+		if restoreErr != nil {
+			return restoreErr
+		}
+
+		return fmt.Errorf("re-registering buckets after restore: %w", err)
+	}
+
+	return restoreErr
 }
 
 // Version returns the current monotonic transaction version of the

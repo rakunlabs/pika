@@ -61,13 +61,13 @@
             domain?: string;
             path?: string;
             secure?: boolean;
-            http_only?: boolean;
+            disable_http_only?: boolean;
             same_site?: string;
         };
         issuer?: {
             access_ttl?: number;
             refresh_ttl?: number;
-            rotate_refresh?: boolean;
+            disable_refresh_rotation?: boolean;
         };
         local?: {
             enabled: boolean;
@@ -163,13 +163,13 @@
     let cookieDomain = $state("");
     let cookiePath = $state("");
     let cookieSecure = $state(false);
-    let cookieHttpOnly = $state(false);
+    let cookieDisableHttpOnly = $state(false);
     let cookieSameSite = $state("");
 
     // Issuer fields
     let issuerAccessTTL = $state<number | "">("");
     let issuerRefreshTTL = $state<number | "">("");
-    let issuerRotateRefresh = $state(false);
+    let issuerDisableRefreshRotation = $state(false);
 
     // Local strategy
     let localEnabled = $state(false);
@@ -339,12 +339,13 @@
         cookieDomain = auth.cookie?.domain ?? "";
         cookiePath = auth.cookie?.path ?? "";
         cookieSecure = auth.cookie?.secure ?? false;
-        cookieHttpOnly = auth.cookie?.http_only ?? false;
+        cookieDisableHttpOnly = auth.cookie?.disable_http_only ?? false;
         cookieSameSite = auth.cookie?.same_site ?? "";
 
         issuerAccessTTL = auth.issuer?.access_ttl ?? "";
         issuerRefreshTTL = auth.issuer?.refresh_ttl ?? "";
-        issuerRotateRefresh = auth.issuer?.rotate_refresh ?? false;
+        issuerDisableRefreshRotation =
+            auth.issuer?.disable_refresh_rotation ?? false;
 
         localEnabled = auth.local?.enabled ?? false;
         localName = auth.local?.name ?? "";
@@ -420,7 +421,7 @@
         if (cookieDomain) cookieBlock.domain = cookieDomain;
         if (cookiePath) cookieBlock.path = cookiePath;
         if (cookieSecure) cookieBlock.secure = true;
-        if (cookieHttpOnly) cookieBlock.http_only = true;
+        if (cookieDisableHttpOnly) cookieBlock.disable_http_only = true;
         if (cookieSameSite) cookieBlock.same_site = cookieSameSite;
         if (Object.keys(cookieBlock).length > 0) auth.cookie = cookieBlock;
 
@@ -430,7 +431,8 @@
             issuerBlock.access_ttl = Number(issuerAccessTTL);
         if (issuerRefreshTTL !== "")
             issuerBlock.refresh_ttl = Number(issuerRefreshTTL);
-        if (issuerRotateRefresh) issuerBlock.rotate_refresh = true;
+        if (issuerDisableRefreshRotation)
+            issuerBlock.disable_refresh_rotation = true;
         if (Object.keys(issuerBlock).length > 0) auth.issuer = issuerBlock;
 
         // Local
@@ -837,19 +839,40 @@
                                 bind:checked={cookieSecure}
                                 class="rounded border-slate-300"
                             />
-                            Secure
+                            Always mark Secure
                         </label>
                         <label
                             class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200 cursor-pointer"
                         >
                             <input
                                 type="checkbox"
-                                bind:checked={cookieHttpOnly}
+                                bind:checked={cookieDisableHttpOnly}
                                 class="rounded border-slate-300"
                             />
-                            HttpOnly
+                            Expose cookie to JavaScript
                         </label>
                     </div>
+                </div>
+                <div class="px-4 pb-4 -mt-1">
+                    <p
+                        class="text-[11px] text-slate-400 dark:text-slate-500 leading-relaxed"
+                    >
+                        <span
+                            class="font-medium text-slate-600 dark:text-slate-300"
+                            >Secure</span
+                        >
+                        is applied automatically whenever a request arrives over
+                        HTTPS, so you normally leave this off. Turn it on when TLS
+                        terminates at a proxy that doesn't forward a protocol hint
+                        and the automatic detection can't see it.
+                        <br />
+                        <span
+                            class="font-medium text-slate-600 dark:text-slate-300"
+                            >HttpOnly</span
+                        > is on by default and should stay that way — nothing in
+                        the UI reads the session cookie, and a cookie readable by
+                        script is one XSS away from being stolen.
+                    </p>
                 </div>
             </div>
         {/if}
@@ -936,10 +959,10 @@
                     >
                         <input
                             type="checkbox"
-                            bind:checked={issuerRotateRefresh}
+                            bind:checked={issuerDisableRefreshRotation}
                             class="rounded border-slate-300"
                         />
-                        Rotate refresh tokens on use
+                        Disable refresh-token rotation
                     </label>
                     <p
                         class="text-[11px] text-slate-400 dark:text-slate-500 mt-1.5 leading-relaxed"
@@ -947,20 +970,22 @@
                         <span
                             class="font-medium text-slate-600 dark:text-slate-300"
                             >Off (default):</span
-                        >
-                        the Refresh TTL is a <em>hard ceiling</em>. Even a user
-                        who visits every day is forced back to the login screen
-                        once Refresh TTL elapses from their original login time.
+                        > the refresh token is replaced with a new one every time
+                        it's used, restarting the TTL clock. An active user stays
+                        logged in indefinitely; only a gap of inactivity longer than
+                        Refresh TTL forces re-login. It also limits refresh-token
+                        theft — a stolen token stops working the moment the real
+                        user refreshes.
                         <br />
                         <span
                             class="font-medium text-slate-600 dark:text-slate-300"
                             >On:</span
-                        > the refresh token is replaced with a new one every time
-                        it's used, restarting the TTL clock. An active user stays
-                        logged in indefinitely; only a gap of inactivity longer than
-                        Refresh TTL forces re-login. Also mitigates refresh-token
-                        theft — a stolen token becomes unusable as soon as the legitimate
-                        user refreshes.
+                        >
+                        the Refresh TTL becomes a <em>hard ceiling</em>. Even a
+                        user who visits every day is sent back to the login
+                        screen once Refresh TTL elapses from their original
+                        login time. Only worth it if several clients share one
+                        session and would rotate each other out of it.
                     </p>
                 </div>
             </div>

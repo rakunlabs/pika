@@ -19,6 +19,7 @@ import (
 	"github.com/rakunlabs/pika/internal/hook"
 	"github.com/rakunlabs/pika/internal/secret"
 	"github.com/rakunlabs/pika/internal/server/authx"
+	"github.com/rakunlabs/pika/internal/server/mcpsrv"
 	"github.com/rakunlabs/pika/internal/server/publicendpoint"
 	"github.com/rakunlabs/pika/internal/server/servertls"
 	"github.com/rakunlabs/pika/internal/service"
@@ -211,6 +212,25 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	// of searchHandler instead.
 	m.GET("/api/v1/search", api.searchHandler)
 
+	// MCP (Model Context Protocol) endpoint — lets AI agents browse,
+	// search and edit configurations and external resources through the
+	// same service layer the REST API uses.
+	//
+	// On the protected mux like every other admin route: Require() +
+	// CapMiddleware() have already authenticated the caller (API token via
+	// Bearer, or a UI session) and resolved their capabilities and path
+	// patterns before the handler runs, so MCP inherits pika's
+	// authorization model wholesale instead of inventing a parallel one.
+	// Living under /api/v1/ also puts it behind the lock gate: a locked
+	// server returns 503 here like everywhere else, rather than leaking
+	// config through a side door.
+	//
+	// Registered with Handle (all methods) rather than POST: the
+	// streamable-HTTP transport answers GET/DELETE itself with the
+	// protocol-correct 405 + Allow header, which is more useful to an
+	// MCP client than ada's generic method-not-allowed page.
+	m.Handle("/api/v1/mcp", mcpsrv.New(svc, config.ServiceName, info.Version))
+
 	// Server-key lifecycle endpoints.
 	//
 	// Auth model:
@@ -282,6 +302,11 @@ func Handle(m *ada.Mux, mData *ada.Mux, mAuth *ada.Mux, svc *service.Service, in
 	m.POST("/api/v1/external/{name}/versions", m.Wrap(api.withPerm(service.CapExternalRead, api.listExternalVersions)))
 	m.POST("/api/v1/external/{name}/version", m.Wrap(api.withPerm(service.CapExternalRead, api.readExternalVersion)))
 	m.GET("/api/v1/external/{name}/search", m.Wrap(api.withPerm(service.CapExternalRead, api.searchExternal)))
+	// Bulk export is the one external route gated on
+	// CapSettingsManage instead of CapExternalRead: a single read
+	// leaks one secret, an export leaks the entire backend in one
+	// file. It is surfaced only from Settings > External Resources.
+	m.GET("/api/v1/external/{name}/export", m.Wrap(api.withPerm(service.CapSettingsManage, api.exportExternalResource)))
 
 	// info and healthz are registered on the unprotected mux so the SPA
 	// can always boot (even when forward-auth would redirect API calls).

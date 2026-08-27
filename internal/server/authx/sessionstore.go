@@ -9,19 +9,37 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/rakunlabs/ada/middleware/auth/cookie"
 	"github.com/rakunlabs/ada/middleware/auth/identity"
 	"github.com/rakunlabs/ada/middleware/auth/sessionstore"
 
 	"github.com/rakunlabs/pika/internal/service"
 )
 
-// SessionStore implements sessionstore.Store against pika's SQLite-backed
-// session table. Used as the single session backend — ada's in-memory default
-// is not exposed.
+// SessionStore implements sessionstore.DirectStore against pika's session
+// bucket. Used as the single session backend — ada's in-memory default is
+// not exposed.
+//
+// Two access paths exist and they are not interchangeable:
+//
+//   - Get / Save are the cookie-oriented pair from sessionstore.Store. They
+//     resolve the session from the request's cookie.
+//
+//   - LoadByID / SaveByID / DeleteByID address a record by its raw session
+//     ID. This is what ada's issuer backend uses: it mints and owns session
+//     IDs and never has a request/response pair to hand to Get/Save.
+//
+// Both funnel into the same load/persist helpers, so the identity
+// resolution and expiry rules cannot drift between them.
 type SessionStore struct {
 	svc         *service.Service
 	defaultName string
 }
+
+// defaultSessionTTL is used when a caller does not express one. SaveByID
+// receives ttl=0 for "no explicit expiry", but pika's session rows are
+// swept by expiry, so a row without one would never be collected.
+const defaultSessionTTL = 24 * time.Hour
 
 // NewSessionStore returns a SessionStore bound to the given service. defaultName
 // is the session cookie name configured for the auth middleware.
@@ -71,17 +89,110 @@ func (s *SessionStore) Get(r *http.Request, name string) (*sessionstore.Session,
 		return sess, nil
 	}
 
-	values := make(map[string]any)
-	if len(row.Payload) > 0 {
-		if err := json.Unmarshal(row.Payload, &values); err != nil {
-			return nil, err
-		}
+	values, err := decodePayload(row.Payload)
+	if err != nil {
+		return nil, err
 	}
 
 	sess.ID = row.ID
 	sess.Values = values
 	sess.IsNew = false
 	return sess, nil
+}
+
+// LoadByID implements sessionstore.DirectStore. Returns
+// sessionstore.ErrNoSession for an unknown or expired ID, which is what the
+// issuer treats as "no session" rather than as a storage failure.
+func (s *SessionStore) LoadByID(ctx context.Context, id string) (map[string]any, error) {
+	row, err := s.svc.GetRawSession(ctx, id)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			return nil, sessionstore.ErrNoSession
+		}
+
+		return nil, err
+	}
+
+	if row.ExpiresAt.Before(time.Now()) {
+		// Expired rows are collected on read as well as by the sweep, so
+		// a session that outlives its TTL cannot be resurrected by a
+		// clock skew or a delayed sweep.
+		_ = s.svc.DeleteRawSession(ctx, row.ID)
+
+		return nil, sessionstore.ErrNoSession
+	}
+
+	return decodePayload(row.Payload)
+}
+
+// SaveByID implements sessionstore.DirectStore.
+func (s *SessionStore) SaveByID(ctx context.Context, id string, values map[string]any, ttl time.Duration) error {
+	if ttl <= 0 {
+		ttl = defaultSessionTTL
+	}
+
+	return s.persist(ctx, id, values, ttl)
+}
+
+// DeleteByID implements sessionstore.DirectStore. Deleting an unknown ID is
+// not an error.
+func (s *SessionStore) DeleteByID(ctx context.Context, id string) error {
+	if err := s.svc.DeleteRawSession(ctx, id); err != nil && !errors.Is(err, service.ErrNotFound) {
+		return err
+	}
+
+	return nil
+}
+
+func decodePayload(payload []byte) (map[string]any, error) {
+	values := make(map[string]any)
+	if len(payload) == 0 {
+		return values, nil
+	}
+
+	if err := json.Unmarshal(payload, &values); err != nil {
+		return nil, err
+	}
+
+	return values, nil
+}
+
+// persist is the single write path shared by Save and SaveByID.
+//
+// It resolves which pika user the session belongs to and stamps that
+// user_id into the serialized identity claims. Admin flows (kick, disable,
+// list sessions) key off user_id, and the capability resolver reads the
+// claim on every request instead of re-running the provider dispatch — so
+// getting this wrong on one of the two write paths would silently break
+// session administration for whichever path the deployment happens to use.
+func (s *SessionStore) persist(ctx context.Context, id string, values map[string]any, ttl time.Duration) error {
+	// Derive the pika user the session belongs to. This is the single
+	// point where ada's Identity (provider-shaped) is mapped onto pika's
+	// internal users.id, once per save.
+	username, userID := s.resolveSessionUser(ctx, values)
+
+	// Stamp the resolved user_id INTO the serialized identity claims.
+	// Downstream readers (CapResolver, future middlewares) read it via
+	// identity.Claim[string]("pika_user_id") instead of re-running the
+	// provider-based dispatch on every request. Identity stays the single
+	// source of truth: ada owns Subject/Provider/Email/etc., pika owns the
+	// user_id claim under a namespaced key.
+	if userID != "" {
+		stampUserIDClaim(values, userID)
+	}
+
+	payload, err := json.Marshal(values)
+	if err != nil {
+		return err
+	}
+
+	return s.svc.PutRawSession(ctx, &service.RawSession{
+		ID:        id,
+		UserID:    userID,
+		Username:  username,
+		Payload:   payload,
+		ExpiresAt: time.Now().Add(ttl),
+	})
 }
 
 // Save persists the session and writes the session cookie. When Options.MaxAge
@@ -116,42 +227,12 @@ func (s *SessionStore) Save(r *http.Request, w http.ResponseWriter, sess *sessio
 		sess.ID = id
 	}
 
-	ttl := 24 * time.Hour
+	ttl := defaultSessionTTL
 	if opts != nil && opts.MaxAge > 0 {
 		ttl = time.Duration(opts.MaxAge) * time.Second
 	}
 
-	// Derive the pika user the session belongs to. Admin flows (kick,
-	// disable, list) all key off user_id, so this is the single point
-	// where ada's Identity (provider-shaped) is mapped onto pika's
-	// internal users.id once per save.
-	username, userID := s.resolveSessionUser(r.Context(), sess.Values)
-
-	// Stamp the resolved user_id INTO the serialized identity claims
-	// before persisting. Downstream readers (CapResolver, future
-	// middlewares) read it via identity.Claim[string]("pika_user_id")
-	// instead of re-running the provider-based dispatch on every
-	// request. Identity is the single source of truth: ada owns
-	// Subject/Provider/Email/etc., pika owns the user_id claim under
-	// a namespaced key. The decoration mutates sess.Values["pair"]
-	// directly, so the marshaled payload below carries the claim for
-	// every subsequent SessionStore.Get.
-	if userID != "" {
-		stampUserIDClaim(sess.Values, userID)
-	}
-
-	payload, err := json.Marshal(sess.Values)
-	if err != nil {
-		return err
-	}
-
-	if err := s.svc.PutRawSession(r.Context(), &service.RawSession{
-		ID:        sess.ID,
-		UserID:    userID,
-		Username:  username,
-		Payload:   payload,
-		ExpiresAt: time.Now().Add(ttl),
-	}); err != nil {
+	if err := s.persist(r.Context(), sess.ID, sess.Values, ttl); err != nil {
 		return err
 	}
 
@@ -161,8 +242,8 @@ func (s *SessionStore) Save(r *http.Request, w http.ResponseWriter, sess *sessio
 		Path:     optPath(opts),
 		Domain:   optDomain(opts),
 		MaxAge:   optMaxAge(opts),
-		Secure:   opts != nil && opts.Secure,
-		HttpOnly: opts != nil && opts.HttpOnly,
+		Secure:   optSecure(opts, r),
+		HttpOnly: optHTTPOnly(opts),
 		SameSite: optSameSite(opts),
 	})
 	return nil
@@ -447,14 +528,39 @@ func optMaxAge(o *sessionstore.Options) int {
 }
 
 func optSameSite(o *sessionstore.Options) http.SameSite {
-	if o != nil {
+	if o != nil && o.SameSite != 0 {
 		return o.SameSite
 	}
 	return http.SameSiteLaxMode
 }
 
+// optSecure and optHTTPOnly cover the Save path, which carries
+// sessionstore.Options (plain bools) rather than the tri-state
+// cookie.Options that session.Session uses.
+//
+// In practice the browser's session cookie is written by session.Session,
+// not here: with DirectStore the issuer addresses records by ID and never
+// calls Save. This path survives for direct Store users and pika's own
+// round-trip tests, so it keeps the conservative defaults rather than the
+// zero values — a session cookie readable by script is one XSS away from
+// being exfiltrated, and nothing in pika's SPA reads it.
+func optSecure(o *sessionstore.Options, r *http.Request) bool {
+	if o != nil && o.Secure {
+		return true
+	}
+
+	return cookie.IsTLS(r)
+}
+
+func optHTTPOnly(_ *sessionstore.Options) bool { return true }
+
 // ForContext is a convenience for tests.
 func (s *SessionStore) ForContext(_ context.Context) *SessionStore { return s }
 
-// Interface compliance.
-var _ sessionstore.Store = (*SessionStore)(nil)
+// Interface compliance. DirectStore is the one that matters: ada's issuer
+// backend rejects a store that cannot address records by raw session ID,
+// so losing this assertion would surface as a boot failure, not a test one.
+var (
+	_ sessionstore.Store       = (*SessionStore)(nil)
+	_ sessionstore.DirectStore = (*SessionStore)(nil)
+)
