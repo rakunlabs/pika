@@ -163,9 +163,9 @@ type EnrollOptions struct {
 	// device — "platform" (built-in: Touch ID / Hello / Android
 	// keystore) or "cross-platform" (roaming: USB/NFC/BLE security
 	// key). Any other value (including the empty string) lets the
-	// browser show the chooser. We don't return an error for
-	// invalid input here — the ada layer normalizes it to "" so
-	// the ceremony still works.
+	// browser show the chooser. We normalize unsupported hints to
+	// empty before calling ada, preserving this API's case-sensitive,
+	// best-effort behavior.
 	AuthenticatorAttachment string
 }
 
@@ -214,8 +214,11 @@ func (ps *PasskeyService) BeginEnroll(ctx context.Context, userID string, opts *
 	}
 
 	var regOpts []passkey.RegistrationOption
-	if opts != nil && opts.AuthenticatorAttachment != "" {
-		regOpts = append(regOpts, passkey.WithAuthenticatorAttachment(opts.AuthenticatorAttachment))
+	if opts != nil {
+		switch opts.AuthenticatorAttachment {
+		case "platform", "cross-platform":
+			regOpts = append(regOpts, passkey.WithAuthenticatorAttachment(opts.AuthenticatorAttachment))
+		}
 	}
 
 	options, session, err := ps.engine.BeginRegistration(passkey.User{

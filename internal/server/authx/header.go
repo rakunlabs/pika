@@ -23,9 +23,8 @@ import (
 //
 // Header auth has no verifier by construction: whoever can set
 // X-Forwarded-User is whoever the request claims to be. Without
-// TrustedProxies that is only sound on a network where nothing but the proxy
-// can reach this port, so a deployment that leaves it empty gets a warning
-// from ada at construction — worth reading rather than silencing.
+// TrustedProxies, ada fails closed: the strategy is constructed but rejects
+// every login. Do not opt into trust-all headers.
 func BuildHeader(s *service.HeaderStrategySettings) strategy.Authenticator {
 	if s == nil {
 		return nil

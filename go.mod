@@ -1,24 +1,25 @@
 module github.com/rakunlabs/pika
 
-go 1.26
+go 1.27
 
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/dgraph-io/badger/v4 v4.9.1
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/goccy/go-yaml v1.19.2
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/nats-io/nats.go v1.50.0
-	github.com/rakunlabs/ada v0.4.7
-	github.com/rakunlabs/ada/handler/folder v0.4.7
-	github.com/rakunlabs/ada/middleware/auth v0.4.9
-	github.com/rakunlabs/ada/middleware/cors v0.4.7
-	github.com/rakunlabs/ada/middleware/log v0.4.7
-	github.com/rakunlabs/ada/middleware/ratelimit v0.4.7
-	github.com/rakunlabs/ada/middleware/recover v0.4.7
-	github.com/rakunlabs/ada/middleware/requestid v0.4.7
-	github.com/rakunlabs/ada/middleware/server v0.4.7
-	github.com/rakunlabs/ada/middleware/telemetry v0.4.7
+	github.com/rakunlabs/ada v0.5.2
+	github.com/rakunlabs/ada/handler/folder v0.5.2
+	github.com/rakunlabs/ada/middleware/auth v0.5.2
+	github.com/rakunlabs/ada/middleware/cors v0.5.2
+	github.com/rakunlabs/ada/middleware/log v0.5.2
+	github.com/rakunlabs/ada/middleware/ratelimit v0.5.2
+	github.com/rakunlabs/ada/middleware/recover v0.5.2
+	github.com/rakunlabs/ada/middleware/requestid v0.5.2
+	github.com/rakunlabs/ada/middleware/server v0.5.2
+	github.com/rakunlabs/ada/middleware/telemetry v0.5.2
 	github.com/rakunlabs/alan v0.5.0
 	github.com/rakunlabs/bw v0.3.14
 	github.com/rakunlabs/chu v0.4.7
@@ -29,13 +30,13 @@ require (
 	github.com/rakunlabs/into v0.5.3
 	github.com/rakunlabs/logi v0.4.5
 	github.com/rakunlabs/ok v0.1.0
-	github.com/rakunlabs/query v0.4.10
+	github.com/rakunlabs/query v0.5.1
 	github.com/rakunlabs/tell v0.1.5
 	github.com/rakunlabs/tummy v0.1.2
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/rytsh/mugo v0.9.2
 	github.com/twmb/franz-go v1.20.7
-	golang.org/x/crypto v0.51.0
+	golang.org/x/crypto v0.55.0
 )
 
 require (
@@ -59,7 +60,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
@@ -139,11 +139,11 @@ require (
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/exp v0.0.0-20250808145144-a408d31f581a // indirect
-	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/api v0.273.1 // indirect
 	google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 // indirect

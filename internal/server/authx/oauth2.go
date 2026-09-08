@@ -44,6 +44,7 @@ func BuildOAuth2(specs []service.OAuth2StrategySettings, basePath string) ([]str
 			AuthURL:         s.AuthURL,
 			TokenURL:        s.TokenURL,
 			UserInfoURL:     s.UserInfoURL,
+			JWKSURL:         s.JWKSURL,
 			ClientID:        s.ClientID,
 			ClientSecret:    s.ClientSecret,
 			Scopes:          s.Scopes,

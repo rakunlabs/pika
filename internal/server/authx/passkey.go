@@ -137,15 +137,15 @@ func BuildPasskeyStrategy(engine *passkey.WebAuthn, ps *service.PasskeyService, 
 // json tags — ada documents the struct as JSON-serializable for
 // exactly this use case (Redis blobs, bw rows, …).
 //
-// Cluster contract: every Save/Delete here funnels through the bw
-// write path (forwarded to the leader, replicated to followers,
-// blocks until the originator's instance is caught up). Reads hit
-// the local replica, so a finish call coming in milliseconds after
-// the matching begin still sees the row.
+// Cluster contract: the HTTP cluster middleware forwards begin/finish POSTs
+// to the leader before this adapter runs. Consume reads and deletes in one
+// committed leader-side transaction, never from a follower's local replica.
 type bwChallengeStore struct {
 	store service.PasskeyChallengeStorage
 	ttl   time.Duration
 }
+
+var _ passkey.ChallengeStore = (*bwChallengeStore)(nil)
 
 func newBwChallengeStore(svc *service.Service, ttl time.Duration) *bwChallengeStore {
 	return &bwChallengeStore{store: svc.PasskeyChallengeStore(), ttl: ttl}
@@ -174,19 +174,14 @@ func (b *bwChallengeStore) Save(ctx context.Context, sessionID string, data *pas
 	})
 }
 
-// Load fetches the challenge row and decodes the JSON blob back into
-// a *passkey.SessionData. Returns a generic "not found" error when
-// the row is absent or expired — the ada strategy translates that
-// into a uniform 401 with no signal about why.
-func (b *bwChallengeStore) Load(ctx context.Context, sessionID string) (*passkey.SessionData, error) {
-	row, err := b.store.Get(ctx, sessionID)
+// Consume burns the challenge before decoding or verifying it, including
+// expired or malformed rows. No data is returned unless deletion commits.
+func (b *bwChallengeStore) Consume(ctx context.Context, sessionID string) (*passkey.SessionData, error) {
+	row, err := b.store.Consume(ctx, sessionID)
 	if err != nil {
 		return nil, errors.New("passkey challenge: not found")
 	}
-	if !row.ExpiresAt.IsZero() && row.ExpiresAt.Before(time.Now()) {
-		// Expired rows shouldn't reach the verifier — clean up and
-		// surface the same generic error.
-		_ = b.store.Delete(ctx, sessionID)
+	if !row.ExpiresAt.IsZero() && !row.ExpiresAt.After(time.Now()) {
 		return nil, errors.New("passkey challenge: expired")
 	}
 	var data passkey.SessionData
@@ -194,14 +189,6 @@ func (b *bwChallengeStore) Load(ctx context.Context, sessionID string) (*passkey
 		return nil, fmt.Errorf("passkey challenge unmarshal: %w", err)
 	}
 	return &data, nil
-}
-
-// Delete removes the challenge row. Idempotent at the storage layer
-// (PasskeyChallengeStorage.Delete masks not-found) so the ada
-// strategy's eager-delete-on-finish pattern doesn't error on a row
-// that was already swept.
-func (b *bwChallengeStore) Delete(ctx context.Context, sessionID string) error {
-	return b.store.Delete(ctx, sessionID)
 }
 
 // dedupNonEmpty returns a fresh slice containing each non-empty,

@@ -75,9 +75,8 @@ func TestBuildHeaderTrustBoundary(t *testing.T) {
 	})
 }
 
-// TestBuildHeaderWithoutTrustedProxies documents the unguarded shape: it is
-// still allowed (a genuinely closed network is a real deployment) and ada
-// warns about it at construction.
+// TestBuildHeaderWithoutTrustedProxies verifies ada's fail-closed default:
+// construction succeeds, but identity headers cannot authenticate any peer.
 func TestBuildHeaderWithoutTrustedProxies(t *testing.T) {
 	s := BuildHeader(&service.HeaderStrategySettings{})
 	if s == nil {
@@ -87,9 +86,15 @@ func TestBuildHeaderWithoutTrustedProxies(t *testing.T) {
 		t.Errorf("name: %q", s.Name())
 	}
 
-	_, subject := login(t, s, "8.8.8.8:1234", map[string]string{"X-Forwarded-User": "alice"})
-	if subject != "alice" {
-		t.Errorf("with no boundary configured any peer should pass, got %q", subject)
+	w, subject := login(t, s, "8.8.8.8:1234", map[string]string{"X-Forwarded-User": "alice"})
+	if subject != "" {
+		t.Errorf("without trusted proxies, peer authenticated as %q", subject)
+	}
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", w.Code)
+	}
+	if got := w.Body.String(); !strings.Contains(got, "no_user_header") {
+		t.Errorf("rejection leaks why it failed: %s", got)
 	}
 }
 
@@ -99,8 +104,8 @@ func TestBuildHeaderWithoutTrustedProxies(t *testing.T) {
 // typo must not take the server down.
 //
 // It must not silently widen the boundary either — an unusable list is
-// dropped whole, which is what this asserts by way of the strategy still
-// being constructed rather than the process dying.
+// dropped whole, leaving a strategy that rejects even peers in the valid
+// portion of the list rather than panicking or trusting every caller.
 func TestBuildHeaderRejectsUnparseableCIDRs(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -113,6 +118,10 @@ func TestBuildHeaderRejectsUnparseableCIDRs(t *testing.T) {
 	})
 	if s == nil {
 		t.Fatal("expected a strategy")
+	}
+	w, subject := login(t, s, "10.1.2.3:5000", map[string]string{"X-Forwarded-User": "alice"})
+	if subject != "" || w.Code != http.StatusUnauthorized {
+		t.Errorf("invalid trusted proxies must fail closed: subject %q, status %d", subject, w.Code)
 	}
 }
 

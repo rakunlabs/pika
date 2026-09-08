@@ -223,6 +223,9 @@ type OAuth2StrategySettings struct {
 	AuthURL     string `json:"auth_url,omitempty"`
 	TokenURL    string `json:"token_url,omitempty"`
 	UserInfoURL string `json:"userinfo_url,omitempty"`
+	// JWKSURL verifies the provider's id_token when using manual endpoints.
+	// Without it, UserInfoURL is required to resolve an authenticated identity.
+	JWKSURL string `json:"jwks_url,omitempty"`
 	// IssuerURL is retained for existing OIDC-discovery based settings.
 	// New providers should set AuthURL and TokenURL explicitly instead.
 	IssuerURL    string `json:"issuer_url,omitempty"`

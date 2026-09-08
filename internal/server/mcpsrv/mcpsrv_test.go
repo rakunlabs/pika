@@ -266,8 +266,8 @@ func TestRejectsBadCredentials(t *testing.T) {
 		header http.Header
 		want   int
 	}{
-		// No credentials is the browser case: redirected to the login UI.
-		{name: "no credentials", header: nil, want: http.StatusTemporaryRedirect},
+		// Redirect POST to the login UI as GET, without replaying its body.
+		{name: "no credentials", header: nil, want: http.StatusSeeOther},
 		{name: "unknown token", header: bearer("pika_nope"), want: http.StatusUnauthorized},
 		{name: "disabled token", header: bearer(key), want: http.StatusUnauthorized},
 	}

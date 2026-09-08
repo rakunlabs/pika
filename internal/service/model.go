@@ -423,14 +423,18 @@ type PasskeyChallenge struct {
 // through the bw cluster) is what makes that work without sticky
 // sessions.
 //
-// Save/Get/Delete map one-to-one onto the ada/passkey.ChallengeStore
-// interface; the kind/userID fields are extra metadata for audit and
-// for the enrollment service's cross-user-smuggling check
+// Save/Consume implement the ada/passkey.ChallengeStore contract;
+// Get/Delete also support enrollment. The kind/userID fields provide audit
+// metadata and the enrollment service's cross-user-smuggling check
 // (PasskeyService.FinishEnroll rejects a session whose userID
 // doesn't match the caller).
 type PasskeyChallengeStorage interface {
 	Save(ctx context.Context, c *PasskeyChallenge) error
 	Get(ctx context.Context, id string) (*PasskeyChallenge, error)
+	// Consume atomically retrieves and deletes a row, returning ErrNotFound
+	// if absent. It must commit before returning data and run on the cluster
+	// leader. It is not supported inside an enclosing storage transaction.
+	Consume(ctx context.Context, id string) (*PasskeyChallenge, error)
 	Delete(ctx context.Context, id string) error
 	// DeleteExpired removes every row whose ExpiresAt is in the past.
 	// Returns the number deleted so callers can log sweep activity.

@@ -11,10 +11,9 @@ import (
 
 // passkeyChallengeStorage implements service.PasskeyChallengeStorage.
 // It is the cluster-aware backend for in-flight WebAuthn ceremony
-// state: writes go through the leader (via the cluster middleware)
-// and replicate to every follower before the originating request
-// returns, so a finish call landing on a different instance than the
-// matching begin still sees the row.
+// state: the HTTP cluster middleware routes write requests to the leader
+// and triggers replication after successful responses. Storage methods
+// themselves operate on the local DB and do not forward requests.
 type passkeyChallengeStorage struct {
 	store  *Storage
 	bucket *bw.Bucket[passkeyChallengeRow]
@@ -64,6 +63,31 @@ func (s *passkeyChallengeStorage) Get(ctx context.Context, id string) (*service.
 	row, err := bucketGet(ctx, s.scope, s.bucket, id)
 	if err != nil {
 		return nil, err
+	}
+	return row.toService(), nil
+}
+
+// Consume runs on the leader selected by the HTTP cluster middleware.
+// DB.Update holds bw's single-writer gate across the read, delete and commit;
+// separate Get/Delete calls (or a lock on this wrapper) cannot provide this.
+func (s *passkeyChallengeStorage) Consume(ctx context.Context, id string) (*service.PasskeyChallenge, error) {
+	if s.scope.tx != nil {
+		return nil, errors.New("passkey challenge: consume inside a transaction is not supported")
+	}
+	var row *passkeyChallengeRow
+	err := s.store.db.Update(func(tx *bw.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var err error
+		row, err = s.bucket.GetTx(tx, id)
+		if err != nil {
+			return err
+		}
+		return s.bucket.DeleteTx(tx, id)
+	})
+	if err != nil {
+		return nil, translateErr(err)
 	}
 	return row.toService(), nil
 }

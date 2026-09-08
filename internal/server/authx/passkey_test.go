@@ -2,10 +2,14 @@ package authx
 
 import (
 	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/rakunlabs/ada/middleware/auth/strategy/passkey"
+	"github.com/rakunlabs/pika/internal/service"
 )
 
 // TestBwChallengeStore_roundTripAcrossInstances is the regression
@@ -13,9 +17,8 @@ import (
 // strategy uses an injected ChallengeStore to bridge a begin call to
 // the matching finish; in a multi-instance pika deployment the two
 // requests may land on different nodes. This test exercises the bw
-// store by saving on one logical "instance" and loading on another,
-// both backed by the same Service (which would be the case after
-// bw cluster replication).
+// store through distinct adapters sharing the leader's storage. This does
+// not simulate replication or HTTP forwarding.
 func TestBwChallengeStore_roundTripAcrossInstances(t *testing.T) {
 	svc := newTestService(t)
 
@@ -37,17 +40,14 @@ func TestBwChallengeStore_roundTripAcrossInstances(t *testing.T) {
 	}
 
 	// Second "instance" — distinct wrapper around the same Service.
-	// In production this is a different pika process; the bw cluster
-	// replicates the row between them. In tests we share the Service
-	// directly, which exercises the storage code path without the
-	// QUIC layer.
+	// Forwarded finish requests execute against this same leader DB.
 	store2 := newBwChallengeStore(svc, 5*time.Minute)
-	loaded, err := store2.Load(context.Background(), sid)
+	loaded, err := store2.Consume(context.Background(), sid)
 	if err != nil {
-		t.Fatalf("Load (instance 2): %v", err)
+		t.Fatalf("Consume (instance 2): %v", err)
 	}
 	if loaded == nil {
-		t.Fatal("Load returned nil")
+		t.Fatal("Consume returned nil")
 	}
 
 	// Round-trip equality on every field the strategy actually uses.
@@ -71,17 +71,13 @@ func TestBwChallengeStore_roundTripAcrossInstances(t *testing.T) {
 		}
 	}
 
-	// Delete from instance 1; instance 2 must see the row gone.
-	if err := store1.Delete(context.Background(), sid); err != nil {
-		t.Fatalf("Delete (instance 1): %v", err)
-	}
-	if _, err := store2.Load(context.Background(), sid); err == nil {
-		t.Error("Load after delete should fail")
+	if _, err := store1.Consume(context.Background(), sid); err == nil {
+		t.Error("Consume after consume should fail")
 	}
 }
 
 // TestBwChallengeStore_expiredRowIsCleanedAndRejected verifies the
-// expiry guard inside Load. A row written with a past ExpiresAt
+// expiry guard inside Consume. A row written with a past ExpiresAt
 // should be deleted on access and report not-found to the caller.
 func TestBwChallengeStore_expiredRowIsCleanedAndRejected(t *testing.T) {
 	svc := newTestService(t)
@@ -108,14 +104,66 @@ func TestBwChallengeStore_expiredRowIsCleanedAndRejected(t *testing.T) {
 		t.Fatalf("Save (expired): %v", err)
 	}
 
-	if _, err := store.Load(context.Background(), sid); err == nil {
-		t.Error("Load of expired row should fail")
+	if data, err := store.Consume(context.Background(), sid); err == nil || data != nil {
+		t.Error("Consume of expired row should fail without data")
 	}
 
-	// And the row must be gone after the Load — Load auto-deletes
-	// on expiry so the bucket doesn't accumulate stragglers.
+	// Even rejected challenges must be burned.
 	if _, err := svc.PasskeyChallengeStore().Get(context.Background(), sid); err == nil {
-		t.Error("expired row should be deleted by Load")
+		t.Error("expired row should be deleted by Consume")
+	}
+}
+
+func TestBwChallengeStoreConcurrentConsume(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	if err := newBwChallengeStore(svc, time.Minute).Save(ctx, "concurrent", &passkey.SessionData{Challenge: []byte("challenge")}); err != nil {
+		t.Fatal(err)
+	}
+	var winners atomic.Int32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range 64 {
+		// Distinct wrappers must not rely on an adapter-local mutex.
+		store := newBwChallengeStore(svc, time.Minute)
+		wg.Go(func() {
+			<-start
+			data, err := store.Consume(ctx, "concurrent")
+			if err != nil {
+				if data != nil {
+					t.Error("failed consume returned data")
+				}
+				return
+			}
+			winners.Add(1)
+			if data == nil || string(data.Challenge) != "challenge" {
+				t.Error("incorrect consumed data")
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	if got := winners.Load(); got != 1 {
+		t.Fatalf("successful consumes = %d, want 1", got)
+	}
+	if _, err := svc.PasskeyChallengeStore().Get(ctx, "concurrent"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("consumed row still present: %v", err)
+	}
+}
+
+func TestBwChallengeStoreMalformedRowIsConsumed(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	if err := svc.PasskeyChallengeStore().Save(ctx, &service.PasskeyChallenge{
+		ID: "malformed", Data: []byte("not json"), ExpiresAt: time.Now().Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := newBwChallengeStore(svc, time.Minute).Consume(ctx, "malformed"); err == nil || data != nil {
+		t.Fatal("malformed challenge must fail without data")
+	}
+	if _, err := svc.PasskeyChallengeStore().Get(ctx, "malformed"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("malformed row was not consumed: %v", err)
 	}
 }
 

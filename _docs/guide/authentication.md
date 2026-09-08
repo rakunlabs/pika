@@ -69,7 +69,11 @@ When any external strategy is enabled, pika uses a **session-first** approach:
 
 Local login always works — even when external auth is on. The `/api/v1/info` endpoint is always public so the SPA can boot and show the login screen regardless of the external strategy's redirect behaviour.
 
-For OAuth2/OIDC providers, configure the provider's Authorization URL and Token URL explicitly. Configure UserInfo URL when the provider exposes one; pika then reads identity claims from that endpoint with the upstream access token. Without UserInfo URL, pika falls back to token claims. The upstream access token is only used for that check and is revoked best-effort afterwards. pika then issues its own session token.
+For OAuth2/OIDC providers, configure the provider's Authorization URL and Token URL explicitly (password flow only needs Token URL). For manual identity resolution, configure **JWKS URL** (`jwks_url`) to verify the provider's `id_token`, or **UserInfo URL** (`userinfo_url`) to fetch identity claims with the upstream access token when no JWKS URL is configured. Do not leave both blank: unverified token claims are not a secure identity source.
+
+Get endpoint values from your trusted provider's `.well-known/openid-configuration` document: `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, and `jwks_uri` (the value to use for JWKS URL). Consult the provider's documentation for its discovery location, including any tenant or realm path; there is no universal JWKS URL to guess. Existing legacy `issuer_url` configurations continue using discovery until manual endpoints are supplied.
+
+The upstream access token is revoked best-effort after identity resolution. pika then issues its own session token.
 
 OAuth2 providers are fail-closed by default: an incoming `(provider, subject)` must already be linked to a pika user, or match an existing verified email when email auto-linking is enabled. Enable **Auto-create users** on a provider if unknown identities should create external-only pika users at first login. Username selection for those users is `preferred_username`, then email local-part, then a subject-based fallback.
 

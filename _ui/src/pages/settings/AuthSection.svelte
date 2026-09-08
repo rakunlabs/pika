@@ -20,6 +20,7 @@
         auth_url?: string;
         token_url?: string;
         userinfo_url?: string;
+        jwks_url?: string;
         issuer_url?: string;
         client_id?: string;
         client_secret?: string;
@@ -452,6 +453,7 @@
                 if (e.auth_url) entry.auth_url = e.auth_url;
                 if (e.token_url) entry.token_url = e.token_url;
                 if (e.userinfo_url) entry.userinfo_url = e.userinfo_url;
+                if (e.jwks_url) entry.jwks_url = e.jwks_url;
                 if (!hasManualEndpoints && e.issuer_url)
                     entry.issuer_url = e.issuer_url;
                 if (e.client_id) entry.client_id = e.client_id;
@@ -1169,26 +1171,49 @@
                                 />
                             </div>
                         </div>
-                        <div>
-                            <!-- svelte-ignore a11y_label_has_associated_control -->
-                            <label
-                                class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
-                                >UserInfo URL</label
-                            >
-                            <input
-                                type="text"
-                                bind:value={entry.userinfo_url}
-                                placeholder="https://gitlab.com/oauth/userinfo"
-                                class="w-full px-3 py-2 text-sm font-mono rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500"
-                            />
-                            <p
-                                class="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500"
-                            >
-                                Optional. If set, pika fetches identity claims
-                                with the access token; otherwise it falls back
-                                to token claims.
-                            </p>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                                <label
+                                    for={`oauth2-userinfo-${i}`}
+                                    class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
+                                    >UserInfo URL</label
+                                >
+                                <input
+                                    id={`oauth2-userinfo-${i}`}
+                                    type="text"
+                                    bind:value={entry.userinfo_url}
+                                    placeholder="https://gitlab.com/oauth/userinfo"
+                                    class="w-full px-3 py-2 text-sm font-mono rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                                />
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                    Fetches identity claims with the access token.
+                                    Use this alternative when no JWKS URL is configured.
+                                </p>
+                            </div>
+                            <div>
+                                <label
+                                    for={`oauth2-jwks-${i}`}
+                                    class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1"
+                                    >JWKS URL</label
+                                >
+                                <input
+                                    id={`oauth2-jwks-${i}`}
+                                    type="text"
+                                    bind:value={entry.jwks_url}
+                                    placeholder="Provider's jwks_uri"
+                                    class="w-full px-3 py-2 text-sm font-mono rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                                />
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                    Provides public keys to verify the <code>id_token</code>.
+                                    Copy <code>jwks_uri</code> from your trusted provider's
+                                    <code>.well-known/openid-configuration</code> document.
+                                </p>
+                            </div>
                         </div>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">
+                            For manual endpoints, configure at least one of JWKS URL
+                            or UserInfo URL. Leaving both blank cannot resolve identity securely.
+                        </p>
                         {#if entry.issuer_url && !hasOAuth2ManualEndpoints(entry)}
                             <p
                                 class="text-[11px] text-amber-600 dark:text-amber-400"
