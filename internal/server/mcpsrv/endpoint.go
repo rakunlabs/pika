@@ -30,13 +30,23 @@ func Endpoint(svc *service.Service, mgr *authx.Manager, basePath, name, version 
 				http.Error(w, "MCP settings unavailable", http.StatusServiceUnavailable)
 				return
 			}
-			cfg := service.EffectiveMCPSettings(settings.MCP)
-			if p != cfg.Endpoint {
+			var cfg *service.MCPEndpoint
+			for _, ep := range service.EffectiveMCPEndpoints(settings.MCP) {
+				if p == ep.Endpoint {
+					cfg = &ep
+					break
+				}
+			}
+			if cfg == nil {
 				if p == service.DefaultMCPEndpoint {
 					http.NotFound(w, r)
 					return
 				}
 				next.ServeHTTP(w, r)
+				return
+			}
+			if cfg.Disabled {
+				http.NotFound(w, r)
 				return
 			}
 			if locked != nil && locked() {

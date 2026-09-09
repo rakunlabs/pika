@@ -169,6 +169,95 @@ func TestMCPSettingsValidation(t *testing.T) {
 	}
 }
 
+func TestMultipleEndpointsAreIndependent(t *testing.T) {
+	svc := newTestService(t)
+	// An existing single endpoint becomes the first entry without changing
+	// its path or permissions when the operator first saves a list.
+	saveMCP(t, svc, service.MCPSettings{Endpoint: "/reader", AuthDisabled: true, Scopes: []service.TokenScope{scope("team-a/**", "read")}})
+	settings, err := svc.Settings(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoints := service.EffectiveMCPEndpoints(settings.MCP)
+	endpoints = append(endpoints,
+		service.MCPEndpoint{Name: "Writer", Endpoint: "/writer", AuthDisabled: true, Scopes: []service.TokenScope{scope("team-b/**", "read", "write")}},
+		service.MCPEndpoint{Name: "Vault", Endpoint: "/vault-mcp", AuthDisabled: true, Scopes: []service.TokenScope{{Resource: "vault", Path: "team-a/**", Operations: []string{"read"}}}},
+		service.MCPEndpoint{Endpoint: service.DefaultMCPEndpoint},
+	)
+	saveMCP(t, svc, service.MCPSettings{Endpoints: &endpoints})
+	var locked atomic.Bool
+	srv := endpointServer(t, svc, &locked)
+	reader := connectEndpoint(t, srv, "/pika/reader", nil)
+	writer := connectEndpoint(t, srv, "/pika/writer", http.Header{"X-User": {"ray"}})
+	vault := connectEndpoint(t, srv, "/pika/vault-mcp", nil)
+	if slices.Contains(toolNames(t, reader), "set_config") {
+		t.Fatal("reader inherited writer tools")
+	}
+	if !slices.Contains(toolNames(t, writer), "set_config") {
+		t.Fatal("writer lacks write tool")
+	}
+	vaultTools := toolNames(t, vault)
+	if !slices.Contains(vaultTools, "read_external") || slices.Contains(vaultTools, "get_config") || slices.Contains(vaultTools, "write_external") {
+		t.Fatalf("external scope isolation: %v", vaultTools)
+	}
+	callTool(t, writer, "set_config", map[string]any{"path": "team-b/config.yaml", "content": "ok: true"}, nil)
+	callToolExpectError(t, reader, "get_config", map[string]any{"path": "team-b/config.yaml"})
+	callToolExpectError(t, writer, "set_config", map[string]any{"path": "team-a/config.yaml", "content": "ok: true"})
+	versions, err := svc.FileVersionsList(t.Context(), "team-b/config.yaml")
+	if err != nil || len(versions) == 0 || len(versions[0].Status) == 0 || versions[0].Status[0].Author != "ray" {
+		t.Fatalf("proxy audit lost: %+v, %v", versions, err)
+	}
+	key := newToken(t, svc, "reader", scope("**", "read"))
+	connectEndpoint(t, srv, "/pika/api/v1/mcp", bearer(key))
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	status := func(path string) int {
+		t.Helper()
+		res, err := client.Get(srv.URL + "/pika" + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		return res.StatusCode
+	}
+	if got := status(service.DefaultMCPEndpoint); got != http.StatusUnauthorized && got != http.StatusSeeOther {
+		t.Fatalf("authenticated endpoint did not require login: %d", got)
+	}
+	// Duplicate paths must not change the stored list or any live handler.
+	duplicate := append(append([]service.MCPEndpoint(nil), endpoints...), endpoints[0])
+	if err := svc.PatchSettings(t.Context(), &service.PatchSettings{Action: service.ActionKeySet, MCP: &service.MCPSettings{Endpoints: &duplicate}}); err == nil {
+		t.Fatal("accepted duplicate endpoint")
+	}
+	if got := status("/writer"); got != http.StatusMethodNotAllowed {
+		t.Fatalf("failed save changed live endpoint: %d", got)
+	}
+	endpoints[1].Disabled = true
+	saveMCP(t, svc, service.MCPSettings{Endpoints: &endpoints})
+	if got := status("/writer"); got != http.StatusNotFound {
+		t.Fatalf("disabled endpoint status: %d", got)
+	}
+	if got := status("/reader"); got != http.StatusMethodNotAllowed {
+		t.Fatalf("disabling writer affected reader: %d", got)
+	}
+	locked.Store(true)
+	if got := status("/reader"); got != http.StatusServiceUnavailable {
+		t.Fatalf("lock gate bypassed: %d", got)
+	}
+	locked.Store(false)
+	// An explicit empty list survives storage and does not resurrect the
+	// legacy default route.
+	empty := []service.MCPEndpoint{}
+	saveMCP(t, svc, service.MCPSettings{Endpoints: &empty})
+	settings, err = svc.Settings(t.Context())
+	if err != nil || settings.MCP.Endpoints == nil || len(service.EffectiveMCPEndpoints(settings.MCP)) != 0 {
+		t.Fatalf("empty list did not persist: %+v, %v", settings, err)
+	}
+	for _, ep := range endpoints {
+		if got := status(ep.Endpoint); got != http.StatusNotFound {
+			t.Fatalf("removed endpoint %s status: %d", ep.Endpoint, got)
+		}
+	}
+}
+
 func TestExternalScopesThroughTokenAndProxy(t *testing.T) {
 	for _, proxy := range []bool{false, true} {
 		name := "token"

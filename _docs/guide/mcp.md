@@ -10,9 +10,13 @@ POST /api/v1/mcp
 
 The transport is **streamable HTTP**, the standard remote MCP transport. The path above is the default; it can be changed in **Settings → MCP**.
 
-## Endpoint and reverse-proxy mode
+## Multiple endpoints and reverse-proxy mode
 
-In **Settings → MCP**, choose an **Endpoint path**, such as `/mcp` or `/agents/mcp`. Pika adds `server.base_path` automatically. Reserved API, login and asset paths cannot be selected. Saving applies immediately, including on subsequent requests from existing clients; update the client URL when changing the path.
+In **Settings → MCP**, use **Add endpoint** to create as many endpoints as needed. Each has an optional name, a unique **Endpoint path**, an **Enabled** toggle, its own authentication mode and its own proxy-mode scopes. You can edit or remove entries, then choose **Save MCP endpoints** to apply the list.
+
+Choose paths such as `/mcp-readonly`, `/mcp-editor` and `/mcp-vault`. Pika adds `server.base_path` automatically: with `/pika`, enter `/mcp-vault` and connect to `/pika/mcp-vault`. Do not put `/pika` in the endpoint field. Reserved API, login and asset paths cannot be selected, except for the original `/api/v1/mcp` route. Duplicate paths are rejected, including disabled entries.
+
+Saving applies immediately, including on subsequent requests from existing clients; update the client URL when changing a path. Disabling an endpoint makes it return 404. Saving an empty endpoint list disables all MCP access. Existing single-endpoint settings are loaded as one entry with the same path, authentication and scopes; the default authenticated `/api/v1/mcp` remains the initial behavior on new installs.
 
 By default, Pika authenticates MCP callers with the same token/session mechanism as the API. If a reverse proxy handles authentication, enable **Disable Pika authentication for MCP**, then add explicit access scopes:
 
@@ -20,27 +24,41 @@ By default, Pika authenticates MCP callers with the same token/session mechanism
 - **Path pattern:** `team-a/**`, an exact key, or `**` for all paths in that source.
 - **Operations:** `read`, `write`, and/or `delete`.
 
-Every request in proxy mode uses these shared endpoint scopes, even if it includes a bearer token or session cookie. The tool preview shows which tools clients will see. A config-only scope grants no external access; an external-only scope grants no config access. Read-only grants hide write/delete tools entirely, and previously known tool names cannot bypass a revoked grant.
+Every request in proxy mode uses the scopes of the exact endpoint it targets, even if it includes a bearer token or session cookie. Scopes are never merged across endpoints. Authenticated endpoints continue to use the caller's token/session permissions. The tool preview shows which tools clients will see. A config-only scope grants no external access; an external-only scope grants no config access. Read-only grants hide write/delete tools entirely, and previously known tool names cannot bypass a revoked grant.
 
 The proxy's **`X-User`** header is used only as an audit author (for example, in config version history and hooks). If absent or blank, the author is `mcp-proxy`. It never resolves a Pika user or grants that user's permissions. Have the authenticating proxy set this header to its verified username.
 
-For example, the settings API accepts this full MCP configuration:
+For example, the settings API accepts this full-replacement MCP endpoint list:
 
 ```json
 {
   "action": "set",
   "mcp": {
-    "endpoint": "/mcp",
-    "auth_disabled": true,
-    "scopes": [
-      { "path": "apps/**", "operations": ["read"] },
-      { "resource": "production-vault", "path": "team-a/**", "operations": ["read"] }
+    "endpoints": [
+      {
+        "name": "Config reader",
+        "endpoint": "/mcp-readonly",
+        "auth_disabled": true,
+        "scopes": [{ "path": "apps/**", "operations": ["read"] }]
+      },
+      {
+        "name": "Vault reader",
+        "endpoint": "/mcp-vault",
+        "auth_disabled": true,
+        "scopes": [{ "resource": "production-vault", "path": "team-a/**", "operations": ["read"] }]
+      },
+      {
+        "name": "Token access",
+        "endpoint": "/api/v1/mcp",
+        "auth_disabled": false,
+        "scopes": []
+      }
     ]
   }
 }
 ```
 
-Connect the client to the resulting URL without a Pika bearer header; supply whatever authentication your proxy requires. The server-key lock still blocks MCP, including custom endpoint paths.
+For a proxy-mode endpoint, connect without a Pika bearer header; supply whatever authentication your proxy requires. For the authenticated endpoint, send the token as usual. Set `disabled: true` on an entry to suspend it while preserving its settings. The server-key lock still blocks every MCP endpoint, including custom paths. Legacy single-endpoint API payloads remain accepted and replace the list with that single endpoint.
 
 ## Connecting a client
 

@@ -157,7 +157,7 @@ func (s *Storage) registerBuckets() error {
 	//        reconciliation settings. Existing rows are rewritten with
 	//        the current shape, dropping those configuration fields.
 	if s.settings, err = bw.RegisterBucket[settingsRow](s.db, bucketSettings,
-		bw.WithVersion[settingsRow](7), // v7 adds optional MCP routing/auth settings.
+		bw.WithVersion[settingsRow](8), // v8 adds a list of independent MCP endpoints.
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketSettings, err)
 	}

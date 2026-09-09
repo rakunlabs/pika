@@ -453,6 +453,16 @@ export interface ServerTLSSettings {
 }
 
 export interface MCPSettings {
+  endpoints?: MCPEndpoint[];
+  // Legacy single-endpoint settings, read until the first list save.
+  endpoint?: string;
+  auth_disabled?: boolean;
+  scopes?: TokenScope[];
+}
+
+export interface MCPEndpoint {
+  name?: string;
+  disabled?: boolean;
   endpoint: string;
   auth_disabled: boolean;
   scopes: TokenScope[];
