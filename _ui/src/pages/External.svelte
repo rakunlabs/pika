@@ -168,6 +168,7 @@
   // independently; UI hides write affordances when canWrite is false.
   const canManage = $derived(appStore.hasPermission("external.read"));
   const canWrite = $derived(appStore.hasPermission("external.write"));
+  const canConfigureResources = $derived(appStore.hasPermission("settings.manage"));
 
   // Resources filtered by the search box (matches name or kind).
   const visibleResources = $derived.by(() => {
@@ -761,14 +762,16 @@
             >
               Resources
             </h1>
-            <a
-              href="/settings"
-              use:link
-              class="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400 hover:text-accent-600 transition-colors no-underline"
-              title="Configure resources in Settings"
-            >
-              <SettingsIcon size={11} /> Manage
-            </a>
+            {#if canConfigureResources}
+              <a
+                href="/settings"
+                use:link
+                class="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400 hover:text-accent-600 transition-colors no-underline"
+                title="Configure resources in Settings"
+              >
+                <SettingsIcon size={11} /> Manage
+              </a>
+            {/if}
           </div>
           <div class="relative">
             <Search
@@ -793,7 +796,7 @@
               <p class="text-[11px] text-slate-500 dark:text-slate-400">
                 {resourceFilter ? "No matches" : "No resources configured"}
               </p>
-              {#if !resourceFilter}
+              {#if !resourceFilter && canConfigureResources}
                 <a
                   href="/settings"
                   use:link
