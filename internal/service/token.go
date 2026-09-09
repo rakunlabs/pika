@@ -15,6 +15,9 @@ import (
 
 // TokenScope defines what a token can access.
 type TokenScope struct {
+	// Resource selects an external backend by exact configured name.
+	// Empty means Pika configs; external grants never imply config access.
+	Resource string `json:"resource,omitempty"`
 	// Path is a glob pattern for config paths (e.g., "app/*", "production/**").
 	Path string `json:"path"`
 	// Operations is a list of allowed operations: "read", "write", "delete".
@@ -98,6 +101,9 @@ func (s *Service) CreateToken(ctx context.Context, req *CreateTokenRequest) (*Cr
 	if len(req.Scopes) == 0 {
 		return nil, fmt.Errorf("at least one scope is required: %w", ErrBadRequest)
 	}
+	if err := validateExternalTokenScopes(req.Scopes); err != nil {
+		return nil, err
+	}
 
 	id, err := generateTokenID()
 	if err != nil {
@@ -177,6 +183,9 @@ func (s *Service) PatchToken(ctx context.Context, id string, req *PatchTokenRequ
 		token.Name = *req.Name
 	}
 	if req.Scopes != nil {
+		if err := validateExternalTokenScopes(req.Scopes); err != nil {
+			return err
+		}
 		token.Scopes = req.Scopes
 	}
 	if req.Active != nil {
@@ -227,7 +236,7 @@ func (s *Service) AuthenticateToken(ctx context.Context, rawKey string) (*TokenA
 // different matcher can drift into existence.
 func TokenScopesAllow(scopes []TokenScope, configPath, operation string) bool {
 	for _, scope := range scopes {
-		if matchPath(scope.Path, configPath) && containsOperation(scope.Operations, operation) {
+		if scope.Resource == "" && matchPath(scope.Path, configPath) && containsOperation(scope.Operations, operation) {
 			return true
 		}
 	}

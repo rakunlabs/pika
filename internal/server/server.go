@@ -21,6 +21,7 @@ import (
 	"github.com/rakunlabs/pika/internal/server/api"
 	"github.com/rakunlabs/pika/internal/server/authx"
 	"github.com/rakunlabs/pika/internal/server/lockgate"
+	"github.com/rakunlabs/pika/internal/server/mcpsrv"
 	"github.com/rakunlabs/pika/internal/server/publicendpoint"
 	"github.com/rakunlabs/pika/internal/service"
 )
@@ -81,9 +82,6 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	}
 
 	basePath := cfg.Server.BasePath
-	mData := server.Group(basePath)
-	m := server.Group(basePath)
-	mAuth := server.Group(basePath)
 	if basePath != "" {
 		server.GET("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -120,6 +118,12 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	if err := mgr.Boot(ctx, authSettings); err != nil {
 		return fmt.Errorf("auth manager boot: %w", err)
 	}
+	server.Use(mcpsrv.Endpoint(svc, mgr, basePath, config.ServiceName, info.Version, func() bool {
+		return encStore != nil && encStore.KeyManager().Initialized() && !encStore.KeyManager().IsUnlocked()
+	}))
+	mData := server.Group(basePath)
+	m := server.Group(basePath)
+	mAuth := server.Group(basePath)
 
 	// Brute-force protection on the unprotected auth group: rate-limit
 	// POST /login/pass/* and POST /login/register/* per client-IP and

@@ -70,6 +70,7 @@ type ExternalPermissionsSettings struct {
 }
 
 type Settings struct {
+	MCP      *MCPSettings                 `json:"mcp,omitempty"`
 	External map[string]external.External `json:"external,omitempty"`
 	// EncryptionVerifier is the ciphertext of a known plaintext used
 	// to detect a wrong server-encryption key on unlock. Written
@@ -150,6 +151,7 @@ func (s *Settings) EventLogEnabled() bool {
 }
 
 type PatchSettings struct {
+	MCP                 *MCPSettings                 `json:"mcp,omitempty"`
 	Action              ActionKey                    `json:"action"`
 	External            map[string]external.External `json:"external,omitempty"`
 	EventLog            *EventLogSettings            `json:"event_log,omitempty"`
@@ -254,6 +256,13 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 
 	if patch.EventLog != nil {
 		settings.EventLog = patch.EventLog
+	}
+	if patch.MCP != nil {
+		if err := patch.MCP.Validate(); err != nil {
+			return err
+		}
+		effective := EffectiveMCPSettings(patch.MCP)
+		settings.MCP = &effective
 	}
 
 	// Handle hooks update (if provided)

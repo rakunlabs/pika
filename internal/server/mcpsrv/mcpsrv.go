@@ -5,18 +5,18 @@
 //
 // # Transport
 //
-// A single streamable-HTTP endpoint (POST /api/v1/mcp). It runs in
+// A configurable streamable-HTTP endpoint (default POST /api/v1/mcp). It runs in
 // stateless mode: every POST is a self-contained JSON-RPC exchange, so
 // there is no cross-request session state that could outlive — or be
 // reused across — the credentials that created it.
 //
 // # Authorization
 //
-// The endpoint carries no authentication of its own. It is mounted on the
-// group that already runs authx Require() + CapMiddleware(), so by the
+// Endpoint applies authx Require() + CapMiddleware() by default, so by the
 // time a request arrives the caller has been authenticated — API token via
 // `Authorization: Bearer`, or the UI session cookie — and their resolved
 // capabilities and path patterns are on the request context.
+// In proxy mode, Endpoint supplies a fixed scoped identity instead.
 //
 // Two things are layered on top of that:
 //
@@ -173,6 +173,9 @@ func (a authScope) apply(ctx context.Context) context.Context {
 	ctx = service.WithCapabilities(ctx, a.caps)
 	ctx = service.WithCapabilityPatterns(ctx, a.patterns)
 	ctx = service.WithUserInfo(ctx, a.username, a.userID)
+	if a.tokenScopes != nil {
+		ctx = service.WithTokenScopes(ctx, a.tokenScopes)
+	}
 
 	return ctx
 }
@@ -194,6 +197,10 @@ func (a authScope) has(capability, operation string) bool {
 	}
 
 	for _, scope := range a.tokenScopes {
+		external := capability == service.CapExternalRead || capability == service.CapExternalWrite
+		if external != (scope.Resource != "") {
+			continue
+		}
 		for _, op := range scope.Operations {
 			if op == operation || op == "*" {
 				return true
@@ -209,6 +216,10 @@ func (a authScope) has(capability, operation string) bool {
 func (a authScope) allowPath(capability, operation, path string) error {
 	if !a.has(capability, operation) {
 		return fmt.Errorf("capability %q is required for this operation", capability)
+	}
+
+	if len(a.tokenScopes) > 0 && !service.TokenScopesAllow(a.tokenScopes, path, operation) {
+		return fmt.Errorf("path %q is not permitted for %q", path, operation)
 	}
 
 	if a.patterns.Allows(capability, path) {

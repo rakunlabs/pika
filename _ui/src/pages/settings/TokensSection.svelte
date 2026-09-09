@@ -59,15 +59,15 @@
             addToast("Token name is required", "alert");
             return;
         }
-        if (newTokenScopes.some((s) => !s.path.trim())) {
-            addToast("All scope paths are required", "alert");
+        if (newTokenScopes.some((s) => !s.path.trim() || s.operations.length === 0)) {
+            addToast("Each scope needs a path and at least one operation", "alert");
             return;
         }
 
         try {
             const req: CreateTokenRequest = {
                 name: newTokenName.trim(),
-                scopes: newTokenScopes,
+                scopes: newTokenScopes.map((s) => ({ ...s, resource: s.resource?.trim() || undefined, path: s.path.trim() })),
             };
             if (newTokenExpiry) {
                 req.expires_at = new Date(newTokenExpiry).toISOString();
@@ -164,7 +164,7 @@
                 Access Tokens
             </h2>
             <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-                Tokens authenticate consumers accessing configs via the data API
+                Scope API and MCP access to Pika configs and external resources.
             </p>
         </div>
         <button
@@ -179,7 +179,7 @@
     <!-- Create Token Form -->
     {#if showCreateToken}
         <div
-            class="mb-6 p-5 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
+            class="mb-6 p-5 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
         >
             <h3
                 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-4"
@@ -235,7 +235,18 @@
                         class="flex items-start gap-2 mb-2 p-3 bg-slate-50 dark:bg-warm-900 rounded-md border border-slate-100 dark:border-warm-700"
                     >
                         <div class="flex-1">
+                            <label for={`token-resource-${i}`} class="block mb-1 text-xs text-slate-700 dark:text-slate-200">External resource (optional)</label>
                             <input
+                                id={`token-resource-${i}`}
+                                type="text"
+                                bind:value={scope.resource}
+                                placeholder="Leave empty for Pika configs"
+                                class="w-full px-3 py-2 mb-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                            />
+                            <p class="mb-2 text-xs text-slate-500 dark:text-slate-400">Use the exact name from External Resources, e.g. production-vault. This scope grants access only to that source.</p>
+                            <label for={`token-path-${i}`} class="block mb-1 text-xs text-slate-700 dark:text-slate-200">Path pattern</label>
+                            <input
+                                id={`token-path-${i}`}
                                 type="text"
                                 bind:value={scope.path}
                                 placeholder="Path pattern (e.g., app/**, production/*)"
@@ -351,7 +362,7 @@
                                 <span
                                     class="px-2 py-0.5 text-[10px] font-mono bg-slate-100 dark:bg-warm-900 text-slate-600 dark:text-slate-300 rounded"
                                 >
-                                    {scope.operations.join(",")}:{scope.path}
+                                    {scope.resource ? `external:${scope.resource}` : "configs"} · {scope.operations.join(",")}:{scope.path}
                                 </span>
                             {/each}
                         </div>

@@ -206,6 +206,8 @@ The endpoint reuses pika's existing authorization rather than adding a parallel 
 
 So a token scoped `read` on `team-a/**` yields an agent with a read-only tool set that cannot see, search or even list anything outside that subtree.
 
+**Settings → MCP** lets you change the endpoint path or disable Pika authentication behind an authenticating reverse proxy. Proxy mode uses explicit source/path/operation scopes and records `X-User` as an audit label only. Both API tokens and proxy-mode scopes can target a named external resource (for example, `production-vault` with `team-a/**` and `read`); tools without a matching operation grant stay hidden.
+
 Tools cover config search, folder browsing, reading stored source vs. fully resolved values, version and variant history, writes and deletes, plus the same operations against configured external backends. See [docs/guide/mcp.md](_docs/guide/mcp.md).
 
 ## Configuration

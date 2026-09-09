@@ -30,12 +30,10 @@ const (
 //   - delete → files.write (pika has no separate delete capability; the
 //     REST routes gate deletes on files.write)
 //
-// Nothing else is derivable. A token can never obtain settings.manage,
-// users.manage, tokens.manage or the external.* capabilities, because
-// its scope vocabulary cannot express them — there is no operation that
-// means "administer this server". That keeps the blast radius of a
-// leaked token to configuration data, and keeps the token surface
-// identical to what the REST routes already enforce.
+// Scopes with a Resource instead grant external.read / external.write.
+// Their resource/path/operation pairings are enforced by the service's
+// scoped provider, not by config CapabilityPatterns. Neither scope kind
+// can grant settings.manage, users.manage or tokens.manage.
 //
 // The returned report is intentionally shallow: no DB lookup, no
 // superadmin evaluation, no bundle expansion. A token is not a user.
@@ -68,6 +66,19 @@ func tokenReport(id *identity.Identity) *EffectiveReport {
 		rep.Sources = append(rep.Sources, CapSource{Capability: service.CapFilesWrite, Kind: "token_scope"})
 		patterns[service.CapFilesWrite] = writePaths
 	}
+	for _, sc := range scopes {
+		if sc.Resource == "" {
+			continue
+		}
+		if scopeHasAnyOp(sc, []string{tokenOpRead}) && !service.Capabilities(rep.Capabilities).Has(service.CapExternalRead) {
+			rep.Capabilities = append(rep.Capabilities, service.CapExternalRead)
+			rep.Sources = append(rep.Sources, CapSource{Capability: service.CapExternalRead, Kind: "token_scope"})
+		}
+		if scopeHasAnyOp(sc, []string{tokenOpWrite, tokenOpDelete}) && !service.Capabilities(rep.Capabilities).Has(service.CapExternalWrite) {
+			rep.Capabilities = append(rep.Capabilities, service.CapExternalWrite)
+			rep.Sources = append(rep.Sources, CapSource{Capability: service.CapExternalWrite, Kind: "token_scope"})
+		}
+	}
 
 	if len(patterns) > 0 {
 		rep.Patterns = patterns
@@ -83,6 +94,9 @@ func scopePathsFor(scopes []service.TokenScope, ops ...string) []string {
 	out := make([]string, 0, len(scopes))
 
 	for _, scope := range scopes {
+		if scope.Resource != "" {
+			continue
+		}
 		if !scopeHasAnyOp(scope, ops) {
 			continue
 		}

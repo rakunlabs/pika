@@ -89,7 +89,7 @@ func (s *Storage) registerBuckets() error {
 	}
 
 	if s.tokens, err = bw.RegisterBucket[tokenRow](s.db, bucketTokens,
-		bw.WithVersion[tokenRow](1),
+		bw.WithVersion[tokenRow](2), // v2 adds optional external resource to scopes.
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketTokens, err)
 	}
@@ -157,7 +157,7 @@ func (s *Storage) registerBuckets() error {
 	//        reconciliation settings. Existing rows are rewritten with
 	//        the current shape, dropping those configuration fields.
 	if s.settings, err = bw.RegisterBucket[settingsRow](s.db, bucketSettings,
-		bw.WithVersion[settingsRow](6),
+		bw.WithVersion[settingsRow](7), // v7 adds optional MCP routing/auth settings.
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketSettings, err)
 	}

@@ -8,7 +8,39 @@ There is nothing to install or run separately. The MCP server is part of the pik
 POST /api/v1/mcp
 ```
 
-The transport is **streamable HTTP**, the standard remote MCP transport.
+The transport is **streamable HTTP**, the standard remote MCP transport. The path above is the default; it can be changed in **Settings → MCP**.
+
+## Endpoint and reverse-proxy mode
+
+In **Settings → MCP**, choose an **Endpoint path**, such as `/mcp` or `/agents/mcp`. Pika adds `server.base_path` automatically. Reserved API, login and asset paths cannot be selected. Saving applies immediately, including on subsequent requests from existing clients; update the client URL when changing the path.
+
+By default, Pika authenticates MCP callers with the same token/session mechanism as the API. If a reverse proxy handles authentication, enable **Disable Pika authentication for MCP**, then add explicit access scopes:
+
+- **Source:** Pika configs or a configured external resource, such as `production-vault`.
+- **Path pattern:** `team-a/**`, an exact key, or `**` for all paths in that source.
+- **Operations:** `read`, `write`, and/or `delete`.
+
+Every request in proxy mode uses these shared endpoint scopes, even if it includes a bearer token or session cookie. The tool preview shows which tools clients will see. A config-only scope grants no external access; an external-only scope grants no config access. Read-only grants hide write/delete tools entirely, and previously known tool names cannot bypass a revoked grant.
+
+The proxy's **`X-User`** header is used only as an audit author (for example, in config version history and hooks). If absent or blank, the author is `mcp-proxy`. It never resolves a Pika user or grants that user's permissions. Have the authenticating proxy set this header to its verified username.
+
+For example, the settings API accepts this full MCP configuration:
+
+```json
+{
+  "action": "set",
+  "mcp": {
+    "endpoint": "/mcp",
+    "auth_disabled": true,
+    "scopes": [
+      { "path": "apps/**", "operations": ["read"] },
+      { "resource": "production-vault", "path": "team-a/**", "operations": ["read"] }
+    ]
+  }
+}
+```
+
+Connect the client to the resulting URL without a Pika bearer header; supply whatever authentication your proxy requires. The server-key lock still blocks MCP, including custom endpoint paths.
 
 ## Connecting a client
 
@@ -45,13 +77,13 @@ If your client cannot send custom headers, put a proxy in front that injects the
 
 ## Permissions
 
-The MCP endpoint sits on the same authenticated route group as the rest of `/api/v1/*` and enforces the same rules. It is not a side door.
+By default, the MCP endpoint uses the same authentication and permission resolution as `/api/v1/*`. Proxy mode substitutes the explicit endpoint scopes described above.
 
 **API token** — the normal case for an agent. A token carries [scopes](./tokens-and-scopes): path globs paired with operations (`read`, `write`, `delete`). Those scopes are enforced per tool call on the exact path being touched, identically to `/data/*` and to the admin API.
 
 **Session cookie** — for a local agent pointed at your own logged-in browser session. Authorization then comes from your capabilities and path patterns.
 
-If a request carries both, the token wins. A narrow token can never inherit a wider browser session.
+With Pika authentication enabled, if a request carries both, the token wins. A narrow token can never inherit a wider browser session. Proxy mode always uses its configured endpoint scopes.
 
 What that buys you:
 
@@ -61,9 +93,7 @@ What that buys you:
 - **Writes are attributed.** Version history and [hook](./hooks) events record the token name (or the username for a session), exactly like a UI or REST write.
 - **The lock gate applies.** While the server key is [locked](./server-key-management), the endpoint returns `503` like every other `/api/v1/` route.
 
-::: warning Tokens cannot reach external resources
-The external backends are gated on the `external.read` / `external.write` capabilities, and a token's [scopes only ever map onto `files.*`](./tokens-and-scopes#tokens-on-the-admin-api) — so the `*_external` tools are simply absent for a token caller. This mirrors the REST side, where `/api/v1/external/*` is unreachable with a token. To let an agent read Vault or AWS secrets you have to give it a session-backed identity holding those capabilities, and you should think hard before you do: those values land in the model's context.
-:::
+**External resources:** tokens and proxy-mode scopes can grant external access with an explicit `resource` name. These scopes map to `external.read` / `external.write`, while retaining the exact resource/path/operation pairing. Resource listings, path browsing, search, reads, version reads, writes and deletes are scoped; a write grant does not imply delete. Config scopes without `resource` never grant external access. External values returned by MCP become part of the model's context.
 
 ## Tools
 
@@ -83,7 +113,7 @@ The external backends are gated on the `external.read` / `external.write` capabi
 
 ### External resources
 
-Session credentials only — see the warning above.
+Available to sessions with the listed capabilities, or to tokens/proxy scopes granting the corresponding operation on an explicit external resource. Listings and search omit inaccessible resources and paths.
 
 | Tool                      | Capability       | Purpose                                                                |
 | ------------------------- | ---------------- | ---------------------------------------------------------------------- |

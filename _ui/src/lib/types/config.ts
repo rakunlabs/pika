@@ -436,6 +436,7 @@ export interface ExternalPermissionsSettings {
 
 // Settings from API
 export interface Settings {
+  mcp?: MCPSettings;
   external?: Record<string, ExternalResource>;
   event_log?: EventLogSettings;
   hooks?: Hook[];
@@ -449,6 +450,12 @@ export interface Settings {
 export interface ServerTLSSettings {
   https_disabled?: boolean;
   plain_http_enabled?: boolean;
+}
+
+export interface MCPSettings {
+  endpoint: string;
+  auth_disabled: boolean;
+  scopes: TokenScope[];
 }
 
 // PublicEndpoint mirrors service.PublicEndpoint on the backend.
@@ -753,6 +760,7 @@ export interface ApiError {
 
 // Token scope
 export interface TokenScope {
+  resource?: string;
   path: string;        // Glob pattern: "app/*", "production/**"
   operations: string[]; // ["read", "write", "delete"]
 }

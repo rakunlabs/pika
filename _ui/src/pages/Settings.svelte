@@ -21,6 +21,7 @@
     import AccountSecuritySection from "@/pages/settings/AccountSecuritySection.svelte";
     import VaultSection from "@/pages/settings/VaultSection.svelte";
     import TokensSection from "@/pages/settings/TokensSection.svelte";
+    import MCPSection from "@/pages/settings/MCPSection.svelte";
     import ExternalResourcesSection from "@/pages/settings/ExternalResourcesSection.svelte";
     import HooksSection from "@/pages/settings/HooksSection.svelte";
     import AuthSection from "@/pages/settings/AuthSection.svelte";
@@ -37,6 +38,7 @@
         | "account_security"
         | "vault"
         | "tokens"
+        | "mcp"
         | "external"
         | "hooks"
         | "auth"
@@ -56,6 +58,7 @@
         account_security: null,
         vault: null,
         tokens: "tokens.manage",
+        mcp: "settings.manage",
         external: "settings.manage",
         hooks: "settings.manage",
         auth: "settings.manage",
@@ -73,6 +76,7 @@
         { key: "account_security", label: "Account Security", icon: KeyRound },
         { key: "vault", label: "Personal Vault", icon: Vault },
         { key: "tokens", label: "Access Tokens", icon: Key },
+        { key: "mcp", label: "MCP", icon: Plug },
         { key: "external", label: "External Resources", icon: Globe },
         { key: "hooks", label: "Hooks", icon: Webhook },
         { key: "auth", label: "Authentication", icon: ShieldCheck },
@@ -153,6 +157,8 @@
                 <VaultSection />
             {:else if activeSection === "tokens"}
                 <TokensSection />
+            {:else if activeSection === "mcp"}
+                <MCPSection />
             {:else if activeSection === "external"}
                 <ExternalResourcesSection />
             {:else if activeSection === "hooks"}

@@ -52,6 +52,9 @@ func (r *CapResolver) serveHTTP(next http.Handler, w http.ResponseWriter, req *h
 	caps, username, userID, patterns := r.resolve(req.Context(), id)
 
 	ctx := service.WithCapabilities(req.Context(), caps)
+	if id.Provider == service.TokenProvider {
+		ctx = service.WithTokenScopes(ctx, service.TokenScopesFromIdentity(id))
+	}
 	ctx = service.WithUserInfo(ctx, username, userID)
 	ctx = service.WithCapabilityPatterns(ctx, patterns)
 	next.ServeHTTP(w, req.WithContext(ctx))

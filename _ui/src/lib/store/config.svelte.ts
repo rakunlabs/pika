@@ -779,6 +779,17 @@ function createConfigStore() {
     }
   }
 
+  async function saveMCPSettings(patch: import('@/lib/types/config').MCPSettings): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', { action: 'set', mcp: patch });
+      settings = { ...settings, mcp: patch };
+      addToast('MCP settings saved', 'success');
+    } catch (error: any) {
+      addToast(error.response?.data?.message || 'Failed to save MCP settings', 'alert');
+      throw error;
+    }
+  }
+
   async function saveHooks(hooks: import('@/lib/types/config').Hook[]): Promise<void> {
     try {
       await axios.post('/api/v1/settings', {
@@ -1422,6 +1433,7 @@ function createConfigStore() {
     saveSettings,
     saveVaultSettings,
     saveServerTLSSettings,
+    saveMCPSettings,
     saveHooks,
     saveEventLogSettings,
     savePublicEndpoints,

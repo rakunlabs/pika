@@ -352,6 +352,12 @@ func (s *Service) fetchExternalConfig(ctx context.Context, resourceName string, 
 // (Fetch / List / Test) all funnel through here so a future change to
 // resolution rules (e.g. multi-tenant prefixing) lands in one spot.
 func (s *Service) externalProvider(ctx context.Context, resourceName string) (external.Provider, error) {
+	scopes := tokenScopesFromContext(ctx)
+	if !externalScopeAllows(scopes, resourceName, "", "read", true) &&
+		!externalScopeAllows(scopes, resourceName, "", "write", true) &&
+		!externalScopeAllows(scopes, resourceName, "", "delete", true) {
+		return nil, ErrForbidden
+	}
 	settings, err := s.Settings(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("loading settings: %w", err)
@@ -365,6 +371,9 @@ func (s *Service) externalProvider(ctx context.Context, resourceName string) (ex
 	provider, err := external.ResourceProvider(ext, s)
 	if err != nil {
 		return nil, fmt.Errorf("external resource %q: %w", resourceName, err)
+	}
+	if scopes != nil {
+		return &scopedExternalProvider{Provider: provider, resource: resourceName, scopes: scopes}, nil
 	}
 	return provider, nil
 }
@@ -680,6 +689,10 @@ func (s *Service) ListExternalResources(ctx context.Context) ([]ExternalResource
 	}
 	out := make([]ExternalResourceSummary, 0, len(settings.External))
 	for name, ext := range settings.External {
+		scopes := tokenScopesFromContext(ctx)
+		if !externalScopeAllows(scopes, name, "", "read", true) {
+			continue
+		}
 		// Construct a provider purely to read its Capabilities; we
 		// don't call any network method, so even a misconfigured
 		// resource shows up here (the browser surfaces the error
@@ -690,6 +703,9 @@ func (s *Service) ListExternalResources(ctx context.Context) ([]ExternalResource
 			// caps so the user sees something they can clean up.
 			out = append(out, ExternalResourceSummary{Name: name, Kind: "unknown"})
 			continue
+		}
+		if scopes != nil {
+			provider = &scopedExternalProvider{Provider: provider, resource: name, scopes: scopes}
 		}
 		out = append(out, ExternalResourceSummary{
 			Name:         name,

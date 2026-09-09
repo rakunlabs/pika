@@ -1,6 +1,6 @@
 # Tokens & scopes
 
-API tokens authenticate non-human consumers against `/data/*` (resolved configs), the configuration endpoints of the admin API (`/api/v1/*`), and the [MCP endpoint](./mcp). A token carries one thing: a list of **scopes**, each pairing a path glob with a set of operations.
+API tokens authenticate non-human consumers against `/data/*` (resolved configs), configuration and external-resource endpoints of the admin API (`/api/v1/*`), and the [MCP endpoint](./mcp). A token carries a list of **scopes**, each pairing a source and path glob with a set of operations.
 
 ## Token format
 
@@ -32,6 +32,22 @@ A scope is `{ path, operations }`:
 ```
 
 A request is allowed if **any** scope on the token matches the requested path with the requested operation.
+
+### External resource scopes
+
+Add `resource` to select one external backend by its exact configured name. Omit it (or leave the UI field empty) for Pika configs:
+
+```json
+[
+  { "path": "apps/**", "operations": ["read"] },
+  { "resource": "production-vault", "path": "team-a/**", "operations": ["read"] },
+  { "resource": "consul-dev", "path": "apps/**", "operations": ["read", "write"] }
+]
+```
+
+This token can read Pika's `apps/**`, read `team-a/**` in `production-vault`, and read/write `apps/**` in `consul-dev`. It cannot delete external entries. These grants work on `/api/v1/external/*` and MCP. Existing config scopes do not gain external-resource API access, and external grants do not grant access to Pika config paths.
+
+External paths use the same segment glob syntax as configs. Resource names are exact, not globs. Use clean provider-relative paths without traversal, URL query/fragment components or percent-encoding. Resource/path listings and searches are filtered to the allowed scope. In MCP, read-only external scopes expose only external listing, searching and reading tools; write/delete tools are omitted.
 
 ### Path matching
 
@@ -110,13 +126,15 @@ Users are authorized by named [capabilities](/guide/authentication#capabilities)
 | `read`          | `files.read`       | the paths granting `read` |
 | `write`         | `files.write`      | the paths granting `write` |
 | `delete`        | `files.write`      | the paths granting `delete` |
+| `read` with `resource` | `external.read` | the named resource and paths granting `read` |
+| `write` / `delete` with `resource` | `external.write` | the named resource, paths and exact operation |
 
 So a token scoped `{ "path": "team-a/**", "operations": ["read"] }` can list and read configurations under `team-a/`, and nothing else.
 
 ::: warning Tokens cannot administer the server
-The derivation stops at `files.*`. There is no scope that yields `settings.manage`, `tokens.manage`, `users.manage`, `permissions.manage`, `external.read` or `external.write`, so those endpoints return `403` for every token regardless of its scopes. Server administration, external secret backends and token management require a logged-in user.
+There is no scope that yields `settings.manage`, `tokens.manage`, `users.manage` or `permissions.manage`, so administrative endpoints return `403` for every token regardless of its scopes. External access is possible only through explicitly resource-scoped grants; configuring backends, bulk exports and token management still require an authorized user.
 
-This is the ceiling on a leaked token: configuration data within its paths, never the server itself.
+The token can reach only its granted config/external data, never server administration.
 :::
 
 ::: info Superadmin
