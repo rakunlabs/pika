@@ -101,6 +101,20 @@
   // both shapes.
   let pathTree = $state<Record<string, string[] | undefined>>({});
   let pathTreeLoading = $state<Record<string, boolean>>({});
+  // Per-prefix listing error. A failed List() must NOT be cached as an
+  // empty child array: Vault hands out intermittent 403s (expired lease,
+  // policy gaps on <mount>/metadata/) and an empty-looking folder with no
+  // message is the worst possible rendering of that. We keep the message
+  // here, leave pathTree[prefix] undefined so a retry actually re-issues
+  // the request, and show an inline retry affordance in the tree.
+  let pathTreeError = $state<Record<string, string | undefined>>({});
+  // Bumped on every resource switch / full refresh. In-flight List()
+  // responses carry the generation they were issued under and are
+  // discarded when it no longer matches — otherwise a slow response for
+  // resource A paints its paths into the tree of resource B the user has
+  // since clicked (they land out of order surprisingly often when one
+  // backend is slow).
+  let treeGeneration = 0;
   let expanded = $state<Record<string, boolean>>({ "": true });
   let selectedPath = $state<string | null>(null);
   let deepLinkHydrationStarted = $state(false);
@@ -201,11 +215,24 @@
 
   // ── Resource selection ────────────────────────────────────────────
   async function selectResource(name: string) {
-    if (selectedResource === name) return;
+    if (selectedResource === name) {
+      // Re-clicking the active resource is the operator's instinctive
+      // retry gesture. If the root listing never landed (failed, or the
+      // backend was down) we re-issue it instead of returning silently —
+      // the old early-return left the user with a dead, empty pane and
+      // no way back short of the Refresh button.
+      if (pathTree[""] === undefined && !pathTreeLoading[""]) {
+        await loadChildren("", true);
+      }
+      return;
+    }
     selectedResource = name;
-    // Reset everything below.
+    // Reset everything below. Bumping the generation invalidates any
+    // List() still in flight for the previous resource.
+    treeGeneration++;
     pathTree = {};
     pathTreeLoading = {};
+    pathTreeError = {};
     expanded = { "": true };
     selectedPath = null;
     entry = null;
@@ -292,21 +319,42 @@
   });
 
   // Lazy-load children under a prefix. Cached in pathTree; concurrent
-  // calls deduped by pathTreeLoading.
-  async function loadChildren(prefix: string) {
+  // calls deduped by pathTreeLoading. `force` re-issues a request whose
+  // result is already cached (retry button, refresh, post-write reload).
+  async function loadChildren(prefix: string, force = false) {
     if (!selectedResource) return;
     if (pathTreeLoading[prefix]) return;
-    if (pathTree[prefix] !== undefined) return;
+    if (!force && pathTree[prefix] !== undefined) return;
+    const generation = treeGeneration;
+    const resource = selectedResource;
     pathTreeLoading = { ...pathTreeLoading, [prefix]: true };
+    pathTreeError = { ...pathTreeError, [prefix]: undefined };
     try {
-      const children = await configStore.listExternalPaths(
-        selectedResource,
-        prefix,
-      );
+      const children = await configStore.listExternalPaths(resource, prefix);
+      if (generation !== treeGeneration) return;
       pathTree = { ...pathTree, [prefix]: sortChildren(prefix, children || []) };
+    } catch (err: any) {
+      if (generation !== treeGeneration) return;
+      // Deliberately leave pathTree[prefix] undefined: caching [] here
+      // would make every later expand a no-op (see loadChildren's cache
+      // guard) and permanently freeze the branch on a transient failure.
+      pathTreeError = {
+        ...pathTreeError,
+        [prefix]: errorMessage(err, "Failed to list paths"),
+      };
     } finally {
-      pathTreeLoading = { ...pathTreeLoading, [prefix]: false };
+      // Only the newest generation owns the loading flag — a stale
+      // response must not clear the spinner of the request that replaced
+      // it (which would also re-open the door for a duplicate fetch).
+      if (generation === treeGeneration) {
+        pathTreeLoading = { ...pathTreeLoading, [prefix]: false };
+      }
     }
+  }
+
+  // Normalise an axios/Error rejection into something worth showing.
+  function errorMessage(err: any, fallback: string): string {
+    return err?.response?.data?.message || err?.message || fallback;
   }
 
   // Order a prefix's children folders-first, then files, each group
@@ -543,7 +591,7 @@
         ? path.slice(0, path.lastIndexOf("/") + 1)
         : "";
       pathTree = { ...pathTree, [parent]: undefined };
-      await loadChildren(parent);
+      await loadChildren(parent, true);
       if (selectedPath === path) {
         selectedPath = null;
         entry = null;
@@ -599,10 +647,18 @@
     // (we strip it in the service layer) so the only signal is "did
     // List() ever return this with a slash?". Cheapest test: try
     // listing it; if it returns paths, treat as folder.
-    const children = await configStore.listExternalPaths(
-      selectedResource!,
-      path + "/",
-    );
+    let children: string[] = [];
+    try {
+      children = await configStore.listExternalPaths(
+        selectedResource!,
+        path + "/",
+      );
+    } catch {
+      // The probe only tells folders from leaves. If it fails we fall
+      // through and open the hit as an entry — a genuine read failure is
+      // then reported by the viewer pane, which is a far better place to
+      // show it than a toast over the result list.
+    }
     if (children.length > 0) {
       // Folder. Expand to it in the tree, but stay in search mode so
       // the user can keep iterating on results.
@@ -661,7 +717,7 @@
         ? path.slice(0, path.lastIndexOf("/") + 1)
         : "";
       pathTree = { ...pathTree, [parent]: undefined };
-      await loadChildren(parent);
+      await loadChildren(parent, true);
       await openPath(path);
     } catch (err: any) {
       const msg =
@@ -676,8 +732,12 @@
   async function refreshTree() {
     if (!selectedResource) return;
     const wasExpanded = { ...expanded };
+    // Same invalidation contract as selectResource: anything still in
+    // flight belongs to the tree we're throwing away.
+    treeGeneration++;
     pathTree = {};
     pathTreeLoading = {};
+    pathTreeError = {};
     expanded = { "": true };
     await loadChildren("");
     // Re-expand previously open folders. This is best-effort — if a
@@ -1061,6 +1121,7 @@
               {#snippet tree(prefix: string, depth: number)}
                 {@const children = pathTree[prefix]}
                 {@const isLoading = pathTreeLoading[prefix]}
+                {@const loadError = pathTreeError[prefix]}
                 {#if isLoading && children === undefined}
                   <div
                     class="px-3 py-1 text-[10px] text-slate-400"
@@ -1068,12 +1129,35 @@
                   >
                     <Loader2 size={10} class="inline animate-spin" /> Loading…
                   </div>
-                {:else if children !== undefined && children.length === 0 && depth > 0}
+                {:else if loadError}
+                  <!-- A failed listing is shown in place, with the
+                       upstream message and a retry. Previously this
+                       rendered as an empty (or entirely blank) pane,
+                       which reads as "this resource has no secrets"
+                       rather than "Vault said no". -->
+                  <div
+                    class="mx-2 my-1 p-2 rounded border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30"
+                    style="margin-left: {4 + depth * 12}px"
+                  >
+                    <div
+                      class="flex items-start gap-1 text-[10px] text-red-700 dark:text-red-300"
+                    >
+                      <AlertCircle size={10} class="shrink-0 mt-0.5" />
+                      <span class="break-all font-mono">{loadError}</span>
+                    </div>
+                    <button
+                      class="mt-1.5 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-200 bg-white dark:bg-warm-900 border border-red-200 dark:border-red-900 rounded hover:bg-red-100 dark:hover:bg-red-950/60 cursor-pointer transition-colors"
+                      onclick={() => loadChildren(prefix, true)}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                {:else if children !== undefined && children.length === 0}
                   <div
                     class="px-3 py-1 text-[10px] text-slate-400"
                     style="padding-left: {12 + depth * 12}px"
                   >
-                    (empty)
+                    {depth === 0 ? "No paths under this resource" : "(empty)"}
                   </div>
                 {:else if children !== undefined}
                   {#each children as child (child)}

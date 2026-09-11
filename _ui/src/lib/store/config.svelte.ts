@@ -902,14 +902,22 @@ function createConfigStore() {
     return response.data;
   }
 
+  // List the child paths under a prefix. This THROWS on failure instead
+  // of returning an empty array: a Vault 403 (policy doesn't cover
+  // <mount>/metadata/), an expired AppRole lease or an upstream timeout
+  // used to be indistinguishable from "this prefix is genuinely empty",
+  // so the browser silently rendered an empty tree and the operator had
+  // no idea anything went wrong. Callers own the error presentation.
   async function listExternalPaths(resourceName: string, prefix: string = ''): Promise<string[]> {
     try {
-      const response = await axios.get(`/api/v1/external/${resourceName}/paths`, {
+      const response = await axios.get(`/api/v1/external/${encodeURIComponent(resourceName)}/paths`, {
         params: prefix ? { prefix } : undefined
       });
       return response.data || [];
-    } catch {
-      return [];
+    } catch (error: any) {
+      throw new Error(
+        error?.response?.data?.message || error?.message || 'Failed to list external paths',
+      );
     }
   }
 

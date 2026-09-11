@@ -63,6 +63,12 @@
   let formatField = $state<"" | "json" | "yaml" | "toml">("");
   let externalPathSuggestions = $state<string[]>([]);
   let loadingPaths = $state(false);
+  // Why a separate error field: an empty suggestion list and a failed
+  // listing look identical to the user otherwise ("I picked the resource
+  // and nothing happened"). Vault in particular fails intermittently —
+  // expired AppRole lease, or a policy that covers <mount>/data/ but not
+  // <mount>/metadata/, which is exactly the path a LIST needs.
+  let pathsError = $state<string | null>(null);
 
   // ── Preview state ──────────────────────────────────────────────────
   // User-driven peek at what the external backend actually returns for
@@ -195,6 +201,7 @@
     injectField = e?.inject || "";
     formatField = (e?.format ?? "") as "" | "json" | "yaml" | "toml";
     externalPathSuggestions = [];
+    pathsError = null;
     loadingPaths = false;
     clearPreview();
   });
@@ -210,22 +217,33 @@
     // internal drops the value rather than carrying it silently.
     if (t === "internal") formatField = "";
     externalPathSuggestions = [];
+    pathsError = null;
     clearPreview();
   }
 
   async function loadExternalPaths(resourceName: string, prefix: string = "") {
     if (!resourceName) {
       externalPathSuggestions = [];
+      pathsError = null;
       return;
     }
     loadingPaths = true;
+    pathsError = null;
     try {
       externalPathSuggestions = await configStore.listExternalPaths(
         resourceName,
         prefix,
       );
-    } catch {
+    } catch (e: unknown) {
       externalPathSuggestions = [];
+      const errObj = e as {
+        response?: { data?: { message?: string } };
+        message?: string;
+      };
+      pathsError =
+        errObj?.response?.data?.message ||
+        errObj?.message ||
+        "Failed to list paths";
     } finally {
       loadingPaths = false;
     }
@@ -414,6 +432,22 @@
               {#if loadingPaths}
                 <div class="text-[11px] text-slate-400 dark:text-warm-400">
                   Loading paths...
+                </div>
+              {:else if pathsError}
+                <div
+                  class="p-2 rounded border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-950/40 text-[11px] text-red-700 dark:text-red-300 flex items-start gap-1.5"
+                >
+                  <AlertTriangle size={12} class="shrink-0 mt-0.5" />
+                  <div class="flex-1 min-w-0">
+                    <div class="break-all font-mono">{pathsError}</div>
+                    <button
+                      type="button"
+                      class="mt-1.5 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-200 bg-white dark:bg-warm-900 border border-red-300 dark:border-red-700 rounded hover:bg-red-100 dark:hover:bg-red-950/60 cursor-pointer transition-colors"
+                      onclick={() => loadExternalPaths(resourceField, pathField)}
+                    >
+                      Retry
+                    </button>
+                  </div>
                 </div>
               {:else if externalPathSuggestions.length > 0}
                 <div class="max-h-40 overflow-y-auto {cardClass}">
