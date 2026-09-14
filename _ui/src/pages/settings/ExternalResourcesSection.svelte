@@ -17,6 +17,7 @@
       } from "lucide-svelte";
      import type { ExternalResource, ProxyMode } from "@/lib/types/config";
      import ExternalResourceEditor from "@/lib/components/external/ExternalResourceEditor.svelte";
+     import GitLabFields from "@/lib/components/external/GitLabFields.svelte";
      import { backdropClose } from "@/lib/actions/backdropClose";
 
      // ── External resource state ──
@@ -31,7 +32,8 @@
           | "aws"
           | "gcp"
           | "gcp-parameter"
-          | "azure"
+           | "azure"
+           | "gitlab"
      >("http");
      let newExtHttpUrl = $state("");
      // Header pairs for the HTTP external. Stored as a flat list because a
@@ -103,6 +105,7 @@
      let newExtAzureTenantId = $state("");
      let newExtAzureClientId = $state("");
      let newExtAzureClientSecret = $state("");
+     let newExtGitlab = $state({ address: "https://gitlab.com", group: "", token: "", environment_scope: "*" });
      // Outbound proxy — shared by every backend. HTTP supports only a
      // URL (env-or-custom); the others add an env / direct / custom mode.
      let newExtProxyMode = $state<ProxyMode>("environment");
@@ -264,7 +267,13 @@
                          ? { location: newExtGcpParamLocation.trim() }
                          : {}),
                };
-          } else if (newExtType === "azure") {
+           } else if (newExtType === "gitlab") {
+                if (!newExtGitlab.address.trim() || !newExtGitlab.group.trim() || !newExtGitlab.token.trim()) {
+                     addToast("GitLab URL, group, and access token are required", "alert");
+                     return;
+                }
+                resource.gitlab = { address: newExtGitlab.address.trim(), group: newExtGitlab.group.trim(), token: newExtGitlab.token.trim(), environment_scope: newExtGitlab.environment_scope.trim() || "*" };
+           } else if (newExtType === "azure") {
                if (
                     !newExtAzureVaultUrl.trim() ||
                     !newExtAzureTenantId.trim() ||
@@ -298,7 +307,8 @@
                     resource.aws ??
                     resource.gcp ??
                     resource.gcp_parameter ??
-                    resource.azure) as
+                     resource.azure ??
+                     resource.gitlab) as
                     | { proxy?: string; proxy_mode?: ProxyMode }
                     | undefined;
                if (cfg) {
@@ -356,6 +366,7 @@
                newExtAzureTenantId = "";
                newExtAzureClientId = "";
                newExtAzureClientSecret = "";
+               newExtGitlab = { address: "https://gitlab.com", group: "", token: "", environment_scope: "*" };
                newExtProxyMode = "environment";
                newExtProxyUrl = "";
           } catch (error) {
@@ -644,11 +655,17 @@
                                    class="text-accent-600"
                               />
                               Azure
-                         </label>
+                          </label>
+                          <label class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
+                               <input type="radio" bind:group={newExtType} value="gitlab" class="text-accent-600" />
+                               GitLab Group Variables
+                          </label>
                     </div>
                </div>
 
-               {#if newExtType === "http"}
+                {#if newExtType === "gitlab"}
+                     <GitLabFields bind:config={newExtGitlab} />
+                {:else if newExtType === "http"}
                     <div class="mb-4">
                          <label
                               for="ext-url"
@@ -1474,11 +1491,15 @@
                                                            ? "GCP Parameter Manager"
                                                            : resource.azure
                                                              ? "Azure Key Vault"
-                                                             : "Unknown"}
+                                                              : resource.gitlab
+                                                                ? "GitLab Group Variables"
+                                                                : "Unknown"}
                                    </span>
                               </div>
                               <div class="mt-1 space-y-0.5">
-                                   {#if resource.http}
+                                   {#if resource.gitlab}
+                                        <span class="text-xs font-mono text-slate-500 dark:text-slate-400 break-all">{resource.gitlab.address} · {resource.gitlab.group} · {resource.gitlab.environment_scope || "*"}</span>
+                                   {:else if resource.http}
                                         <span
                                              class="text-xs font-mono text-slate-400 dark:text-slate-500"
                                              >{resource.http.base_url}</span

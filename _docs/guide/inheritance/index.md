@@ -50,6 +50,7 @@ Each external resource has a **name** that you choose. That name is what `resour
 - [GCP Secret Manager](./gcp) — opaque secret payloads.
 - [GCP Parameter Manager](./gcp-parameter) — server-side-templated parameter payloads.
 - [Azure](./azure) — Key Vault.
+- [GitLab Group Variables](./gitlab) — browse and edit group CI/CD variables.
 
 ## Examples
 

@@ -27,6 +27,7 @@
     Loader2,
   } from "lucide-svelte";
   import type { ExternalResource, ProxyMode } from "@/lib/types/config";
+  import GitLabFields from "./GitLabFields.svelte";
 
   type Mode = "view" | "edit" | "create";
   type ResourceKind =
@@ -38,7 +39,8 @@
     | "aws"
     | "gcp"
     | "gcp-parameter"
-    | "azure";
+    | "azure"
+    | "gitlab";
 
   type Props = {
     // Current name of the resource. In 'create' mode this is the empty
@@ -166,6 +168,12 @@
   let azureTenantId = $state(snapResource.azure?.tenant_id ?? "");
   let azureClientId = $state(snapResource.azure?.client_id ?? "");
   let azureClientSecret = $state(snapResource.azure?.client_secret ?? "");
+  let gitlab = $state({
+    address: snapResource.gitlab?.address ?? "https://gitlab.com",
+    group: snapResource.gitlab?.group ?? "",
+    token: snapResource.gitlab?.token ?? "",
+    environment_scope: snapResource.gitlab?.environment_scope ?? "*",
+  });
 
   // Outbound proxy — shared across every backend. Seeded from whichever
   // sub-config the resource currently carries. `proxyMode` controls
@@ -180,6 +188,7 @@
     snapResource.gcp?.proxy ??
     snapResource.gcp_parameter?.proxy ??
     snapResource.azure?.proxy ??
+    snapResource.gitlab?.proxy ??
     "";
   const seedProxyMode: ProxyMode | undefined =
     snapResource.vault?.proxy_mode ??
@@ -189,7 +198,8 @@
     snapResource.aws?.proxy_mode ??
     snapResource.gcp?.proxy_mode ??
     snapResource.gcp_parameter?.proxy_mode ??
-    snapResource.azure?.proxy_mode;
+    snapResource.azure?.proxy_mode ??
+    snapResource.gitlab?.proxy_mode;
   let proxyUrl = $state(seedProxyUrl);
   // Backward compat: a bare URL with no explicit mode implies "custom".
   let proxyMode = $state<ProxyMode>(
@@ -225,6 +235,7 @@
     if (r.gcp) return "gcp";
     if (r.gcp_parameter) return "gcp-parameter";
     if (r.azure) return "azure";
+    if (r.gitlab) return "gitlab";
     // Default to http for create or empty resources.
     return "http";
   }
@@ -383,6 +394,12 @@
           ? { location: gcpParamLocation.trim() }
           : {}),
       };
+    } else if (formType === "gitlab") {
+      if (!gitlab.address.trim() || !gitlab.group.trim() || !gitlab.token.trim()) {
+        addToast("GitLab URL, group, and access token are required", "alert");
+        return null;
+      }
+      r.gitlab = { address: gitlab.address.trim(), group: gitlab.group.trim(), token: gitlab.token.trim(), environment_scope: gitlab.environment_scope.trim() || "*" };
     } else if (formType === "azure") {
       if (
         !azureVaultUrl.trim() ||
@@ -419,7 +436,8 @@
         r.aws ??
         r.gcp ??
         r.gcp_parameter ??
-        r.azure) as
+        r.azure ??
+        r.gitlab) as
         | { proxy?: string; proxy_mode?: ProxyMode }
         | undefined;
       if (cfg) {
@@ -676,7 +694,7 @@
           >Type</span
         >
         <div class="flex flex-wrap gap-3">
-          {#each [{ value: "http", label: "HTTP" }, { value: "vault", label: "Vault" }, { value: "kubernetes", label: "Kubernetes" }, { value: "consul", label: "Consul" }, { value: "etcd", label: "etcd" }, { value: "aws", label: "AWS" }, { value: "gcp", label: "GCP Secret" }, { value: "gcp-parameter", label: "GCP Parameter" }, { value: "azure", label: "Azure" }] as opt (opt.value)}
+          {#each [{ value: "http", label: "HTTP" }, { value: "vault", label: "Vault" }, { value: "kubernetes", label: "Kubernetes" }, { value: "consul", label: "Consul" }, { value: "etcd", label: "etcd" }, { value: "aws", label: "AWS" }, { value: "gcp", label: "GCP Secret" }, { value: "gcp-parameter", label: "GCP Parameter" }, { value: "azure", label: "Azure" }, { value: "gitlab", label: "GitLab Group Variables" }] as opt (opt.value)}
             <label
               class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
             >
@@ -1401,6 +1419,8 @@
           </p>
         {/if}
       </div>
+    {:else if formType === "gitlab"}
+      <GitLabFields bind:config={gitlab} readonly={isReadOnly} />
     {:else if formType === "azure"}
       <div class="mb-4">
         <span

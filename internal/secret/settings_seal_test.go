@@ -69,6 +69,23 @@ func TestEmptyPayloadDetection(t *testing.T) {
 	}
 }
 
+func TestGitLabTokenSealRoundTrip(t *testing.T) {
+	s := &service.Settings{External: map[string]external.External{
+		"gitlab": {GitLab: &external.GitLab{Address: "https://gitlab.com", Group: "team/subgroup", Token: "glpat-test", EnvironmentScope: "production"}},
+	}}
+	p := extractSecrets(s)
+	if isEmptyPayload(p) || s.External["gitlab"].GitLab.Token != "" {
+		t.Fatal("GitLab token was not extracted for encryption")
+	}
+	if s.External["gitlab"].GitLab.Group != "team/subgroup" || s.External["gitlab"].GitLab.EnvironmentScope != "production" {
+		t.Fatal("public GitLab fields changed")
+	}
+	injectSecrets(s, p)
+	if s.External["gitlab"].GitLab.Token != "glpat-test" {
+		t.Fatal("GitLab token lost in seal round-trip")
+	}
+}
+
 func buildFixture() *service.Settings {
 	return &service.Settings{
 		External: map[string]external.External{

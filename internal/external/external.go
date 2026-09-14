@@ -16,6 +16,7 @@ type External struct {
 	GCP          *GCP          `json:"gcp,omitempty"`
 	GCPParameter *GCPParameter `json:"gcp_parameter,omitempty"`
 	Azure        *Azure        `json:"azure,omitempty"`
+	GitLab       *GitLab       `json:"gitlab,omitempty"`
 }
 
 // GCP configures a GCP Secret Manager external resource.

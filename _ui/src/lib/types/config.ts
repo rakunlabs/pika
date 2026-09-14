@@ -219,6 +219,15 @@ export interface AzureConfig {
   proxy_mode?: ProxyMode;
 }
 
+export interface GitLabConfig {
+  address: string;
+  group: string;
+  token: string;
+  environment_scope?: string;
+  proxy?: string;
+  proxy_mode?: ProxyMode;
+}
+
 // External resource for inheritance
 export interface ExternalResource {
   http?: {
@@ -238,6 +247,7 @@ export interface ExternalResource {
   gcp?: GCPConfig;
   gcp_parameter?: GCPParameterConfig;
   azure?: AzureConfig;
+  gitlab?: GitLabConfig;
 }
 
 // Mirrors external.Capabilities — what the browser UI can do with a

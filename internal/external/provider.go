@@ -190,6 +190,8 @@ func ResourceProvider(ext External, deps Deps) (Provider, error) {
 		return &GCPParameterProvider{Config: ext.GCPParameter, Deps: deps}, nil
 	case ext.Azure != nil:
 		return &AzureProvider{Config: ext.Azure, Deps: deps}, nil
+	case ext.GitLab != nil:
+		return &GitLabProvider{Config: ext.GitLab}, nil
 	default:
 		return nil, fmt.Errorf("external resource has no configured backend")
 	}
@@ -218,6 +220,8 @@ func Kind(ext External) string {
 		return "gcp-parameter"
 	case ext.Azure != nil:
 		return "azure"
+	case ext.GitLab != nil:
+		return "gitlab"
 	default:
 		return "unknown"
 	}

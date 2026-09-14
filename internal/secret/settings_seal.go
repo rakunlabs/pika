@@ -71,6 +71,7 @@ type sealedHookTarget struct {
 // belong here — addresses, bucket names, public client IDs stay
 // plaintext since they're operationally useful in audit logs.
 type sealedExt struct {
+	GitLabToken     string            `json:"gitlab_token,omitempty"`
 	HTTPHeaderAuth  map[string]string `json:"http_header_auth,omitempty"` // future-proof slot
 	VaultToken      string            `json:"vault_token,omitempty"`
 	VaultRoleSecret string            `json:"vault_role_secret,omitempty"`
@@ -104,6 +105,10 @@ func extractSecrets(s *service.Settings) *sensitivePayload {
 		p.External = make(map[string]sealedExt, len(s.External))
 		for name, ext := range s.External {
 			se := sealedExt{}
+			if ext.GitLab != nil {
+				se.GitLabToken = ext.GitLab.Token
+				ext.GitLab.Token = ""
+			}
 			if ext.Vault != nil {
 				se.VaultToken = ext.Vault.Token
 				ext.Vault.Token = ""
@@ -264,6 +269,9 @@ func injectSecrets(s *service.Settings, p *sensitivePayload) {
 		}
 		if ext.Azure != nil {
 			ext.Azure.ClientSecret = se.AzureSecret
+		}
+		if ext.GitLab != nil {
+			ext.GitLab.Token = se.GitLabToken
 		}
 		s.External[name] = ext
 	}
@@ -429,7 +437,7 @@ func isEmptyPayload(p *sensitivePayload) bool {
 			if e.VaultToken != "" || e.VaultRoleSecret != "" ||
 				e.K8sKubeconfig != "" || e.AWSSecretKey != "" ||
 				e.GCPSAJSON != "" || e.GCPParamSAJSON != "" ||
-				e.AzureSecret != "" || len(e.HTTPHeaderAuth) > 0 {
+				e.AzureSecret != "" || e.GitLabToken != "" || len(e.HTTPHeaderAuth) > 0 {
 				return false
 			}
 		}

@@ -88,7 +88,7 @@
   // key/value table here is pure cargo-culting, the key is always
   // "value" and the user has nothing to name. Vault and Kubernetes,
   // which natively store key/value maps, keep the multi-row editor.
-  const wrapperKinds = new Set(["consul", "etcd", "http", "gcp"]);
+  const wrapperKinds = new Set(["consul", "etcd", "http", "gcp", "gitlab"]);
   const isWrapperBackend = $derived(
     currentResource ? wrapperKinds.has(currentResource.kind) : false,
   );
@@ -752,6 +752,8 @@
 
   // ── Helpers ───────────────────────────────────────────────────────
   function kindBadgeColor(kind: string): string {
+    if (kind === "gitlab")
+      return "bg-accent-100 text-accent-700 dark:bg-accent-900/40 dark:text-accent-300";
     if (kind.startsWith("aws"))
       return "bg-orange-100 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300";
     if (kind === "vault")
