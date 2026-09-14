@@ -31,6 +31,7 @@
   import { appStore } from "@/lib/store/store.svelte";
   import { addToast } from "@/lib/store/toast.svelte";
   import ExternalValueEditor from "@/lib/components/external/ExternalValueEditor.svelte";
+  import GitLabVariableSettings from "@/lib/components/external/GitLabVariableSettings.svelte";
   import ResizablePanel from "@/lib/components/config/ResizablePanel.svelte";
   import {
     Globe,
@@ -55,6 +56,7 @@
     ExternalResourceSummary,
     ExternalEntry,
     ExternalVersion,
+    GitLabVariableOptions,
   } from "@/lib/types/config";
   import jsYaml from "js-yaml";
 
@@ -89,6 +91,16 @@
   // "value" and the user has nothing to name. Vault and Kubernetes,
   // which natively store key/value maps, keep the multi-row editor.
   const wrapperKinds = new Set(["consul", "etcd", "http", "gcp", "gitlab"]);
+
+  function gitLabOptions(metadata?: Record<string, unknown>): GitLabVariableOptions {
+    return {
+      masked: metadata?.masked === true,
+      protected: metadata?.protected === true,
+      raw: metadata?.raw !== false,
+      variable_type: metadata?.variable_type === "file" ? "file" : "env_var",
+    };
+  }
+  let gitlabDraft = $state<GitLabVariableOptions>(gitLabOptions());
   const isWrapperBackend = $derived(
     currentResource ? wrapperKinds.has(currentResource.kind) : false,
   );
@@ -445,6 +457,7 @@
 
   // ── Edit / Save ───────────────────────────────────────────────────
   function startEdit() {
+    gitlabDraft = gitLabOptions(entry?.metadata);
     if (isWrapperBackend) {
       // Wrapper backends: there's only ever a single `value` field.
       // Seed the single-editor draft from it (or empty when the entry
@@ -510,7 +523,10 @@
       }
       pendingSaveConfirm = false;
       clearTimeout(pendingSaveTimer);
-      return { value: singleValueDraft };
+      return {
+        value: singleValueDraft,
+        ...(currentResource?.kind === "gitlab" ? gitlabDraft : {}),
+      };
     }
     // Structured backend (Vault/K8s): the whole secret is one document.
     // Parse it back to an object — js-yaml reads JSON too, so a YAML edit
@@ -673,6 +689,7 @@
 
   // ── New entry composer ────────────────────────────────────────────
   function startCompose() {
+    gitlabDraft = gitLabOptions();
     composing = true;
     newPath = "";
     // Seed the single-editor draft for the active backend: wrapper
@@ -1305,7 +1322,9 @@
                   ? "default/secret/my-secret"
                   : currentResource?.kind === "vault"
                     ? "myapp/db"
-                    : "key/path"}
+                    : currentResource?.kind === "gitlab"
+                      ? "MY_VARIABLE"
+                      : "key/path"}
                 class="w-full px-3 py-2 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded-md bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
               />
             </div>
@@ -1553,6 +1572,9 @@
         No data
       </div>
     {:else if isWrapper}
+      {#if currentResource?.kind === "gitlab" && e.metadata}
+        <GitLabVariableSettings value={gitLabOptions(e.metadata)} readonly hidden={e.metadata.hidden === true} />
+      {/if}
       <!-- Wrapper backends (Consul/etcd/HTTP/GCP fallback) carry a
            single opaque string under the synthetic "value" key. Show
            that raw string in one editor, with no "value" header (it
@@ -1614,6 +1636,9 @@
        a bare bind wouldn't capture typing. `editorLintError` flows back
        up via the bindable so the save flow can gate on syntax errors. -->
   <div class="flex-1 min-h-0 flex flex-col">
+    {#if currentResource?.kind === "gitlab"}
+      <GitLabVariableSettings bind:value={gitlabDraft} hidden={!composing && entry?.metadata?.hidden === true} disabled={saving} />
+    {/if}
     <ExternalValueEditor
       value={singleValueDraft}
       onchange={onDraftChange}

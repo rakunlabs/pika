@@ -221,7 +221,8 @@ export interface AzureConfig {
 
 export interface GitLabConfig {
   address: string;
-  group: string;
+  group?: string;
+  project?: string;
   token: string;
   environment_scope?: string;
   proxy?: string;
@@ -276,10 +277,18 @@ export interface ExternalResourceSummary {
 // table; raw carries the verbatim bytes for "view as text/JSON"; and
 // content_type is informational.
 export interface ExternalEntry {
+  metadata?: Record<string, unknown>;
   data?: Record<string, unknown>;
   raw?: string; // base64-encoded by Go's json marshaller for []byte
   content_type?: string;
   version?: string;
+}
+
+export interface GitLabVariableOptions {
+  masked: boolean;
+  protected: boolean;
+  raw: boolean;
+  variable_type: "env_var" | "file";
 }
 
 // One Vault KV v2 version. id is the integer version as a string —

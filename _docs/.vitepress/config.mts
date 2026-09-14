@@ -54,7 +54,7 @@ export default defineConfig({
                 { text: 'GCP Secret Manager', link: '/guide/inheritance/gcp' },
                 { text: 'GCP Parameter Manager', link: '/guide/inheritance/gcp-parameter' },
                 { text: 'Azure', link: '/guide/inheritance/azure' },
-                { text: 'GitLab Group Variables', link: '/guide/inheritance/gitlab' },
+                { text: 'GitLab Variables', link: '/guide/inheritance/gitlab' },
               ],
             },
           ],

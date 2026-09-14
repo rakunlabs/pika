@@ -117,6 +117,9 @@ type Capabilities struct {
 // callers that want the verbatim bytes. ContentType is informational
 // (e.g. "application/json", "text/plain") and may be empty.
 type Entry struct {
+	// Metadata describes provider-specific settings without mixing them into
+	// configuration values consumed by inheritance, search, and export.
+	Metadata    map[string]any `json:"metadata,omitempty"`
 	Data        map[string]any `json:"data,omitempty"`
 	Raw         []byte         `json:"raw,omitempty"`
 	ContentType string         `json:"content_type,omitempty"`

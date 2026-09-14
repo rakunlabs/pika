@@ -15,7 +15,7 @@
            Loader2,
            Download,
       } from "lucide-svelte";
-     import type { ExternalResource, ProxyMode } from "@/lib/types/config";
+     import type { ExternalResource, ProxyMode, GitLabConfig } from "@/lib/types/config";
      import ExternalResourceEditor from "@/lib/components/external/ExternalResourceEditor.svelte";
      import GitLabFields from "@/lib/components/external/GitLabFields.svelte";
      import { backdropClose } from "@/lib/actions/backdropClose";
@@ -105,7 +105,7 @@
      let newExtAzureTenantId = $state("");
      let newExtAzureClientId = $state("");
      let newExtAzureClientSecret = $state("");
-     let newExtGitlab = $state({ address: "https://gitlab.com", group: "", token: "", environment_scope: "*" });
+     let newExtGitlab = $state<GitLabConfig>({ address: "https://gitlab.com", group: "", token: "", environment_scope: "*" });
      // Outbound proxy — shared by every backend. HTTP supports only a
      // URL (env-or-custom); the others add an env / direct / custom mode.
      let newExtProxyMode = $state<ProxyMode>("environment");
@@ -268,11 +268,17 @@
                          : {}),
                };
            } else if (newExtType === "gitlab") {
-                if (!newExtGitlab.address.trim() || !newExtGitlab.group.trim() || !newExtGitlab.token.trim()) {
-                     addToast("GitLab URL, group, and access token are required", "alert");
+                const target = (newExtGitlab.project !== undefined ? newExtGitlab.project : newExtGitlab.group)?.trim();
+                if (!newExtGitlab.address.trim() || !target || !newExtGitlab.token.trim()) {
+                     addToast("GitLab URL, group or project, and access token are required", "alert");
                      return;
                 }
-                resource.gitlab = { address: newExtGitlab.address.trim(), group: newExtGitlab.group.trim(), token: newExtGitlab.token.trim(), environment_scope: newExtGitlab.environment_scope.trim() || "*" };
+                resource.gitlab = {
+                     address: newExtGitlab.address.trim(),
+                     ...(newExtGitlab.project !== undefined ? { project: target } : { group: target }),
+                     token: newExtGitlab.token.trim(),
+                     environment_scope: newExtGitlab.environment_scope?.trim() || "*",
+                };
            } else if (newExtType === "azure") {
                if (
                     !newExtAzureVaultUrl.trim() ||
@@ -571,7 +577,7 @@
                           <option value="gcp">GCP Secret</option>
                           <option value="gcp-parameter">GCP Parameter</option>
                           <option value="azure">Azure</option>
-                          <option value="gitlab">GitLab Group Variables</option>
+                          <option value="gitlab">GitLab Variables</option>
                      </select>
                </div>
 
@@ -1404,13 +1410,13 @@
                                                            : resource.azure
                                                              ? "Azure Key Vault"
                                                               : resource.gitlab
-                                                                ? "GitLab Group Variables"
+                                                                ? resource.gitlab.project ? "GitLab Project Variables" : "GitLab Group Variables"
                                                                 : "Unknown"}
                                    </span>
                               </div>
                               <div class="mt-1 space-y-0.5">
                                    {#if resource.gitlab}
-                                        <span class="text-xs font-mono text-slate-500 dark:text-slate-400 break-all">{resource.gitlab.address} · {resource.gitlab.group} · {resource.gitlab.environment_scope || "*"}</span>
+                                        <span class="text-xs font-mono text-slate-500 dark:text-slate-400 break-all">{resource.gitlab.address} · {resource.gitlab.project || resource.gitlab.group} · {resource.gitlab.environment_scope || "*"}</span>
                                    {:else if resource.http}
                                         <span
                                              class="text-xs font-mono text-slate-400 dark:text-slate-500"

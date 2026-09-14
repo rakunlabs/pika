@@ -26,7 +26,7 @@
     CheckCircle2,
     Loader2,
   } from "lucide-svelte";
-  import type { ExternalResource, ProxyMode } from "@/lib/types/config";
+  import type { ExternalResource, ProxyMode, GitLabConfig } from "@/lib/types/config";
   import GitLabFields from "./GitLabFields.svelte";
 
   type Mode = "view" | "edit" | "create";
@@ -168,9 +168,10 @@
   let azureTenantId = $state(snapResource.azure?.tenant_id ?? "");
   let azureClientId = $state(snapResource.azure?.client_id ?? "");
   let azureClientSecret = $state(snapResource.azure?.client_secret ?? "");
-  let gitlab = $state({
+  let gitlab = $state<GitLabConfig>({
     address: snapResource.gitlab?.address ?? "https://gitlab.com",
     group: snapResource.gitlab?.group ?? "",
+    project: snapResource.gitlab?.project,
     token: snapResource.gitlab?.token ?? "",
     environment_scope: snapResource.gitlab?.environment_scope ?? "*",
   });
@@ -395,11 +396,17 @@
           : {}),
       };
     } else if (formType === "gitlab") {
-      if (!gitlab.address.trim() || !gitlab.group.trim() || !gitlab.token.trim()) {
-        addToast("GitLab URL, group, and access token are required", "alert");
+      const target = (gitlab.project !== undefined ? gitlab.project : gitlab.group)?.trim();
+      if (!gitlab.address.trim() || !target || !gitlab.token.trim()) {
+        addToast("GitLab URL, group or project, and access token are required", "alert");
         return null;
       }
-      r.gitlab = { address: gitlab.address.trim(), group: gitlab.group.trim(), token: gitlab.token.trim(), environment_scope: gitlab.environment_scope.trim() || "*" };
+      r.gitlab = {
+        address: gitlab.address.trim(),
+        ...(gitlab.project !== undefined ? { project: target } : { group: target }),
+        token: gitlab.token.trim(),
+        environment_scope: gitlab.environment_scope?.trim() || "*",
+      };
     } else if (formType === "azure") {
       if (
         !azureVaultUrl.trim() ||
@@ -694,7 +701,7 @@
           >Type</span
         >
         <div class="flex flex-wrap gap-3">
-          {#each [{ value: "http", label: "HTTP" }, { value: "vault", label: "Vault" }, { value: "kubernetes", label: "Kubernetes" }, { value: "consul", label: "Consul" }, { value: "etcd", label: "etcd" }, { value: "aws", label: "AWS" }, { value: "gcp", label: "GCP Secret" }, { value: "gcp-parameter", label: "GCP Parameter" }, { value: "azure", label: "Azure" }, { value: "gitlab", label: "GitLab Group Variables" }] as opt (opt.value)}
+          {#each [{ value: "http", label: "HTTP" }, { value: "vault", label: "Vault" }, { value: "kubernetes", label: "Kubernetes" }, { value: "consul", label: "Consul" }, { value: "etcd", label: "etcd" }, { value: "aws", label: "AWS" }, { value: "gcp", label: "GCP Secret" }, { value: "gcp-parameter", label: "GCP Parameter" }, { value: "azure", label: "Azure" }, { value: "gitlab", label: "GitLab Variables" }] as opt (opt.value)}
             <label
               class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
             >

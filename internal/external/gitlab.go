@@ -14,13 +14,14 @@ import (
 	"strings"
 )
 
-// GitLab exposes the group's own CI/CD variables for one exact environment
+// GitLab exposes a group's or project's own CI/CD variables for one exact environment
 // scope. Keeping the scope on the resource makes keys unambiguous even when
 // GitLab has multiple variables with the same name.
 type GitLab struct {
 	Address          string `json:"address"`
 	Token            string `json:"token"`
-	Group            string `json:"group"`
+	Group            string `json:"group,omitempty"`
+	Project          string `json:"project,omitempty"`
 	EnvironmentScope string `json:"environment_scope,omitempty"`
 	Proxy            string `json:"proxy,omitempty"`
 	ProxyMode        string `json:"proxy_mode,omitempty"`
@@ -44,8 +45,11 @@ func (p *GitLabProvider) Validate() error {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("gitlab: a valid HTTP(S) instance URL is required")
 	}
-	if strings.TrimSpace(p.Config.Group) == "" || strings.TrimSpace(p.Config.Token) == "" {
-		return fmt.Errorf("gitlab: group and access token are required")
+	if (strings.TrimSpace(p.Config.Group) == "") == (strings.TrimSpace(p.Config.Project) == "") {
+		return fmt.Errorf("gitlab: configure exactly one group or project")
+	}
+	if strings.TrimSpace(p.Config.Token) == "" {
+		return fmt.Errorf("gitlab: access token is required")
 	}
 	return validateProxyConfig(p.Config.ProxyMode, p.Config.Proxy)
 }
@@ -63,7 +67,11 @@ func (p *GitLabProvider) request(ctx context.Context, method, key string, query 
 	if err := p.Validate(); err != nil {
 		return nil, nil, 0, err
 	}
-	endpoint := strings.TrimRight(p.Config.Address, "/") + "/api/v4/groups/" + url.PathEscape(p.Config.Group) + "/variables"
+	target, namespace := p.Config.Group, "groups"
+	if p.Config.Project != "" {
+		target, namespace = p.Config.Project, "projects"
+	}
+	endpoint := strings.TrimRight(p.Config.Address, "/") + "/api/v4/" + namespace + "/" + url.PathEscape(target) + "/variables"
 	if key != "" {
 		if !gitLabKey.MatchString(key) {
 			return nil, nil, 0, fmt.Errorf("gitlab: variable key must contain only letters, digits, or underscores (maximum 255 characters)")
@@ -160,7 +168,12 @@ func (p *GitLabProvider) Read(ctx context.Context, key string) (*Entry, error) {
 		return nil, err
 	}
 	var variable struct {
-		Value *string `json:"value"`
+		Value        *string `json:"value"`
+		Masked       bool    `json:"masked"`
+		Protected    bool    `json:"protected"`
+		Raw          bool    `json:"raw"`
+		VariableType string  `json:"variable_type"`
+		Hidden       bool    `json:"hidden"`
 	}
 	if err := json.Unmarshal(body, &variable); err != nil {
 		return nil, fmt.Errorf("gitlab: invalid variable response")
@@ -170,7 +183,11 @@ func (p *GitLabProvider) Read(ctx context.Context, key string) (*Entry, error) {
 	}
 	data := map[string]any{"value": *variable.Value}
 	raw, _ := json.Marshal(data)
-	return &Entry{Data: data, Raw: raw, ContentType: "application/json"}, nil
+	return &Entry{Data: data, Raw: raw, ContentType: "application/json", Metadata: map[string]any{
+		"masked": variable.Masked, "protected": variable.Protected,
+		"raw": variable.Raw, "variable_type": variable.VariableType,
+		"hidden": variable.Hidden,
+	}}, nil
 }
 
 func (p *GitLabProvider) Fetch(ctx context.Context, key string) ([]byte, error) {
@@ -186,22 +203,43 @@ func (p *GitLabProvider) Write(ctx context.Context, key string, data map[string]
 		return fmt.Errorf("gitlab: invalid variable key")
 	}
 	value, ok := data["value"].(string)
-	if !ok || len(data) != 1 {
-		return fmt.Errorf("gitlab: expected a single string field named value")
+	if !ok {
+		return fmt.Errorf("gitlab: value must be a string")
+	}
+	// Optional settings support explicit false as well as true. Omitted fields
+	// stay omitted so existing value-only API clients preserve upstream settings.
+	payload := map[string]any{"value": value}
+	for field, v := range data {
+		switch field {
+		case "value":
+		case "masked", "protected", "raw":
+			if _, ok := v.(bool); !ok {
+				return fmt.Errorf("gitlab: %s must be a boolean", field)
+			}
+			payload[field] = v
+		case "variable_type":
+			if v != "env_var" && v != "file" {
+				return fmt.Errorf("gitlab: variable_type must be env_var or file")
+			}
+			payload[field] = v
+		default:
+			return fmt.Errorf("gitlab: unsupported variable setting %q", field)
+		}
 	}
 	// Check exact-scope existence before choosing create/update. Some GitLab
 	// versions fall back to an unscoped lookup on PUT of a missing variable.
 	// Do not use PUT as an existence probe or recreate after a failed update.
 	_, _, status, err := p.request(ctx, http.MethodGet, key, nil, nil)
 	if status == http.StatusNotFound {
-		_, _, _, err = p.request(ctx, http.MethodPost, "", nil, map[string]any{"key": key, "value": value, "environment_scope": p.scope()})
+		payload["key"] = key
+		payload["environment_scope"] = p.scope()
+		_, _, _, err = p.request(ctx, http.MethodPost, "", nil, payload)
 		return err
 	}
 	if err != nil {
 		return err
 	}
-	// Only update the value: preserve protected/masked/raw/file metadata.
-	_, _, _, err = p.request(ctx, http.MethodPut, key, nil, map[string]any{"value": value})
+	_, _, _, err = p.request(ctx, http.MethodPut, key, nil, payload)
 	return err
 }
 
