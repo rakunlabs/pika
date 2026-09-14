@@ -7,7 +7,7 @@ import External from '@/pages/External.svelte';
 
 export default {
   '/': Configurations,
-  '/settings': Settings,
+  '/settings/:section?': Settings,
   '/configurations': Configurations,
   '/vault': Vault,
   '/external': External,

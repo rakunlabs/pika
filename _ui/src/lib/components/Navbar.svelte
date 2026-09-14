@@ -93,6 +93,7 @@
       {#each navItems as item (item.path)}
          {@const isActive =
             router.location === item.path ||
+            router.location.startsWith(item.path + "/") ||
             (router.location === "/" && item.path === "/configurations")}
          <a
             href={item.path}

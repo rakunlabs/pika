@@ -16,6 +16,9 @@
         Lock,
     } from "lucide-svelte";
     import { appStore } from "@/lib/store/store.svelte";
+    import { link, replace, router } from "svelte-spa-router";
+
+    let { params = {} }: { params?: { section?: string } } = $props();
 
     import AppearanceSection from "@/pages/settings/AppearanceSection.svelte";
     import AccountSecuritySection from "@/pages/settings/AccountSecuritySection.svelte";
@@ -113,14 +116,23 @@
         }),
     );
 
-    // Default to 'appearance' (always present for any logged-in user). The
-    // effect below snaps to the first visible section once permissions are
-    // resolved, and re-snaps if the current active section ever becomes
-    // inaccessible.
-    let activeSection = $state<Section>("appearance");
+    // The route is the source of truth so bookmarks, refresh and browser
+    // back/forward all select the same section as the sidebar.
+    const activeSection = $derived(
+        sections.find((section) => section.key === params.section)?.key ??
+        "appearance",
+    );
+
+    // Wait for capabilities before normalizing an unknown or unavailable
+    // section. A cold deep link must survive the initial info request.
     $effect(() => {
-        if (!sections.some((s) => s.key === activeSection)) {
-            activeSection = sections[0]?.key ?? "appearance";
+        if (
+            appStore.info &&
+            params.section &&
+            !sections.some((section) => section.key === params.section) &&
+            router.location === `/settings/${params.section}`
+        ) {
+            replace("/settings/appearance");
         }
     });
 </script>
@@ -132,16 +144,18 @@
     >
         <nav class="flex flex-col gap-0.5 px-2 pt-3 pb-4">
             {#each sections as section}
-                <button
+                <a
+                    href={`/settings/${section.key}`}
+                    use:link
+                    aria-current={activeSection === section.key ? "page" : undefined}
                     class="flex items-center gap-2.5 w-full px-3 py-2 text-[13px] font-medium rounded-md cursor-pointer transition-colors text-left
   {activeSection === section.key
                         ? 'bg-accent-50 text-accent-700 border border-accent-200 dark:bg-accent-900/40 dark:text-accent-300 dark:border-accent-700'
                         : 'bg-transparent text-slate-600 dark:text-warm-200 border border-transparent hover:bg-slate-100 dark:hover:bg-warm-700 hover:text-slate-800 dark:hover:text-white'}"
-                    onclick={() => (activeSection = section.key)}
                 >
                     <section.icon size={15} class="shrink-0" />
                     {section.label}
-                </button>
+                </a>
             {/each}
         </nav>
     </div>

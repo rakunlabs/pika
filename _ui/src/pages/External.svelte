@@ -826,7 +826,7 @@
             </h1>
             {#if canConfigureResources}
               <a
-                href="/settings"
+                href="/settings/external"
                 use:link
                 class="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400 hover:text-accent-600 transition-colors no-underline"
                 title="Configure resources in Settings"
@@ -860,7 +860,7 @@
               </p>
               {#if !resourceFilter && canConfigureResources}
                 <a
-                  href="/settings"
+                  href="/settings/external"
                   use:link
                   class="inline-block mt-2 text-[11px] text-accent-600 hover:underline no-underline"
                 >
