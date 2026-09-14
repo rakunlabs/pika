@@ -552,115 +552,27 @@
                </div>
 
                <div class="mb-4">
-                    <span
-                         class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"
-                         >Type</span
-                    >
-                    <div class="flex gap-3">
-                         <label
-                              class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
-                         >
-                              <input
-                                   type="radio"
-                                   bind:group={newExtType}
-                                   value="http"
-                                   class="text-accent-600"
-                              />
-                              HTTP
-                         </label>
-                         <label
-                              class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
-                         >
-                              <input
-                                   type="radio"
-                                   bind:group={newExtType}
-                                   value="vault"
-                                   class="text-accent-600"
-                              />
-                              Vault
-                         </label>
-                         <label
-                              class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
-                         >
-                              <input
-                                   type="radio"
-                                   bind:group={newExtType}
-                                   value="kubernetes"
-                                   class="text-accent-600"
-                              />
-                              Kubernetes
-                         </label>
-                         <label
-                              class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
-                         >
-                              <input
-                                   type="radio"
-                                   bind:group={newExtType}
-                                   value="consul"
-                                   class="text-accent-600"
-                              />
-                              Consul
-                         </label>
-                         <label
-                              class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
-                         >
-                              <input
-                                   type="radio"
-                                   bind:group={newExtType}
-                                   value="etcd"
-                                   class="text-accent-600"
-                              />
-                              etcd
-                         </label>
-                         <label
-                              class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
-                         >
-                              <input
-                                   type="radio"
-                                   bind:group={newExtType}
-                                   value="aws"
-                                   class="text-accent-600"
-                              />
-                              AWS
-                         </label>
-                         <label
-                              class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
-                         >
-                              <input
-                                   type="radio"
-                                   bind:group={newExtType}
-                                   value="gcp"
-                                   class="text-accent-600"
-                              />
-                              GCP Secret
-                         </label>
-                         <label
-                              class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
-                         >
-                              <input
-                                   type="radio"
-                                   bind:group={newExtType}
-                                   value="gcp-parameter"
-                                   class="text-accent-600"
-                              />
-                              GCP Parameter
-                         </label>
-                         <label
-                              class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer"
-                         >
-                              <input
-                                   type="radio"
-                                   bind:group={newExtType}
-                                   value="azure"
-                                   class="text-accent-600"
-                              />
-                              Azure
-                          </label>
-                          <label class="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
-                               <input type="radio" bind:group={newExtType} value="gitlab" class="text-accent-600" />
-                               GitLab Group Variables
-                          </label>
-                    </div>
+                     <label
+                          for="ext-type"
+                          class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"
+                          >Type</label
+                     >
+                     <select
+                          id="ext-type"
+                          bind:value={newExtType}
+                          class="w-full min-w-0 px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                     >
+                          <option value="http">HTTP</option>
+                          <option value="vault">Vault</option>
+                          <option value="kubernetes">Kubernetes</option>
+                          <option value="consul">Consul</option>
+                          <option value="etcd">etcd</option>
+                          <option value="aws">AWS</option>
+                          <option value="gcp">GCP Secret</option>
+                          <option value="gcp-parameter">GCP Parameter</option>
+                          <option value="azure">Azure</option>
+                          <option value="gitlab">GitLab Group Variables</option>
+                     </select>
                </div>
 
                 {#if newExtType === "gitlab"}
