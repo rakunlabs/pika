@@ -174,6 +174,7 @@
     project: snapResource.gitlab?.project,
     token: snapResource.gitlab?.token ?? "",
     environment_scope: snapResource.gitlab?.environment_scope ?? "*",
+    variable_allowlist: snapResource.gitlab?.variable_allowlist ?? undefined,
   });
 
   // Outbound proxy — shared across every backend. Seeded from whichever
@@ -406,6 +407,7 @@
         ...(gitlab.project !== undefined ? { project: target } : { group: target }),
         token: gitlab.token.trim(),
         environment_scope: gitlab.environment_scope?.trim() || "*",
+        variable_allowlist: gitlab.variable_allowlist ?? undefined,
       };
     } else if (formType === "azure") {
       if (

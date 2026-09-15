@@ -49,4 +49,38 @@
     <input id={`${id}-scope`} bind:value={config.environment_scope} {readonly} placeholder="*" class={inputClass} />
     <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Exact scope, such as * or production. * selects the default scope, not every environment. Add another resource for a different scope.</p>
   </div>
+  <div>
+    <label for={`${id}-allowlist-enabled`} class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+      <input
+        id={`${id}-allowlist-enabled`}
+        type="checkbox"
+        role="switch"
+        checked={config.variable_allowlist != null}
+        disabled={readonly}
+        aria-describedby={`${id}-allowlist-mode`}
+        onchange={(event) => { config.variable_allowlist = event.currentTarget.checked ? "" : undefined; }}
+        class="accent-accent-600 focus:outline-none focus:ring-2 focus:ring-accent-500 disabled:cursor-not-allowed"
+      />
+      Enable variable allowlist
+    </label>
+    <p id={`${id}-allowlist-mode`} class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+      Disabled: all variable names are allowed (legacy unrestricted behavior). Enabled: only matching names are allowed; an empty list denies all variables.
+    </p>
+    {#if config.variable_allowlist != null}
+      <label for={`${id}-allowlist`} class="block text-xs font-medium text-slate-500 dark:text-slate-400 mt-3 mb-1">Allowed variable names</label>
+      <textarea
+        id={`${id}-allowlist`}
+        bind:value={config.variable_allowlist}
+        {readonly}
+        rows={5}
+        spellcheck={false}
+        placeholder={"DATABASE_URL\n/^APP_.*/"}
+        aria-describedby={`${id}-allowlist-help`}
+        class={`${inputClass} font-mono`}
+      ></textarea>
+      <p id={`${id}-allowlist-help`} class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        Enter one exact variable name or /regex/ per line. For example, <code>DATABASE_URL</code> allows that exact name and <code>/^APP_.*/</code> allows names starting with APP_. Patterns use Go RE2 and must match the full variable name. Blank lines are ignored. Invalid patterns are rejected by the server when saving.
+      </p>
+    {/if}
+  </div>
 </div>

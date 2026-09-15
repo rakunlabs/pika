@@ -105,7 +105,7 @@
      let newExtAzureTenantId = $state("");
      let newExtAzureClientId = $state("");
      let newExtAzureClientSecret = $state("");
-     let newExtGitlab = $state<GitLabConfig>({ address: "https://gitlab.com", group: "", token: "", environment_scope: "*" });
+     let newExtGitlab = $state<GitLabConfig>({ address: "https://gitlab.com", group: "", token: "", environment_scope: "*", variable_allowlist: undefined });
      // Outbound proxy — shared by every backend. HTTP supports only a
      // URL (env-or-custom); the others add an env / direct / custom mode.
      let newExtProxyMode = $state<ProxyMode>("environment");
@@ -278,6 +278,7 @@
                      ...(newExtGitlab.project !== undefined ? { project: target } : { group: target }),
                      token: newExtGitlab.token.trim(),
                      environment_scope: newExtGitlab.environment_scope?.trim() || "*",
+                     variable_allowlist: newExtGitlab.variable_allowlist ?? undefined,
                 };
            } else if (newExtType === "azure") {
                if (
@@ -372,7 +373,7 @@
                newExtAzureTenantId = "";
                newExtAzureClientId = "";
                newExtAzureClientSecret = "";
-               newExtGitlab = { address: "https://gitlab.com", group: "", token: "", environment_scope: "*" };
+               newExtGitlab = { address: "https://gitlab.com", group: "", token: "", environment_scope: "*", variable_allowlist: undefined };
                newExtProxyMode = "environment";
                newExtProxyUrl = "";
           } catch (error) {

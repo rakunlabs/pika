@@ -225,6 +225,8 @@ export interface GitLabConfig {
   project?: string;
   token: string;
   environment_scope?: string;
+  // Missing/null disables filtering; an empty string enables it and denies all variables.
+  variable_allowlist?: string | null;
   proxy?: string;
   proxy_mode?: ProxyMode;
 }

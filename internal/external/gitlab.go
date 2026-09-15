@@ -18,13 +18,14 @@ import (
 // scope. Keeping the scope on the resource makes keys unambiguous even when
 // GitLab has multiple variables with the same name.
 type GitLab struct {
-	Address          string `json:"address"`
-	Token            string `json:"token"`
-	Group            string `json:"group,omitempty"`
-	Project          string `json:"project,omitempty"`
-	EnvironmentScope string `json:"environment_scope,omitempty"`
-	Proxy            string `json:"proxy,omitempty"`
-	ProxyMode        string `json:"proxy_mode,omitempty"`
+	Address           string  `json:"address"`
+	Token             string  `json:"token"`
+	Group             string  `json:"group,omitempty"`
+	Project           string  `json:"project,omitempty"`
+	EnvironmentScope  string  `json:"environment_scope,omitempty"`
+	VariableAllowlist *string `json:"variable_allowlist,omitempty"`
+	Proxy             string  `json:"proxy,omitempty"`
+	ProxyMode         string  `json:"proxy_mode,omitempty"`
 }
 
 type GitLabProvider struct{ Config *GitLab }
@@ -51,7 +52,39 @@ func (p *GitLabProvider) Validate() error {
 	if strings.TrimSpace(p.Config.Token) == "" {
 		return fmt.Errorf("gitlab: access token is required")
 	}
+	if _, err := p.variableAllowlist(); err != nil {
+		return err
+	}
 	return validateProxyConfig(p.Config.ProxyMode, p.Config.Proxy)
+}
+
+// A missing list preserves unrestricted resources; an explicitly empty list
+// denies all. Anchor each rule to the entire key, including regex alternatives.
+func (p *GitLabProvider) variableAllowlist() (*regexp.Regexp, error) {
+	if p.Config == nil {
+		return nil, fmt.Errorf("gitlab: config is required")
+	}
+	if p.Config.VariableAllowlist == nil {
+		return nil, nil
+	}
+	patterns := []string{`\b\B`}
+	for i, line := range strings.Split(*p.Config.VariableAllowlist, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		pattern := regexp.QuoteMeta(line)
+		if strings.HasPrefix(line, "/") && strings.HasSuffix(line, "/") && len(line) >= 2 {
+			pattern = line[1 : len(line)-1]
+		} else if !gitLabKey.MatchString(line) {
+			return nil, fmt.Errorf("gitlab: variable allowlist line %d must be a variable name or /regex/", i+1)
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			return nil, fmt.Errorf("gitlab: invalid variable allowlist regex on line %d", i+1)
+		}
+		patterns = append(patterns, `\A(?:` + pattern + `)\z`)
+	}
+	return regexp.Compile(strings.Join(patterns, "|"))
 }
 
 func (p *GitLabProvider) scope() string {
@@ -75,6 +108,13 @@ func (p *GitLabProvider) request(ctx context.Context, method, key string, query 
 	if key != "" {
 		if !gitLabKey.MatchString(key) {
 			return nil, nil, 0, fmt.Errorf("gitlab: variable key must contain only letters, digits, or underscores (maximum 255 characters)")
+		}
+		allowlist, err := p.variableAllowlist()
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		if allowlist != nil && !allowlist.MatchString(key) {
+			return nil, nil, 0, fmt.Errorf("gitlab: variable access denied by allowlist")
 		}
 		endpoint += "/" + key
 		if query == nil {
@@ -121,6 +161,13 @@ func (p *GitLabProvider) request(ctx context.Context, method, key string, query 
 
 func (p *GitLabProvider) List(ctx context.Context, prefix string) ([]string, error) {
 	keys := []string{}
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	allowlist, err := p.variableAllowlist()
+	if err != nil {
+		return nil, err
+	}
 	for page := 1; ; {
 		body, headers, _, err := p.request(ctx, http.MethodGet, "", url.Values{"per_page": {"100"}, "page": {strconv.Itoa(page)}}, nil)
 		if err != nil {
@@ -137,7 +184,7 @@ func (p *GitLabProvider) List(ctx context.Context, prefix string) ([]string, err
 			if v.Scope == "" {
 				v.Scope = "*"
 			}
-			if v.Scope == p.scope() && strings.HasPrefix(v.Key, prefix) {
+			if v.Scope == p.scope() && strings.HasPrefix(v.Key, prefix) && (allowlist == nil || allowlist.MatchString(v.Key)) {
 				keys = append(keys, strings.TrimPrefix(v.Key, prefix))
 			}
 		}
