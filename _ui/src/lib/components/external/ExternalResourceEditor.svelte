@@ -26,8 +26,14 @@
     CheckCircle2,
     Loader2,
   } from "lucide-svelte";
-  import type { ExternalResource, ProxyMode, GitLabConfig } from "@/lib/types/config";
+  import type {
+    ExternalResource,
+    ProxyMode,
+    GitLabConfig,
+    ExternalAccess,
+  } from "@/lib/types/config";
   import GitLabFields from "./GitLabFields.svelte";
+  import AccessFields from "./AccessFields.svelte";
 
   type Mode = "view" | "edit" | "create";
   type ResourceKind =
@@ -175,7 +181,12 @@
     token: snapResource.gitlab?.token ?? "",
     environment_scope: snapResource.gitlab?.environment_scope ?? "*",
     variable_allowlist: snapResource.gitlab?.variable_allowlist ?? undefined,
+    new_key_policy: snapResource.gitlab?.new_key_policy,
   });
+
+  // Resource-level permissions. Kept as the wire shape so an untouched
+  // resource round-trips byte-identically; AccessFields normalises it.
+  let access = $state<ExternalAccess | undefined>(snapResource.access);
 
   // Outbound proxy — shared across every backend. Seeded from whichever
   // sub-config the resource currently carries. `proxyMode` controls
@@ -408,6 +419,12 @@
         token: gitlab.token.trim(),
         environment_scope: gitlab.environment_scope?.trim() || "*",
         variable_allowlist: gitlab.variable_allowlist ?? undefined,
+        // The policy only matters while an allowlist is configured; drop it
+        // otherwise so the stored config doesn't imply a rule that isn't
+        // being applied.
+        ...(gitlab.variable_allowlist != null && gitlab.new_key_policy
+          ? { new_key_policy: gitlab.new_key_policy }
+          : {}),
       };
     } else if (formType === "azure") {
       if (
@@ -463,6 +480,10 @@
         // "environment" → leave both unset (server default).
       }
     }
+
+    // Resource permissions are backend-agnostic, so they hang off the
+    // resource itself rather than any sub-config. Undefined ≡ unrestricted.
+    if (access) r.access = access;
     return r;
   }
 
@@ -1514,6 +1535,11 @@
         </div>
       </div>
     {/if}
+
+    <!-- Resource permissions — shared by every backend. -->
+    <div class="mt-6 pt-4 border-t border-slate-100 dark:border-warm-700">
+      <AccessFields bind:access kind={formType} readonly={isReadOnly} />
+    </div>
 
     <!-- Outbound proxy — shared by every backend. HTTP supports only a
          URL (env-or-custom); the others add an env / direct / custom mode. -->

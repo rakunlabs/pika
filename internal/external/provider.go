@@ -109,6 +109,33 @@ type Capabilities struct {
 	CanWrite    bool `json:"can_write"`
 	CanDelete   bool `json:"can_delete"`
 	CanVersions bool `json:"can_versions"`
+
+	// CanCreate and CanUpdate refine CanWrite when a resource's access
+	// settings split "add a new entry" from "change an existing one".
+	// Backends never distinguish the two on their own, so nil means "same
+	// as CanWrite" — which keeps the wire format unchanged for every
+	// unrestricted resource. Resolve them via EffectiveCreate /
+	// EffectiveUpdate rather than dereferencing directly.
+	CanCreate *bool `json:"can_create,omitempty"`
+	CanUpdate *bool `json:"can_update,omitempty"`
+}
+
+// EffectiveCreate reports whether new entries may be written, falling back to
+// CanWrite when the backend doesn't refine it.
+func (c Capabilities) EffectiveCreate() bool {
+	if c.CanCreate != nil {
+		return *c.CanCreate && c.CanWrite
+	}
+	return c.CanWrite
+}
+
+// EffectiveUpdate reports whether existing entries may be overwritten,
+// falling back to CanWrite when the backend doesn't refine it.
+func (c Capabilities) EffectiveUpdate() bool {
+	if c.CanUpdate != nil {
+		return *c.CanUpdate && c.CanWrite
+	}
+	return c.CanWrite
 }
 
 // Entry is a single record returned by Provider.Read. Data is the
@@ -174,6 +201,21 @@ type Deps interface {
 // us an External value and we hand them back something they can
 // uniformly call Fetch/List/Test on.
 func ResourceProvider(ext External, deps Deps) (Provider, error) {
+	provider, err := backendProvider(ext, deps)
+	if err != nil {
+		return nil, err
+	}
+	// Resource-level access settings wrap the concrete backend so every
+	// consumer (REST, MCP, public endpoints, inheritance) inherits them.
+	// Unrestricted resources are returned bare — no wrapper, no behaviour
+	// change for the overwhelmingly common case.
+	if ext.Access.Restricted() {
+		return &accessProvider{Provider: provider, access: ext.Access}, nil
+	}
+	return provider, nil
+}
+
+func backendProvider(ext External, deps Deps) (Provider, error) {
 	switch {
 	case ext.Http != nil:
 		return &HTTPProvider{Config: ext.Http}, nil

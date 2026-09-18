@@ -15,9 +15,10 @@
            Loader2,
            Download,
       } from "lucide-svelte";
-     import type { ExternalResource, ProxyMode, GitLabConfig } from "@/lib/types/config";
+     import type { ExternalResource, ProxyMode, GitLabConfig, ExternalAccess } from "@/lib/types/config";
      import ExternalResourceEditor from "@/lib/components/external/ExternalResourceEditor.svelte";
      import GitLabFields from "@/lib/components/external/GitLabFields.svelte";
+     import AccessFields from "@/lib/components/external/AccessFields.svelte";
      import { backdropClose } from "@/lib/actions/backdropClose";
 
      // ── External resource state ──
@@ -106,6 +107,9 @@
      let newExtAzureClientId = $state("");
      let newExtAzureClientSecret = $state("");
      let newExtGitlab = $state<GitLabConfig>({ address: "https://gitlab.com", group: "", token: "", environment_scope: "*", variable_allowlist: undefined });
+     // Resource-level permissions. Undefined ≡ unrestricted, which is what a
+     // resource added before this field existed behaves like.
+     let newExtAccess = $state<ExternalAccess | undefined>(undefined);
      // Outbound proxy — shared by every backend. HTTP supports only a
      // URL (env-or-custom); the others add an env / direct / custom mode.
      let newExtProxyMode = $state<ProxyMode>("environment");
@@ -276,10 +280,15 @@
                 resource.gitlab = {
                      address: newExtGitlab.address.trim(),
                      ...(newExtGitlab.project !== undefined ? { project: target } : { group: target }),
-                     token: newExtGitlab.token.trim(),
-                     environment_scope: newExtGitlab.environment_scope?.trim() || "*",
-                     variable_allowlist: newExtGitlab.variable_allowlist ?? undefined,
-                };
+                      token: newExtGitlab.token.trim(),
+                      environment_scope: newExtGitlab.environment_scope?.trim() || "*",
+                      variable_allowlist: newExtGitlab.variable_allowlist ?? undefined,
+                      // Only meaningful with an allowlist; drop it otherwise
+                      // so the stored config doesn't imply an inactive rule.
+                      ...(newExtGitlab.variable_allowlist != null && newExtGitlab.new_key_policy
+                           ? { new_key_policy: newExtGitlab.new_key_policy }
+                           : {}),
+                 };
            } else if (newExtType === "azure") {
                if (
                     !newExtAzureVaultUrl.trim() ||
@@ -329,11 +338,14 @@
                          cfg.proxy_mode = "custom";
                          cfg.proxy = newExtProxyVal;
                     }
-                    // "environment" → leave unset (server default).
-               }
-          }
+                     // "environment" → leave unset (server default).
+                }
+           }
 
-          try {
+           // Resource permissions hang off the resource, not a sub-config.
+           if (newExtAccess) resource.access = newExtAccess;
+
+           try {
                const currentExternal = settings?.external || {};
                await configStore.saveSettings({
                     external: {
@@ -373,8 +385,9 @@
                newExtAzureTenantId = "";
                newExtAzureClientId = "";
                newExtAzureClientSecret = "";
-               newExtGitlab = { address: "https://gitlab.com", group: "", token: "", environment_scope: "*", variable_allowlist: undefined };
-               newExtProxyMode = "environment";
+                newExtGitlab = { address: "https://gitlab.com", group: "", token: "", environment_scope: "*", variable_allowlist: undefined };
+                newExtAccess = undefined;
+                newExtProxyMode = "environment";
                newExtProxyUrl = "";
           } catch (error) {
                addToast("Failed to add external resource", "alert");
@@ -1284,9 +1297,12 @@
                      </div>
                 {/if}
 
-                <!-- Outbound proxy — shared by every backend. HTTP supports
-                     only a URL (env-or-custom); the others add a mode. -->
-                <div>
+                 <!-- Resource permissions — shared by every backend. -->
+                 <AccessFields bind:access={newExtAccess} kind={newExtType} />
+
+                 <!-- Outbound proxy — shared by every backend. HTTP supports
+                      only a URL (env-or-custom); the others add a mode. -->
+                 <div>
                      <label
                           for="ext-proxy-mode"
                           class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5"

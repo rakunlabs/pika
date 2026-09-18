@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -430,7 +431,51 @@ func (s *Service) WriteExternal(ctx context.Context, resourceName, path string, 
 	if err != nil {
 		return err
 	}
-	return provider.Write(ctx, path, data)
+	if err := provider.Write(ctx, path, data); err != nil {
+		return err
+	}
+	// Only GitLab carries an allowlist today; skip the settings round-trip
+	// for every other backend.
+	if provider.Kind() == "gitlab" {
+		s.syncExternalAllowlist(ctx, resourceName, path)
+	}
+	return nil
+}
+
+// syncExternalAllowlist widens a resource's allowlist after a successful write
+// when the resource asked for it (GitLab new_key_policy = "append"). The
+// provider can't do this itself: it has no access to settings storage.
+//
+// A write only reaches here after the provider accepted it, and a name outside
+// the allowlist is only accepted when it did not exist yet — so "wrote a key
+// the allowlist doesn't cover" is exactly "created a new key", which is the
+// case the policy is about.
+//
+// Failures are logged, not returned: the value is already in GitLab, and
+// failing the request would push the user into a retry that the provider would
+// then reject as an update to an out-of-allowlist variable.
+func (s *Service) syncExternalAllowlist(ctx context.Context, resourceName, key string) {
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		slog.Warn("external: allowlist sync could not load settings", "resource", resourceName, "error", err)
+		return
+	}
+	ext, ok := settings.External[resourceName]
+	if !ok || ext.GitLab == nil || ext.GitLab.GetNewKeyPolicy() != external.GitLabNewKeyAppend {
+		return
+	}
+	changed, err := ext.GitLab.AppendAllowedVariable(key)
+	if err != nil {
+		slog.Warn("external: allowlist sync rejected key", "resource", resourceName, "error", err)
+		return
+	}
+	if !changed {
+		return
+	}
+	settings.External[resourceName] = ext
+	if err := s.UpdateSettings(ctx, settings); err != nil {
+		slog.Error("external: allowlist sync failed to persist", "resource", resourceName, "error", err)
+	}
 }
 
 // DeleteExternal removes the entry at the path. Same not-supported

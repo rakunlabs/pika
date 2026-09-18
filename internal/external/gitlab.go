@@ -24,8 +24,87 @@ type GitLab struct {
 	Project           string  `json:"project,omitempty"`
 	EnvironmentScope  string  `json:"environment_scope,omitempty"`
 	VariableAllowlist *string `json:"variable_allowlist,omitempty"`
-	Proxy             string  `json:"proxy,omitempty"`
-	ProxyMode         string  `json:"proxy_mode,omitempty"`
+
+	// NewKeyPolicy decides what happens when someone creates a variable the
+	// allowlist does not cover. It only matters while an allowlist is
+	// configured; without one every name is already permitted.
+	//
+	//   - "" / "deny"  — reject the create (the original behaviour, kept as
+	//     the default so upgrades never widen access).
+	//   - "allow"      — create it, but leave the allowlist alone. The new
+	//     variable is then invisible through this resource, which is what
+	//     you want when pika may seed values it must not read back.
+	//   - "append"     — create it and add the exact name to the allowlist,
+	//     so the variable stays manageable afterwards. The settings write
+	//     happens server-side in service.WriteExternal; the provider itself
+	//     has no storage access.
+	//
+	// Updates to *existing* variables are never covered by this policy: a
+	// name outside the allowlist stays untouchable once it exists.
+	NewKeyPolicy string `json:"new_key_policy,omitempty"`
+
+	Proxy     string `json:"proxy,omitempty"`
+	ProxyMode string `json:"proxy_mode,omitempty"`
+}
+
+// New-key policy values for GitLab.NewKeyPolicy.
+const (
+	GitLabNewKeyDeny   = "deny"
+	GitLabNewKeyAllow  = "allow"
+	GitLabNewKeyAppend = "append"
+)
+
+// GetNewKeyPolicy normalises NewKeyPolicy, defaulting to "deny". A nil
+// receiver also returns "deny" so callers don't need a separate guard.
+func (g *GitLab) GetNewKeyPolicy() string {
+	if g == nil {
+		return GitLabNewKeyDeny
+	}
+	switch strings.TrimSpace(g.NewKeyPolicy) {
+	case GitLabNewKeyAllow:
+		return GitLabNewKeyAllow
+	case GitLabNewKeyAppend:
+		return GitLabNewKeyAppend
+	default:
+		return GitLabNewKeyDeny
+	}
+}
+
+// AllowsVariable reports whether key passes the configured allowlist. No
+// allowlist means everything passes. Exposed so the service layer can decide
+// whether a freshly created key needs appending without re-implementing the
+// matching rules.
+func (g *GitLab) AllowsVariable(key string) (bool, error) {
+	p := &GitLabProvider{Config: g}
+	allowlist, err := p.variableAllowlist()
+	if err != nil {
+		return false, err
+	}
+	return allowlist == nil || allowlist.MatchString(key), nil
+}
+
+// AppendAllowedVariable adds key to the allowlist as an exact-name rule and
+// reports whether anything changed. It is a no-op when there is no allowlist
+// (nothing to widen) or when the key already matches. The caller persists the
+// updated config.
+func (g *GitLab) AppendAllowedVariable(key string) (bool, error) {
+	if g == nil || g.VariableAllowlist == nil {
+		return false, nil
+	}
+	if !gitLabKey.MatchString(key) {
+		return false, fmt.Errorf("gitlab: invalid variable key")
+	}
+	allowed, err := g.AllowsVariable(key)
+	if err != nil || allowed {
+		return false, err
+	}
+	updated := strings.TrimRight(*g.VariableAllowlist, "\n")
+	if updated != "" {
+		updated += "\n"
+	}
+	updated += key
+	g.VariableAllowlist = &updated
+	return true, nil
 }
 
 type GitLabProvider struct{ Config *GitLab }
@@ -54,6 +133,11 @@ func (p *GitLabProvider) Validate() error {
 	}
 	if _, err := p.variableAllowlist(); err != nil {
 		return err
+	}
+	switch strings.TrimSpace(p.Config.NewKeyPolicy) {
+	case "", GitLabNewKeyDeny, GitLabNewKeyAllow, GitLabNewKeyAppend:
+	default:
+		return fmt.Errorf("gitlab: new key policy must be deny, allow, or append")
 	}
 	return validateProxyConfig(p.Config.ProxyMode, p.Config.Proxy)
 }
@@ -97,6 +181,13 @@ func (p *GitLabProvider) scope() string {
 // request never includes upstream response bodies in errors: they can contain
 // variable values. Redirects are rejected to keep PRIVATE-TOKEN on this host.
 func (p *GitLabProvider) request(ctx context.Context, method, key string, query url.Values, data any) ([]byte, http.Header, int, error) {
+	return p.requestAllowing(ctx, method, key, query, data, false)
+}
+
+// requestAllowing is request with an explicit allowlist escape hatch. Only the
+// create path sets skipAllowlist, and only after establishing that the key is
+// new and the resource's new-key policy permits it — see Write.
+func (p *GitLabProvider) requestAllowing(ctx context.Context, method, key string, query url.Values, data any, skipAllowlist bool) ([]byte, http.Header, int, error) {
 	if err := p.Validate(); err != nil {
 		return nil, nil, 0, err
 	}
@@ -109,12 +200,14 @@ func (p *GitLabProvider) request(ctx context.Context, method, key string, query 
 		if !gitLabKey.MatchString(key) {
 			return nil, nil, 0, fmt.Errorf("gitlab: variable key must contain only letters, digits, or underscores (maximum 255 characters)")
 		}
-		allowlist, err := p.variableAllowlist()
-		if err != nil {
-			return nil, nil, 0, err
-		}
-		if allowlist != nil && !allowlist.MatchString(key) {
-			return nil, nil, 0, fmt.Errorf("gitlab: variable access denied by allowlist")
+		if !skipAllowlist {
+			allowlist, err := p.variableAllowlist()
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			if allowlist != nil && !allowlist.MatchString(key) {
+				return nil, nil, 0, fmt.Errorf("gitlab: variable access denied by allowlist")
+			}
 		}
 		endpoint += "/" + key
 		if query == nil {
@@ -273,21 +366,71 @@ func (p *GitLabProvider) Write(ctx context.Context, key string, data map[string]
 			return fmt.Errorf("gitlab: unsupported variable setting %q", field)
 		}
 	}
+	// Keys outside the allowlist are normally rejected before any upstream
+	// call. A non-deny new-key policy relaxes that for creates only, so we
+	// probe with the allowlist bypassed and re-deny if the variable turns
+	// out to already exist.
+	allowed, err := p.Config.AllowsVariable(key)
+	if err != nil {
+		return err
+	}
+	bypass := false
+	if !allowed {
+		if p.Config.GetNewKeyPolicy() == GitLabNewKeyDeny {
+			return fmt.Errorf("gitlab: variable access denied by allowlist")
+		}
+		bypass = true
+	}
+
 	// Check exact-scope existence before choosing create/update. Some GitLab
 	// versions fall back to an unscoped lookup on PUT of a missing variable.
 	// Do not use PUT as an existence probe or recreate after a failed update.
-	_, _, status, err := p.request(ctx, http.MethodGet, key, nil, nil)
+	_, _, status, err := p.requestAllowing(ctx, http.MethodGet, key, nil, nil, bypass)
 	if status == http.StatusNotFound {
 		payload["key"] = key
 		payload["environment_scope"] = p.scope()
-		_, _, _, err = p.request(ctx, http.MethodPost, "", nil, payload)
+		_, _, _, err = p.requestAllowing(ctx, http.MethodPost, "", nil, payload, bypass)
 		return err
 	}
 	if err != nil {
 		return err
 	}
-	_, _, _, err = p.request(ctx, http.MethodPut, key, nil, payload)
+	if bypass {
+		return fmt.Errorf("gitlab: variable access denied by allowlist")
+	}
+	_, _, _, err = p.requestAllowing(ctx, http.MethodPut, key, nil, payload, false)
 	return err
+}
+
+// Exists reports whether the variable already exists in this resource's exact
+// environment scope, without reading its value. It powers the create/update
+// split in the resource access guard (see access.go). Keys blocked by the
+// allowlist report an error rather than "absent", unless a non-deny new-key
+// policy is in force — in that case they are genuinely candidates for
+// creation and the probe runs with the allowlist bypassed.
+func (p *GitLabProvider) Exists(ctx context.Context, key string) (bool, error) {
+	if !gitLabKey.MatchString(key) {
+		return false, fmt.Errorf("gitlab: invalid variable key")
+	}
+	allowed, err := p.Config.AllowsVariable(key)
+	if err != nil {
+		return false, err
+	}
+	bypass := false
+	if !allowed {
+		if p.Config.GetNewKeyPolicy() == GitLabNewKeyDeny {
+			return false, fmt.Errorf("gitlab: variable access denied by allowlist")
+		}
+		bypass = true
+	}
+	_, _, status, err := p.requestAllowing(ctx, http.MethodGet, key, nil, nil, bypass)
+	if status == http.StatusNotFound {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (p *GitLabProvider) Delete(ctx context.Context, key string) error {

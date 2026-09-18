@@ -7,10 +7,14 @@ import (
 	"strings"
 
 	"github.com/rakunlabs/chu"
+	_ "github.com/rakunlabs/chu/loader/external/loaderawssecrets"
+	_ "github.com/rakunlabs/chu/loader/external/loaderawsssm"
+	_ "github.com/rakunlabs/chu/loader/external/loaderazurekeyvault"
 	_ "github.com/rakunlabs/chu/loader/external/loaderconsul"
 	_ "github.com/rakunlabs/chu/loader/external/loadergcpparameter"
 	_ "github.com/rakunlabs/chu/loader/external/loadergcpsecret"
 	_ "github.com/rakunlabs/chu/loader/external/loadervault"
+
 	"github.com/rakunlabs/chu/loader/loaderenv"
 	"github.com/rakunlabs/logi"
 	"github.com/rakunlabs/pika/internal/cluster"

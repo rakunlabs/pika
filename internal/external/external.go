@@ -17,6 +17,12 @@ type External struct {
 	GCPParameter *GCPParameter `json:"gcp_parameter,omitempty"`
 	Azure        *Azure        `json:"azure,omitempty"`
 	GitLab       *GitLab       `json:"gitlab,omitempty"`
+
+	// Access restricts the operations this resource permits, on top of the
+	// caller's own capabilities and token scopes. Nil keeps the resource
+	// unrestricted, which is what every record saved before this field
+	// existed must continue to do. See access.go.
+	Access *Access `json:"access,omitempty"`
 }
 
 // GCP configures a GCP Secret Manager external resource.

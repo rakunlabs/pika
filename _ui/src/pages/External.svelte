@@ -58,6 +58,7 @@
     ExternalVersion,
     GitLabVariableOptions,
   } from "@/lib/types/config";
+  import { canCreate, canUpdate } from "@/lib/types/config";
   import jsYaml from "js-yaml";
 
   // ── Page state ────────────────────────────────────────────────────
@@ -195,6 +196,17 @@
   const canManage = $derived(appStore.hasPermission("external.read"));
   const canWrite = $derived(appStore.hasPermission("external.write"));
   const canConfigureResources = $derived(appStore.hasPermission("settings.manage"));
+
+  // A resource's own permissions can allow changing what already exists
+  // while refusing new entries (or the other way round), so the two write
+  // affordances are gated separately. Backends that can't tell the two
+  // apart report neither flag and both fall back to can_write.
+  const resourceCanCreate = $derived(
+    canWrite && canCreate(currentResource?.capabilities),
+  );
+  const resourceCanUpdate = $derived(
+    canWrite && canUpdate(currentResource?.capabilities),
+  );
 
   // Resources filtered by the search box (matches name or kind).
   const visibleResources = $derived.by(() => {
@@ -945,7 +957,7 @@
               >Paths</span
             >
             <div class="flex items-center gap-1">
-              {#if canWrite && currentResource?.capabilities.can_write}
+              {#if resourceCanCreate}
                 <button
                   class="p-1 text-slate-500 dark:text-slate-400 hover:text-accent-600 hover:bg-accent-50 dark:hover:bg-accent-950/30 rounded transition-colors cursor-pointer"
                   onclick={startCompose}
@@ -1358,7 +1370,7 @@
               >
               <div class="flex items-center gap-1 shrink-0">
                 {#if !editing}
-                  {#if canWrite && currentResource?.capabilities.can_write}
+                  {#if resourceCanUpdate}
                     <button
                       class="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-white bg-accent-600 rounded hover:bg-accent-700 transition-colors cursor-pointer"
                       onclick={startEdit}

@@ -113,7 +113,18 @@ func (p *scopedExternalProvider) Capabilities() external.Capabilities {
 	c.CanRead = c.CanRead && r
 	c.CanList = c.CanList && r
 	c.CanVersions = c.CanVersions && r
-	c.CanWrite = c.CanWrite && externalScopeAllows(p.scopes, p.resource, "", "write", true)
+	w := externalScopeAllows(p.scopes, p.resource, "", "write", true)
+	c.CanWrite = c.CanWrite && w
+	// Token scopes have a single "write" operation, so they narrow both
+	// halves of a resource's create/update split rather than replacing it.
+	if c.CanCreate != nil {
+		create := *c.CanCreate && w
+		c.CanCreate = &create
+	}
+	if c.CanUpdate != nil {
+		update := *c.CanUpdate && w
+		c.CanUpdate = &update
+	}
 	c.CanDelete = c.CanDelete && externalScopeAllows(p.scopes, p.resource, "", "delete", true)
 	return c
 }

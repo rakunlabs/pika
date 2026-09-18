@@ -52,6 +52,24 @@ Each external resource has a **name** that you choose. That name is what `resour
 - [Azure](./azure) — Key Vault.
 - [GitLab Variables](./gitlab) — browse and edit group or project CI/CD variables.
 
+### Resource permissions
+
+Every external resource carries its own permission switches, edited in the same form as its connection settings:
+
+| Switch | Off means |
+| --- | --- |
+| Read values | No single-entry reads, no version history, and **no inheritance** — a file that inherits from the resource fails to resolve. |
+| List | The inventory stays hidden; callers can still work with paths they already know. |
+| Add new entries | Writes to paths that don't exist yet are rejected. |
+| Change existing entries | Writes to paths that already exist are rejected. |
+| Delete | Deletes are rejected. |
+
+These are a ceiling, not a grant. A denied operation is refused before pika contacts the backend, for every caller — superadmin sessions, API tokens, MCP clients, and public endpoints alike. User capabilities (`external.read` / `external.write`) and [token scopes](../tokens-and-scopes) can only narrow it further. A resource with everything switched off is effectively parked: the credentials stay configured, and **Test connection** still works so you can verify them.
+
+Splitting *add* from *change* needs the backend to answer "does this path already exist" before writing. GitLab does; the others do not, so for them set both switches the same way — a mismatched pair rejects every write instead of guessing. The browser hides the actions a resource forbids, so **New entry** and **Edit** disappear rather than failing on submit.
+
+Resources saved before these switches existed stay unrestricted.
+
 ## Examples
 
 ### Pull a database password out of Vault

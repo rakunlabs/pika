@@ -81,6 +81,25 @@
       <p id={`${id}-allowlist-help`} class="mt-1 text-xs text-slate-500 dark:text-slate-400">
         Enter one exact variable name or /regex/ per line. For example, <code>DATABASE_URL</code> allows that exact name and <code>/^APP_.*/</code> allows names starting with APP_. Patterns use Go RE2 and must match the full variable name. Blank lines are ignored. Invalid patterns are rejected by the server when saving.
       </p>
+      <label for={`${id}-new-key-policy`} class="block text-xs font-medium text-slate-500 dark:text-slate-400 mt-3 mb-1">New variables outside the allowlist</label>
+      <select
+        id={`${id}-new-key-policy`}
+        value={config.new_key_policy ?? "deny"}
+        disabled={readonly}
+        aria-describedby={`${id}-new-key-policy-help`}
+        onchange={(event) => {
+          const value = event.currentTarget.value as "deny" | "allow" | "append";
+          config.new_key_policy = value === "deny" ? undefined : value;
+        }}
+        class={inputClass}
+      >
+        <option value="deny">Reject them</option>
+        <option value="append">Create and add to the allowlist</option>
+        <option value="allow">Create without adding to the allowlist</option>
+      </select>
+      <p id={`${id}-new-key-policy-help`} class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        Applies to brand-new variable names only; an existing variable outside the allowlist stays untouchable. <strong>Create and add</strong> keeps the new variable manageable here afterwards. <strong>Create without adding</strong> leaves it invisible to this resource, which suits seeding a value pika must not read back.
+      </p>
     {/if}
   </div>
 </div>

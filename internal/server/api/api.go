@@ -932,12 +932,17 @@ type externalEntryReq struct {
 	Version string         `json:"version,omitempty"`
 }
 
-// translateNotSupported turns an external.ErrNotSupported into a 405
-// so the SPA can branch on it. Anything else is passed through to the
-// default error handler.
+// translateNotSupported maps provider-level refusals onto HTTP semantics:
+// ErrNotSupported ("this backend can't do that") becomes a 4xx client error,
+// while ErrAccessDenied ("the resource's own access settings forbid it")
+// becomes 403 so the SPA can tell "impossible" from "not permitted".
+// Anything else is passed through to the default error handler.
 func translateNotSupported(err error) error {
 	if errors.Is(err, external.ErrNotSupported) {
 		return errors.Join(err, service.ErrBadRequest)
+	}
+	if errors.Is(err, external.ErrAccessDenied) {
+		return errors.Join(err, service.ErrForbidden)
 	}
 	return err
 }

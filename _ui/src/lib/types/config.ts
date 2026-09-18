@@ -219,6 +219,15 @@ export interface AzureConfig {
   proxy_mode?: ProxyMode;
 }
 
+// What happens when someone creates a variable the allowlist doesn't cover.
+// Only meaningful while `variable_allowlist` is set.
+//  - "deny"   (default): reject the create.
+//  - "allow":  create it, leave the allowlist alone — the variable is then
+//              write-only through this resource.
+//  - "append": create it and add the exact name to the allowlist so it stays
+//              manageable afterwards (the server rewrites the setting).
+export type GitLabNewKeyPolicy = "deny" | "allow" | "append";
+
 export interface GitLabConfig {
   address: string;
   group?: string;
@@ -227,8 +236,24 @@ export interface GitLabConfig {
   environment_scope?: string;
   // Missing/null disables filtering; an empty string enables it and denies all variables.
   variable_allowlist?: string | null;
+  new_key_policy?: GitLabNewKeyPolicy;
   proxy?: string;
   proxy_mode?: ProxyMode;
+}
+
+// Mirrors external.Access — per-resource operation limits that apply to every
+// caller, including superadmin sessions. Each flag is tri-state:
+//   undefined → unrestricted (what resources saved before this field do)
+//   true      → explicitly allowed
+//   false     → denied; the server refuses before contacting the backend
+// `create` and `update` split "add a new entry" from "change an existing one";
+// only backends that can check existence (GitLab today) honour the split.
+export interface ExternalAccess {
+  read?: boolean;
+  list?: boolean;
+  create?: boolean;
+  update?: boolean;
+  delete?: boolean;
 }
 
 // External resource for inheritance
@@ -251,6 +276,8 @@ export interface ExternalResource {
   gcp_parameter?: GCPParameterConfig;
   azure?: AzureConfig;
   gitlab?: GitLabConfig;
+  // Resource-level operation limits. Absent ≡ unrestricted.
+  access?: ExternalAccess;
 }
 
 // Mirrors external.Capabilities — what the browser UI can do with a
@@ -263,6 +290,23 @@ export interface ExternalCapabilities {
   can_write: boolean;
   can_delete: boolean;
   can_versions: boolean;
+  // Present only when a resource's access settings split writes into
+  // "create new" and "update existing" AND the backend can honour the
+  // split. Absent ≡ same as can_write; resolve via canCreate/canUpdate.
+  can_create?: boolean;
+  can_update?: boolean;
+}
+
+// Resolve the optional create/update refinements of ExternalCapabilities.
+// Mirrors external.Capabilities.EffectiveCreate / EffectiveUpdate.
+export function canCreate(caps: ExternalCapabilities | undefined): boolean {
+  if (!caps) return false;
+  return caps.can_write && (caps.can_create ?? true);
+}
+
+export function canUpdate(caps: ExternalCapabilities | undefined): boolean {
+  if (!caps) return false;
+  return caps.can_write && (caps.can_update ?? true);
 }
 
 // Summary record for the External browser left pane. Has no secret

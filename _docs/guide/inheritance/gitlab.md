@@ -37,6 +37,35 @@ New entries default to an ordinary, unmasked, unprotected Variable with expansio
 
 Only the configured group's or project's own variables are listed. Inherited variables are not included; configure the parent group separately to edit those. Unavailable/hidden values produce a read error rather than appearing as empty editable strings. GitLab does not expose version history through this provider. Variable settings are returned as entry metadata, separate from the value used by inheritance.
 
+## Variable allowlist
+
+By default every variable in the configured scope is reachable. Turn on **Enable variable allowlist** to restrict the resource to specific names:
+
+```text
+DATABASE_URL
+/^APP_.*/
+```
+
+- One exact variable name or one `/regex/` per line; blank lines are ignored.
+- Patterns use Go RE2 (no lookahead) and must match the **whole** variable name.
+- An enabled but empty list denies every variable — that is the point of the toggle being separate from the text box.
+- The check runs before any request leaves pika, so a denied name costs nothing upstream and never appears in listings, search, **Test connection**, or inheritance.
+- Invalid patterns are rejected when the resource is saved.
+
+### New variables outside the allowlist
+
+An allowlist blocks names it doesn't cover, including names that don't exist yet — so by default you cannot create one. The **New variables outside the allowlist** setting decides what happens instead:
+
+| Option | Behaviour |
+| --- | --- |
+| **Reject them** (default) | The create is refused. This is the pre-existing behaviour, so upgrading never widens access. |
+| **Create and add to the allowlist** | The variable is created and its exact name is appended to the allowlist, so it stays readable and editable here afterwards. Pika rewrites the resource setting itself. |
+| **Create without adding to the allowlist** | The variable is created but the allowlist is untouched, leaving it write-once and invisible to this resource. Use this to seed a value pika must not read back. |
+
+This only covers brand-new names. A variable that already exists outside the allowlist stays untouchable: reads, updates, and deletes are still refused, and a create attempt that discovers an existing variable is refused too.
+
+Combine it with the resource's [permission switches](./#resource-permissions) for the common shape of "pika may add variables but never change or read the ones already there": allowlist on, policy **Create and add**, *Change existing entries* and *Read values* off.
+
 Writes check the exact scope before choosing creation or update. This check and the update are separate GitLab requests, not an atomic transaction. Avoid deleting the same variable concurrently: some GitLab versions have an unscoped fallback when a variable disappears before an update.
 
 ## Inheritance
