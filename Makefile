@@ -34,6 +34,7 @@ build-container: build ## Build the container image with test tag
 
 .PHONY: run
 run: export LOG_LEVEL := debug
+run: export PIKA_SERVER_TLS_ENABLED := false
 run: ## Run the application
 	go run -ldflags="-X main.date=$(BUILD_DATE) -X main.commit=$(BUILD_COMMIT) -X main.version=$(VERSION)" $(MAIN_FILE)
 
