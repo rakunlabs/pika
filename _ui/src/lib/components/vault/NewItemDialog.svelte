@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { apiErrorMessage } from "@/lib/api/client";
   import {
     X,
     KeyRound,
@@ -84,9 +85,8 @@
         },
       );
       onCreated(item.id);
-    } catch (e: any) {
-      addToast(
-        e?.response?.data?.message ?? e?.message ?? "Create failed",
+    } catch (e) {
+      addToast(apiErrorMessage(e, "Create failed"),
         "alert",
       );
     } finally {
@@ -136,7 +136,7 @@
               onclick={() => pickType(t)}
               class="flex items-start gap-3 p-3 rounded border border-slate-200 dark:border-warm-700 hover:bg-slate-50 dark:hover:bg-warm-800 text-left cursor-pointer"
             >
-              <Icon size={20} class="shrink-0 mt-0.5 text-accent-600" />
+              <Icon size={20} class="shrink-0 mt-0.5 text-accent-600 dark:text-accent-400" />
               <div class="flex-1 min-w-0">
                 <div class="text-sm font-medium">{typeLabel(t)}</div>
                 <div class="text-xs text-slate-500 dark:text-slate-400">

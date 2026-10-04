@@ -232,7 +232,7 @@ export function extractHostnames(payload: VaultItemPayload): string[] {
     if (!v) continue;
     try {
       // Tolerate values without a scheme by prepending https://.
-      const u = new URL(/^[a-z][a-z0-9+.\-]*:\/\//i.test(v) ? v : `https://${v}`);
+      const u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(v) ? v : `https://${v}`);
       if (u.hostname) out.add(u.hostname.toLowerCase());
     } catch {
       // Unparseable URL — skip silently. The user can still see the

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { inputPanelClass, panelCardClass } from "@/lib/ui";
   import { configStore } from "@/lib/store/config.svelte";
   import { addToast } from "@/lib/store/toast.svelte";
   import { withBasePath } from "@/lib/basepath";
@@ -283,11 +284,9 @@
   //     panel base (warm-900) so fields are visually distinct from the
   //     dark canvas behind them.
   // ────────────────────────────────────────────────────────────────────
-  const inputClass =
-    "w-full px-2 py-1.5 text-xs font-mono border border-slate-200 dark:border-warm-700 bg-white dark:bg-warm-800 text-slate-700 dark:text-warm-100 placeholder:text-slate-400 dark:placeholder:text-warm-300 rounded focus:outline-none focus:border-accent-500 dark:focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20";
+  const inputClass = inputPanelClass;
   const selectClass = inputClass; // selects share the same chrome
-  const cardClass =
-    "bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded";
+  const cardClass = panelCardClass;
 </script>
 
 <div
@@ -304,7 +303,7 @@
          every section to reach it. Header placement keeps it always
          visible and saves the vertical space at the end. -->
     <div
-      class="flex items-center gap-2 px-3.5 py-1.5 bg-slate-100 dark:bg-warm-800 border-b border-slate-200 dark:border-warm-700 text-xs font-semibold text-gray-700 dark:text-warm-100"
+      class="flex items-center gap-2 px-3.5 py-1.5 bg-slate-100 dark:bg-warm-800 border-b border-slate-200 dark:border-warm-700 text-xs font-semibold text-slate-700 dark:text-warm-100"
     >
       <FileText size={14} />
       <span>File Settings</span>
@@ -325,7 +324,7 @@
           class="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 dark:text-warm-300 mb-1.5 uppercase tracking-wide"
           for="format-select"
         >
-          <span class="flex items-center text-gray-400 dark:text-warm-400"
+          <span class="flex items-center text-slate-400 dark:text-warm-400"
             ><FileText size={12} /></span
           >
           Format
@@ -347,7 +346,7 @@
         <label
           class="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 dark:text-warm-300 mb-1.5 uppercase tracking-wide"
         >
-          <span class="flex items-center text-gray-400 dark:text-warm-400"
+          <span class="flex items-center text-slate-400 dark:text-warm-400"
             ><FileText size={12} /></span
           >
           Template
@@ -357,7 +356,7 @@
         >
           <input
             type="checkbox"
-            class="mt-0.5 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 cursor-pointer"
+            class="mt-0.5 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 cursor-pointer dark:text-accent-400"
             checked={activeTab.meta.go_template === true}
             onchange={handleGoTemplateChange}
           />
@@ -381,7 +380,7 @@
         <label
           class="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 dark:text-warm-300 mb-1.5 uppercase tracking-wide"
         >
-          <span class="flex items-center text-gray-400 dark:text-warm-400"
+          <span class="flex items-center text-slate-400 dark:text-warm-400"
             ><GitBranch size={12} /></span
           >
           Versions ({allVersions.length})
@@ -427,7 +426,7 @@
                           onkeydown={(e) =>
                             handleConstraintKeydown(e, ver.version)}
                           placeholder=">= 0.0.0"
-                          class="w-28 px-2 py-1 text-[11px] font-mono border border-amber-400 dark:border-amber-500 rounded bg-white dark:bg-warm-800 text-amber-700 dark:text-amber-300 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20"
+                          class="w-28 px-2 py-1 text-[11px] font-mono border border-amber-400 dark:border-amber-500 rounded bg-white dark:bg-warm-800 text-amber-700 dark:text-amber-300 focus:outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500"
                         />
                         <button
                           class="px-1.5 py-0.5 text-[10px] text-white bg-amber-500 rounded cursor-pointer hover:bg-amber-600 transition-colors"
@@ -515,7 +514,7 @@
           <label
             class="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 dark:text-warm-300 mb-1.5 uppercase tracking-wide"
           >
-            <span class="flex items-center text-gray-400 dark:text-warm-400"
+            <span class="flex items-center text-slate-400 dark:text-warm-400"
               ><Link size={12} /></span
             >
             API Endpoint
@@ -532,7 +531,7 @@
                 title="Copy full URL"
               >
                 {#if copiedEndpoint}
-                  <Check size={13} class="text-green-500" />
+                  <Check size={13} class="text-emerald-500" />
                 {:else}
                   <Copy size={13} />
                 {/if}
@@ -567,7 +566,7 @@
           class="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 dark:text-warm-300 mb-1.5 uppercase tracking-wide"
           for="description-input"
         >
-          <span class="flex items-center text-gray-400 dark:text-warm-400"
+          <span class="flex items-center text-slate-400 dark:text-warm-400"
             ><Info size={12} /></span
           >
           Description
@@ -697,7 +696,7 @@
                   {@const kind = diagramKind(entry)}
                   {@const kindClass =
                     kind === "ext"
-                      ? "border-purple-300 dark:border-purple-700 bg-purple-50/70 dark:bg-purple-900/20 text-purple-700 dark:text-purple-200"
+                      ? "border-purple-300 dark:border-purple-700 bg-purple-50/70 dark:bg-purple-900/40 text-purple-700 dark:text-purple-200"
                       : "border-slate-200 dark:border-warm-700 bg-white dark:bg-warm-800 text-slate-600 dark:text-warm-200"}
                   <div
                     class="relative -mt-px"
@@ -846,7 +845,7 @@
                         <Pencil size={12} />
                       </button>
                       <button
-                        class="p-0.5 text-slate-400 dark:text-warm-400 hover:text-red-500 dark:hover:text-red-400 cursor-pointer transition-colors"
+                        class="p-0.5 text-slate-400 dark:text-warm-400 hover:text-vermilion-500 dark:hover:text-red-400 cursor-pointer transition-colors"
                         onclick={() => removeInheritEntry(i)}
                         title="Remove"
                       >
@@ -945,38 +944,38 @@
         </h4>
 
         <div class="flex items-center gap-2 py-1.5 text-xs">
-          <span class="flex items-center text-gray-400 dark:text-warm-400"
+          <span class="flex items-center text-slate-400 dark:text-warm-400"
             ><HardDrive size={12} /></span
           >
           <span class="text-slate-500 dark:text-warm-300 min-w-[60px]"
             >Size</span
           >
-          <span class="text-gray-700 dark:text-warm-100 flex-1"
+          <span class="text-slate-700 dark:text-warm-100 flex-1"
             >{formatSize(activeTab.size)}</span
           >
         </div>
 
         <div class="flex items-center gap-2 py-1.5 text-xs">
-          <span class="flex items-center text-gray-400 dark:text-warm-400"
+          <span class="flex items-center text-slate-400 dark:text-warm-400"
             ><Clock size={12} /></span
           >
           <span class="text-slate-500 dark:text-warm-300 min-w-[60px]"
             >Modified</span
           >
-          <span class="text-gray-700 dark:text-warm-100 flex-1"
+          <span class="text-slate-700 dark:text-warm-100 flex-1"
             >{formatDate(activeTab.modifiedAt)}</span
           >
         </div>
 
         <div class="flex items-center gap-2 py-1.5 text-xs">
-          <span class="flex items-center text-gray-400 dark:text-warm-400"
+          <span class="flex items-center text-slate-400 dark:text-warm-400"
             ><FileText size={12} /></span
           >
           <span class="text-slate-500 dark:text-warm-300 min-w-[60px]"
             >Path</span
           >
           <span
-            class="text-gray-700 dark:text-warm-100 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[11px]"
+            class="text-slate-700 dark:text-warm-100 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[11px]"
             title={activeTab.path}>{activeTab.path}</span
           >
         </div>
@@ -988,7 +987,7 @@
     </div>
   {:else}
     <div
-      class="flex items-center justify-center h-full text-gray-400 dark:text-warm-400 text-[13px]"
+      class="flex items-center justify-center h-full text-slate-400 dark:text-warm-400 text-[13px]"
     >
       <p>Select a file to view settings</p>
     </div>

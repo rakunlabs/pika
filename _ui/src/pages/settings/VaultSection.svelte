@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { apiErrorMessage, apiServerMessage } from "@/lib/api/client";
   import { onMount } from "svelte";
   import {
     Lock,
@@ -59,9 +60,8 @@
         }
         refreshTrustInfo();
       }
-    } catch (e: any) {
-      addToast(
-        e?.response?.data?.message ?? "Failed to load vault status",
+    } catch (e) {
+      addToast(apiServerMessage(e, "Failed to load vault status"),
         "alert",
       );
     } finally {
@@ -95,8 +95,8 @@
     let sk: Uint8Array;
     try {
       sk = parseSecretKey(rotateSecretKey);
-    } catch (e: any) {
-      addToast(e?.message ?? "Invalid Secret Key", "alert");
+    } catch (e) {
+      addToast(apiErrorMessage(e, "Invalid Secret Key"), "alert");
       return;
     }
 
@@ -119,9 +119,8 @@
       // The blob (if any) was re-sealed by rotateMasterPassword;
       // its created_at timestamp is fresh now.
       refreshTrustInfo();
-    } catch (e: any) {
-      addToast(
-        e?.response?.data?.message ?? e?.message ?? "Rotate failed",
+    } catch (e) {
+      addToast(apiErrorMessage(e, "Rotate failed"),
         "alert",
       );
     } finally {
@@ -140,8 +139,8 @@
     let sk: Uint8Array;
     try {
       sk = parseSecretKey(kitSecretKey);
-    } catch (e: any) {
-      addToast(e?.message ?? "Invalid Secret Key", "alert");
+    } catch (e) {
+      addToast(apiErrorMessage(e, "Invalid Secret Key"), "alert");
       return;
     }
 
@@ -161,8 +160,8 @@
       regeneratedKitId = newKitID;
       account = await api.getAccount();
       addToast("Emergency Kit regenerated", "success");
-    } catch (e: any) {
-      addToast(e?.response?.data?.message ?? "Regenerate failed", "alert");
+    } catch (e) {
+      addToast(apiServerMessage(e, "Regenerate failed"), "alert");
     } finally {
       busy = false;
     }
@@ -175,8 +174,8 @@
       await api.setSessionLock(lockMinutes * 60);
       addToast("Auto-lock updated", "success", 2000);
       account = await api.getAccount();
-    } catch (e: any) {
-      addToast(e?.response?.data?.message ?? "Save failed", "alert");
+    } catch (e) {
+      addToast(apiServerMessage(e, "Save failed"), "alert");
     } finally {
       busy = false;
     }
@@ -219,8 +218,8 @@
       account = null;
       // Reset clears the trust blob; reflect that immediately.
       refreshTrustInfo();
-    } catch (e: any) {
-      addToast(e?.response?.data?.message ?? "Reset failed", "alert");
+    } catch (e) {
+      addToast(apiServerMessage(e, "Reset failed"), "alert");
     } finally {
       busy = false;
     }
@@ -353,7 +352,7 @@
             <div class="flex items-start gap-2 text-xs">
               <ShieldCheck
                 size={14}
-                class="shrink-0 mt-0.5 text-green-600 dark:text-green-500"
+                class="shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-500"
               />
               <div>
                 <div class="text-slate-700 dark:text-slate-200 font-medium">
@@ -585,7 +584,7 @@
         {#if !showReset}
           <button
             onclick={() => (showReset = true)}
-            class="px-3 py-1.5 text-xs rounded bg-red-600 text-white font-medium hover:bg-red-700 cursor-pointer"
+            class="px-3 py-1.5 text-xs rounded bg-vermilion-600 text-white font-medium hover:bg-vermilion-700 cursor-pointer"
           >
             Destroy vault...
           </button>
@@ -613,7 +612,7 @@
               <button
                 type="submit"
                 disabled={busy || resetConfirm !== "delete my vault"}
-                class="px-3 py-1.5 text-xs rounded bg-red-600 text-white font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                class="px-3 py-1.5 text-xs rounded bg-vermilion-600 text-white font-medium hover:bg-vermilion-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
               >
                 {busy ? "Working..." : "Destroy vault permanently"}
               </button>

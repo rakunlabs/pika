@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { inputClass } from "@/lib/ui";
   import type { GitLabConfig } from "@/lib/types/config";
 
   let { config = $bindable(), readonly = false }: {
@@ -6,7 +7,6 @@
     readonly?: boolean;
   } = $props();
   const id = $props.id();
-  const inputClass = "w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500";
 </script>
 
 <div class="space-y-4 mb-4">

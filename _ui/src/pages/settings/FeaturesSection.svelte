@@ -80,7 +80,7 @@
       <label class="flex items-start gap-3 cursor-pointer">
         <input
           type="checkbox"
-          class="mt-0.5 h-4 w-4 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          class="mt-0.5 h-4 w-4 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed dark:text-accent-400"
           checked={!vaultDisabledDraft}
           disabled={vaultBusy}
           onchange={(e) =>

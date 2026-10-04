@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { inputClass } from "@/lib/ui";
+  import { apiServerMessage } from "@/lib/api/client";
   import { onMount } from "svelte";
   import { configStore } from "@/lib/store/config.svelte";
   import { basePath } from "@/lib/basepath";
@@ -10,7 +12,6 @@
   let busy = $state(false);
   let error = $state("");
   const operations = ["read", "write", "delete"];
-  const inputClass = "w-full px-3 py-2 text-sm rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500";
   const dirty = $derived(JSON.stringify(endpoints) !== saved);
   const invalid = $derived(endpoints.some((ep) => !ep.endpoint.trim() || ep.scopes.some((s) => !s.path.trim() || s.operations.length === 0) || (ep.auth_disabled && ep.scopes.length === 0)));
   const duplicatePaths = $derived(new Set(endpoints.map((ep) => ep.endpoint.trim())).size !== endpoints.length);
@@ -70,8 +71,8 @@
       await configStore.saveMCPSettings({ endpoints: value });
       endpoints = value;
       saved = JSON.stringify(value);
-    } catch (err: any) {
-      error = err.response?.data?.message || "Could not save MCP settings. Try again.";
+    } catch (err) {
+      error = apiServerMessage(err, "Could not save MCP settings. Try again.");
     } finally {
       busy = false;
     }

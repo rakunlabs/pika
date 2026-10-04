@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { apiStatusMessage } from "@/lib/api/client";
   import { onMount } from "svelte";
   import axios from "axios";
   import {
@@ -24,11 +25,8 @@
       const { data } = await axios.get<ClusterStatus>("/api/v1/cluster/status");
       status = data;
       lastUpdated = new Date().toLocaleTimeString();
-    } catch (error: any) {
-      const msg =
-        error.response?.data?.message ||
-        error.response?.statusText ||
-        "Failed to read cluster status";
+    } catch (error) {
+      const msg = apiStatusMessage(error, "Failed to read cluster status");
       addToast(msg, "alert");
     } finally {
       loading = false;

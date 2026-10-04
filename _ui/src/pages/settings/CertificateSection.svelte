@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { apiServerMessage } from "@/lib/api/client";
   import { onMount } from "svelte";
   import axios from "axios";
   import { AlertTriangle, CheckCircle2, KeyRound, RefreshCw, ShieldCheck, Upload } from "lucide-svelte";
@@ -33,8 +34,8 @@
       }
       const { data } = await axios.get<TLSServerStatus>("/api/v1/tls/status");
       status = data;
-    } catch (error: any) {
-      addToast(error.response?.data?.message || "Failed to load HTTPS status", "alert");
+    } catch (error) {
+      addToast(apiServerMessage(error, "Failed to load HTTPS status"), "alert");
     } finally {
       loading = false;
     }
@@ -87,8 +88,8 @@
       });
       addToast("Self-signed certificate generated", "success");
       await refresh();
-    } catch (error: any) {
-      addToast(error.response?.data?.message || "Failed to generate certificate", "alert");
+    } catch (error) {
+      addToast(apiServerMessage(error, "Failed to generate certificate"), "alert");
     } finally {
       generating = false;
     }
@@ -109,8 +110,8 @@
       manualKey = "";
       addToast("Certificate uploaded", "success");
       await refresh();
-    } catch (error: any) {
-      addToast(error.response?.data?.message || "Failed to upload certificate", "alert");
+    } catch (error) {
+      addToast(apiServerMessage(error, "Failed to upload certificate"), "alert");
     } finally {
       uploading = false;
     }
@@ -210,7 +211,7 @@
         checked={!policy.https_disabled}
         disabled={savingPolicy || !status?.process_enabled}
         onchange={(e) => setHTTPSEnabled((e.currentTarget as HTMLInputElement).checked)}
-        class="mt-0.5 h-4 w-4 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 cursor-pointer disabled:opacity-50"
+        class="mt-0.5 h-4 w-4 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 cursor-pointer disabled:opacity-50 dark:text-accent-400"
       />
       <span>
         <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">Serve HTTPS on the main port</span>
@@ -224,7 +225,7 @@
         checked={policy.plain_http_enabled === true || !status?.process_enabled}
         disabled={savingPolicy || !status?.process_enabled}
         onchange={(e) => setPlainHTTPEnabled((e.currentTarget as HTMLInputElement).checked)}
-        class="mt-0.5 h-4 w-4 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 cursor-pointer disabled:opacity-50"
+        class="mt-0.5 h-4 w-4 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 cursor-pointer disabled:opacity-50 dark:text-accent-400"
       />
       <span>
         <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">Allow plaintext HTTP on the main port</span>

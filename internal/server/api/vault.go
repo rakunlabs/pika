@@ -190,11 +190,10 @@ func (a *api) unlockMyVaultCheck(c *ada.Context) error {
 
 	// ClientIP returns "" when RemoteAddr is unparseable — fine, the
 	// service layer treats empty IP as "no rate-limit key" and skips
-	// the limiter. We pass nil trustedProxies because XFF forging
-	// here only lets an attacker shard their attempts across many
-	// fake IPs, which defeats the limiter anyway — and the real
-	// gate is the wrapped-key derivation cost, not this check.
-	ip := authx.ClientIP(c.Request, nil)
+	// the limiter. X-Forwarded-For is only honoured from the configured
+	// trusted proxies, so behind a reverse proxy users get their own
+	// bucket instead of sharing the proxy's IP.
+	ip := authx.ClientIP(c.Request, a.trustedProxies)
 
 	if err := coord.UnlockCheck(ctx, userID, ip, &req); err != nil {
 		if errors.Is(err, service.ErrVaultNotInitialized) {

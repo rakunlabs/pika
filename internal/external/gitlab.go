@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -166,7 +165,7 @@ func (p *GitLabProvider) variableAllowlist() (*regexp.Regexp, error) {
 		if _, err := regexp.Compile(pattern); err != nil {
 			return nil, fmt.Errorf("gitlab: invalid variable allowlist regex on line %d", i+1)
 		}
-		patterns = append(patterns, `\A(?:` + pattern + `)\z`)
+		patterns = append(patterns, `\A(?:`+pattern+`)\z`)
 	}
 	return regexp.Compile(strings.Join(patterns, "|"))
 }
@@ -242,12 +241,9 @@ func (p *GitLabProvider) requestAllowing(ctx context.Context, method, key string
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, resp.Header, resp.StatusCode, fmt.Errorf("gitlab: HTTP %d (%s)", resp.StatusCode, http.StatusText(resp.StatusCode))
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20+1))
+	b, err := readBody(resp.Body)
 	if err != nil {
 		return nil, nil, resp.StatusCode, fmt.Errorf("gitlab: read response: %w", err)
-	}
-	if len(b) > 16<<20 {
-		return nil, nil, resp.StatusCode, fmt.Errorf("gitlab: response exceeds 16 MiB")
 	}
 	return b, resp.Header, resp.StatusCode, nil
 }

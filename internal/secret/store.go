@@ -64,6 +64,10 @@ func (s *Storage) Tokens() service.TokenStorage {
 	return s.backend.Tokens()
 }
 
+func (s *Storage) Audit() service.AuditStorage {
+	return s.backend.Audit()
+}
+
 func (s *Storage) Sessions() service.SessionStorage {
 	return s.backend.Sessions()
 }

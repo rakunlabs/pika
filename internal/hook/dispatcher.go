@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+// sinkQueueSize bounds how many rendered payloads may wait for a single
+// sink. Each sink drains its own queue so one slow target can't stall
+// delivery to the others.
+const sinkQueueSize = 64
+
 // Dispatcher receives events and fans them out to matching hooks and their sinks.
 type Dispatcher struct {
 	mu        sync.RWMutex
@@ -22,20 +27,78 @@ type Dispatcher struct {
 	resolver  *Resolver
 	parentCtx context.Context
 	logEvents atomic.Bool
+
+	// emitMu guards ch against Emit racing with Stop's close.
+	emitMu   sync.RWMutex
+	stopped  bool
+	started  atomic.Bool
+	stopOnce sync.Once
 }
 
 // hookInstance pairs a hook definition with compiled templates and live sinks.
 type hookInstance struct {
 	hook          Hook
-	sinks         []sinkEntry
+	sinks         []*sinkEntry
 	bodyTemplates []*template.Template // per-target, nil means use default JSON
 	keyTemplates  []*template.Template // per-target (Kafka only), nil means default
 }
 
-// sinkEntry pairs a sink with its target index for logging.
+// sinkEntry pairs a sink with its delivery queue and worker.
 type sinkEntry struct {
 	sink       Sink
 	targetType string
+	hookName   string
+	queue      chan sinkJob
+	done       chan struct{}
+}
+
+// sinkJob is one rendered payload waiting for delivery.
+type sinkJob struct {
+	ctx     context.Context
+	payload []byte
+	key     string
+	event   Event
+}
+
+func newSinkEntry(sink Sink, targetType, hookName string) *sinkEntry {
+	se := &sinkEntry{
+		sink:       sink,
+		targetType: targetType,
+		hookName:   hookName,
+		queue:      make(chan sinkJob, sinkQueueSize),
+		done:       make(chan struct{}),
+	}
+	go se.run()
+	return se
+}
+
+// run delivers queued payloads until the queue is closed, then closes
+// the sink.
+func (se *sinkEntry) run() {
+	defer close(se.done)
+
+	for job := range se.queue {
+		if err := se.sink.Send(job.ctx, job.payload, job.key); err != nil {
+			slog.Error("failed to send hook event",
+				"hook", se.hookName,
+				"target_type", se.targetType,
+				"event_type", job.event.Type,
+				"error", err,
+			)
+			continue
+		}
+		slog.Debug("hook event sent",
+			"hook", se.hookName,
+			"target_type", se.targetType,
+			"event_type", job.event.Type,
+			"mount", job.event.Mount,
+			"path", job.event.Path,
+		)
+	}
+
+	if err := se.sink.Close(); err != nil {
+		slog.Warn("error closing hook sink", "hook", se.hookName, "target_type", se.targetType, "error", err)
+	}
 }
 
 // NewDispatcher creates a dispatcher with the given buffer size.
@@ -73,13 +136,52 @@ func (d *Dispatcher) SetResolver(r *Resolver) {
 // Start begins the background event processing loop.
 func (d *Dispatcher) Start(ctx context.Context) {
 	d.parentCtx = ctx
+	d.started.Store(true)
 	go d.loop(ctx)
 }
 
-// Stop signals the dispatcher to shut down and waits for completion.
+// Stop shuts the dispatcher down: no new events are accepted, queued
+// events are delivered (or fail fast once ctx is cancelled), and every
+// sink plus the Kafka pool is closed. Safe to call more than once and
+// safe to race with Emit.
 func (d *Dispatcher) Stop() {
-	close(d.ch)
-	<-d.done
+	d.stopOnce.Do(func() {
+		d.emitMu.Lock()
+		d.stopped = true
+		close(d.ch)
+		d.emitMu.Unlock()
+
+		if d.started.Load() {
+			<-d.done
+		}
+
+		d.mu.Lock()
+		old := d.hooks
+		d.hooks = nil
+		d.mu.Unlock()
+
+		closeSinks(old, true)
+		d.pool.closeAll()
+	})
+}
+
+// closeSinks closes the queues of every sink in hooks. Workers drain what
+// is already queued and then close their sink. When wait is true it blocks
+// until every worker has finished.
+func closeSinks(hooks []hookInstance, wait bool) {
+	for _, hi := range hooks {
+		for _, se := range hi.sinks {
+			close(se.queue)
+		}
+	}
+	if !wait {
+		return
+	}
+	for _, hi := range hooks {
+		for _, se := range hi.sinks {
+			<-se.done
+		}
+	}
 }
 
 // Emit sends an event to the dispatcher for async processing.
@@ -91,6 +193,13 @@ func (d *Dispatcher) Emit(event Event) {
 
 	if d.logEvents.Load() {
 		logEvent(event)
+	}
+
+	d.emitMu.RLock()
+	defer d.emitMu.RUnlock()
+
+	if d.stopped {
+		return
 	}
 
 	select {
@@ -149,23 +258,17 @@ func logEvent(event Event) {
 	slog.LogAttrs(context.Background(), slog.LevelInfo, "pika event emitted", attrs...)
 }
 
-// UpdateHooks replaces all hooks. It closes old sinks and builds new ones.
-// Kafka targets that share the same brokers and security config will reuse
-// a single underlying client connection from the pool.
+// UpdateHooks replaces all hooks. It builds new sinks, swaps them in and
+// retires the old ones; old sinks finish delivering what was already
+// queued before closing. Kafka targets that share the same brokers and
+// security config reuse a single underlying client from the pool.
 func (d *Dispatcher) UpdateHooks(hooks []Hook) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Close old sinks (this releases pool references)
-	for _, hi := range d.hooks {
-		for _, se := range hi.sinks {
-			if err := se.sink.Close(); err != nil {
-				slog.Warn("error closing hook sink", "error", err)
-			}
-		}
-	}
-
+	old := d.hooks
 	d.hooks = nil
+	defer closeSinks(old, false)
 
 	ctx := d.parentCtx
 	if ctx == nil {
@@ -190,10 +293,7 @@ func (d *Dispatcher) UpdateHooks(hooks []Hook) {
 				continue
 			}
 
-			hi.sinks = append(hi.sinks, sinkEntry{
-				sink:       sink,
-				targetType: t.Type,
-			})
+			hi.sinks = append(hi.sinks, newSinkEntry(sink, t.Type, h.Name))
 
 			// Compile body template. The "log" target renders its own
 			// Message and Fields directly from the Event, so it ignores
@@ -253,22 +353,11 @@ func (d *Dispatcher) loop(ctx context.Context) {
 	for event := range d.ch {
 		d.dispatch(ctx, event)
 	}
-
-	// Cleanup: close all sinks and pool
-	d.mu.Lock()
-	for _, hi := range d.hooks {
-		for _, se := range hi.sinks {
-			if err := se.sink.Close(); err != nil {
-				slog.Warn("error closing hook sink on shutdown", "error", err)
-			}
-		}
-	}
-	d.hooks = nil
-	d.pool.closeAll()
-	d.mu.Unlock()
 }
 
-// dispatch sends an event to all matching hooks.
+// dispatch renders the event for every matching sink and queues it for
+// that sink's worker. It never blocks on delivery: a full sink queue
+// drops the event for that sink only.
 func (d *Dispatcher) dispatch(ctx context.Context, event Event) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -298,15 +387,10 @@ func (d *Dispatcher) dispatch(ctx context.Context, event Event) {
 				continue
 			}
 
-			if err := se.sink.Send(sinkCtx, payload, key); err != nil {
-				slog.Error("failed to send hook event",
-					"hook", hi.hook.Name,
-					"target_type", se.targetType,
-					"event_type", event.Type,
-					"error", err,
-				)
-			} else {
-				slog.Debug("hook event sent",
+			select {
+			case se.queue <- sinkJob{ctx: sinkCtx, payload: payload, key: key, event: eventCopy}:
+			default:
+				slog.Warn("hook sink queue full, dropping event",
 					"hook", hi.hook.Name,
 					"target_type", se.targetType,
 					"event_type", event.Type,

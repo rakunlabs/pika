@@ -40,7 +40,7 @@ func TestMCPWithApplicationRoutes(t *testing.T) {
 			mData, m, mAuth := app.Group(basePath), app.Group(basePath), app.Group(basePath)
 			mgr.Mount(app.Group(""))
 			m.Use(mgr.Require(), mgr.CapMiddleware())
-			if err := api.Handle(m, mData, mAuth, svc, api.Info{}, nil, mgr, nil, nil, nil, nil); err != nil {
+			if err := api.Handle(api.Muxes{Protected: m, Data: mData, Public: mAuth}, api.Deps{Svc: svc, Mgr: mgr}); err != nil {
 				t.Fatal(err)
 			}
 			if err := folderHandler(mAuth); err != nil {

@@ -101,6 +101,7 @@ type TOTPService struct {
 	svc    *Service
 	cfg    totp.Config
 	issuer string
+	worker *worker
 
 	// replay guards against a single TOTP code being used twice within
 	// its valid window. Keyed by "<userID>:<code>"; the value is the
@@ -142,15 +143,29 @@ func NewTOTPService(svc *Service, issuer string) *TOTPService {
 		replay:     make(map[string]time.Time),
 		pending:    make(map[string]*totpPending),
 		pendingTTL: 5 * time.Minute,
+		worker:     newWorker(),
 	}
-	go ts.gcLoop()
+	ts.worker.every(60*time.Second, ts.gc)
 	return ts
+}
+
+// Close stops the background sweep. Safe on a nil receiver.
+func (ts *TOTPService) Close() {
+	if ts != nil {
+		ts.worker.stop()
+	}
 }
 
 // SetTOTPService attaches a TOTPService to a parent Service. Mirrors
 // the SetPasskeyService pattern; nil disables the feature.
 func (s *Service) SetTOTPService(t *TOTPService) {
+	s.coordMu.Lock()
+	prev := s.totp
 	s.totp = t
+	s.coordMu.Unlock()
+	if prev != t {
+		prev.Close()
+	}
 }
 
 // TOTPCoord returns the bound TOTPService, or nil when TOTP is
@@ -577,26 +592,22 @@ func (ts *TOTPService) IsEnabledForUser(ctx context.Context, userID string) (boo
 // gcLoop evicts stale entries from the replay and pending maps. Both
 // have a natural TTL, so the GC is opportunistic — late eviction just
 // means slightly more memory until the next pass.
-func (ts *TOTPService) gcLoop() {
-	t := time.NewTicker(60 * time.Second)
-	defer t.Stop()
-	for range t.C {
-		now := time.Now()
-		ts.replayMu.Lock()
-		for k, exp := range ts.replay {
-			if !exp.After(now) {
-				delete(ts.replay, k)
-			}
+func (ts *TOTPService) gc() {
+	now := time.Now()
+	ts.replayMu.Lock()
+	for k, exp := range ts.replay {
+		if !exp.After(now) {
+			delete(ts.replay, k)
 		}
-		ts.replayMu.Unlock()
-		ts.pendingMu.Lock()
-		for k, p := range ts.pending {
-			if !p.expires.After(now) {
-				delete(ts.pending, k)
-			}
-		}
-		ts.pendingMu.Unlock()
 	}
+	ts.replayMu.Unlock()
+	ts.pendingMu.Lock()
+	for k, p := range ts.pending {
+		if !p.expires.After(now) {
+			delete(ts.pending, k)
+		}
+	}
+	ts.pendingMu.Unlock()
 }
 
 // ── helpers ────────────────────────────────────────────────────────

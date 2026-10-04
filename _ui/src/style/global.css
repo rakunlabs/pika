@@ -114,6 +114,18 @@
   --color-warm-800: #222120;
   --color-warm-900: #1a1a1a;
   --color-warm-950: #0e0e0e;
+
+  /* Code-editor chrome — a fixed VS Code "Dark+" look used by the config
+     editor, hex viewer and external value editor regardless of app
+     theme (the CodeMirror themes are dark-first). Documented exception
+     in DESIGN_SYSTEM.md §1; use `bg-editor-bg`, `border-editor-border`
+     etc. rather than hex literals. */
+  --color-editor-bg: #1e1e1e;
+  --color-editor-panel: #252526;
+  --color-editor-border: #3c3c3c;
+  --color-editor-hover: #333333;
+  --color-editor-row-hover: #2a2d2e;
+  --color-editor-fg: #d4d4d4;
 }
 
 html,

@@ -92,13 +92,13 @@
         tabindex="-1"
     >
         <div
-            class="bg-white dark:bg-warm-900 rounded-lg shadow-xl w-full max-w-[480px] overflow-hidden"
+            class="bg-white dark:bg-warm-800 rounded-lg shadow-xl w-full max-w-[480px] overflow-hidden"
         >
             <div
                 class="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900"
             >
                 <div
-                    class="flex items-center gap-2.5 text-gray-700 dark:text-slate-200"
+                    class="flex items-center gap-2.5 text-slate-700 dark:text-slate-200"
                 >
                     {#if type === "folder"}
                         <Folder size={18} />
@@ -126,7 +126,7 @@
                     <div class="mb-3">
                         <label
                             for="path-input"
-                            class="block text-[13px] font-medium text-gray-700 dark:text-slate-200 mb-1.5"
+                            class="block text-[13px] font-medium text-slate-700 dark:text-slate-200 mb-1.5"
                         >
                             {type === "folder" ? "Folder Path" : "Config Path"}
                         </label>
@@ -138,13 +138,15 @@
                             placeholder={type === "folder"
                                 ? "path/to/folder"
                                 : "path/to/config-name"}
-                            class="w-full px-3 py-2.5 text-sm font-mono border border-slate-200 dark:border-warm-700 rounded transition-all
- focus:outline-none focus:border-brand-500 focus:ring-[3px] focus:ring-brand-500/10
- {error ? 'border-red-600' : ''}"
+                            class="w-full px-3 py-2.5 text-sm font-mono border rounded transition-all bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500
+ focus:outline-none focus:ring-2
+ {error
+                                ? 'border-red-300 dark:border-red-700 focus:ring-red-500'
+                                : 'border-slate-300 dark:border-warm-600 focus:ring-accent-500'}"
                             autofocus
                         />
                         {#if error}
-                            <span class="block mt-1.5 text-xs text-red-600"
+                            <span class="block mt-1.5 text-xs text-red-600 dark:text-red-300"
                                 >{error}</span
                             >
                         {/if}

@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -67,7 +66,7 @@ func (c *ConsulClient) ReadSecret(ctx context.Context, key string) (map[string]a
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("consul: reading response: %w", err)
 	}
@@ -123,7 +122,7 @@ func (c *ConsulClient) ListSecrets(ctx context.Context, prefix string) ([]string
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("consul: reading list response: %w", err)
 	}
@@ -173,7 +172,7 @@ func (c *ConsulClient) WriteValue(ctx context.Context, key string, body []byte) 
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody := readErrorBody(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("consul: write returned HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -200,7 +199,7 @@ func (c *ConsulClient) DeleteKey(ctx context.Context, key string) error {
 		return fmt.Errorf("consul: executing delete request: %w", err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody := readErrorBody(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("consul: delete returned HTTP %d: %s", resp.StatusCode, string(respBody))
 	}

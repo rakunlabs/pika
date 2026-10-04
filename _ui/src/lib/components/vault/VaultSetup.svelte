@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { apiErrorMessage } from "@/lib/api/client";
   import { Lock, AlertTriangle, KeyRound, Loader2 } from "lucide-svelte";
   import { vaultStore } from "@/lib/vault/store.svelte";
   import { estimateStrength } from "@/lib/vault/generator";
@@ -34,7 +35,7 @@
   const passwordValid = $derived(password.length >= 8 && !mismatch);
 
   const strengthColors: Record<string, string> = {
-    terrible: "bg-red-500",
+    terrible: "bg-vermilion-500",
     weak: "bg-orange-500",
     fair: "bg-yellow-500",
     strong: "bg-emerald-500",
@@ -57,8 +58,8 @@
       // before clicking Continue.
       password = "";
       confirm = "";
-    } catch (e: any) {
-      err = e?.response?.data?.message ?? e?.message ?? "Setup failed";
+    } catch (e) {
+      err = apiErrorMessage(e, "Setup failed");
       addToast(err, "alert");
     } finally {
       busy = false;
@@ -78,7 +79,7 @@
         class="bg-white dark:bg-warm-800 rounded-lg border border-slate-200 dark:border-warm-700 p-6 shadow-sm dark:shadow-none"
       >
         <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
-          <Lock size={18} class="text-accent-600" />
+          <Lock size={18} class="text-accent-600 dark:text-accent-400" />
           Your Emergency Kit
         </h2>
         <EmergencyKit
@@ -93,7 +94,7 @@
         class="bg-white dark:bg-warm-800 rounded-lg border border-slate-200 dark:border-warm-700 p-6 shadow-sm dark:shadow-none"
       >
         <h2 class="text-lg font-semibold mb-2 flex items-center gap-2">
-          <Lock size={18} class="text-accent-600" />
+          <Lock size={18} class="text-accent-600 dark:text-accent-400" />
           Create your personal vault
         </h2>
         <p class="text-sm text-slate-600 dark:text-slate-300 mb-6">

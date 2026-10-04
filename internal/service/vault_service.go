@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/rakunlabs/pika/internal/hook"
@@ -32,28 +31,15 @@ import (
 type VaultService struct {
 	svc *Service
 
-	// unlockAttempts gates the secret-key challenge endpoint. The
+	// unlockLimiter gates the secret-key challenge endpoint. The
 	// challenge isn't strictly needed for security — the master
 	// password is the actual gate — but it lets an honest user know
 	// "you typed the wrong Secret Key from your emergency kit"
 	// without burning an Argon2id derivation. Without a rate limit
 	// an attacker could enumerate by trying random keys.
-	attemptsMu sync.Mutex
-	attempts   map[string]*vaultUnlockAttempts
+	unlockLimiter *slidingWindowLimiter
 
-	// attemptsMaxPerMinute is the threshold per (user_id, ip) tuple
-	// after which the server returns 429 regardless of correctness.
-	attemptsMaxPerMinute int
-	// attemptsWindow is the rolling window used by the limiter.
-	attemptsWindow time.Duration
-}
-
-// vaultUnlockAttempts is a single bucket in the rate limiter map. The
-// timestamps slice is bounded to attemptsMaxPerMinute entries (older
-// ones are evicted on each check), so memory stays bounded even if a
-// single user is being targeted.
-type vaultUnlockAttempts struct {
-	timestamps []time.Time
+	worker *worker
 }
 
 // NewVaultService wires the vault coordinator onto a parent Service.
@@ -62,19 +48,31 @@ type vaultUnlockAttempts struct {
 // vault_enabled=false (set by the API layer when this is nil).
 func NewVaultService(svc *Service) *VaultService {
 	vs := &VaultService{
-		svc:                  svc,
-		attempts:             make(map[string]*vaultUnlockAttempts),
-		attemptsMaxPerMinute: 10,
-		attemptsWindow:       time.Minute,
+		svc:           svc,
+		unlockLimiter: newSlidingWindowLimiter(10, time.Minute),
+		worker:        newWorker(),
 	}
-	go vs.gcLoop()
+	vs.worker.every(5*time.Minute, vs.unlockLimiter.gc)
 	return vs
+}
+
+// Close stops the background sweep. Safe on a nil receiver.
+func (vs *VaultService) Close() {
+	if vs != nil {
+		vs.worker.stop()
+	}
 }
 
 // SetVaultService attaches a VaultService to a parent Service.
 // Mirrors SetPasskeyService / SetTOTPService.
 func (s *Service) SetVaultService(v *VaultService) {
+	s.coordMu.Lock()
+	prev := s.vault
 	s.vault = v
+	s.coordMu.Unlock()
+	if prev != v {
+		prev.Close()
+	}
 }
 
 // VaultCoord returns the bound VaultService, or nil when the
@@ -86,6 +84,8 @@ func (s *Service) SetVaultService(v *VaultService) {
 // toggle goes through VaultEnabled() instead — handlers that
 // want to honor BOTH gates should use VaultCoordFor(ctx).
 func (s *Service) VaultCoord() *VaultService {
+	s.coordMu.RLock()
+	defer s.coordMu.RUnlock()
 	return s.vault
 }
 
@@ -107,7 +107,7 @@ func (s *Service) VaultCoord() *VaultService {
 // anyway. We deliberately don't cache the bool here because the
 // toggle should take effect immediately when the admin flips it.
 func (s *Service) VaultEnabled(ctx context.Context) bool {
-	if s.vault == nil {
+	if s.VaultCoord() == nil {
 		return false
 	}
 	settings, err := s.Settings(ctx)
@@ -129,7 +129,7 @@ func (s *Service) VaultCoordFor(ctx context.Context) *VaultService {
 	if !s.VaultEnabled(ctx) {
 		return nil
 	}
-	return s.vault
+	return s.VaultCoord()
 }
 
 // VaultSetupRequest is the payload posted by the SPA at Setup time.
@@ -392,7 +392,7 @@ func (vs *VaultService) UnlockCheck(ctx context.Context, userID, ip string, req 
 		return fmt.Errorf("vault: user id and secret_key_hash required: %w", ErrBadRequest)
 	}
 
-	if ip != "" && !vs.recordAttempt(userID, ip) {
+	if ip != "" && !vs.unlockLimiter.allow(userID+"@"+ip) {
 		// Over the threshold — uniform "unauthorized" so the
 		// attacker doesn't learn whether the underlying key was
 		// right. The hook event lets operators alert on this.
@@ -917,66 +917,6 @@ func (vs *VaultService) ListItemVersions(ctx context.Context, userID, itemID str
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────
-
-// recordAttempt registers an unlock-check attempt for (userID, ip)
-// and returns true if the request is within the rate limit, false
-// if it's over. Bucket is cleaned on every call so the in-memory
-// footprint stays bounded.
-func (vs *VaultService) recordAttempt(userID, ip string) bool {
-	key := userID + "@" + ip
-	now := time.Now()
-	cutoff := now.Add(-vs.attemptsWindow)
-
-	vs.attemptsMu.Lock()
-	defer vs.attemptsMu.Unlock()
-
-	b, ok := vs.attempts[key]
-	if !ok {
-		b = &vaultUnlockAttempts{}
-		vs.attempts[key] = b
-	}
-
-	// Drop timestamps older than the window.
-	kept := b.timestamps[:0]
-	for _, t := range b.timestamps {
-		if t.After(cutoff) {
-			kept = append(kept, t)
-		}
-	}
-	b.timestamps = kept
-
-	if len(b.timestamps) >= vs.attemptsMaxPerMinute {
-		return false
-	}
-	b.timestamps = append(b.timestamps, now)
-	return true
-}
-
-// gcLoop evicts empty buckets from the attempts map. Bucket entries
-// are cleaned per-call but empty buckets linger; this loop drops
-// them on a slow timer.
-func (vs *VaultService) gcLoop() {
-	t := time.NewTicker(5 * time.Minute)
-	defer t.Stop()
-	for range t.C {
-		now := time.Now()
-		cutoff := now.Add(-vs.attemptsWindow)
-		vs.attemptsMu.Lock()
-		for k, b := range vs.attempts {
-			alive := false
-			for _, ts := range b.timestamps {
-				if ts.After(cutoff) {
-					alive = true
-					break
-				}
-			}
-			if !alive {
-				delete(vs.attempts, k)
-			}
-		}
-		vs.attemptsMu.Unlock()
-	}
-}
 
 // validateKDF rejects obviously-broken Argon2id parameters. The
 // frontend is expected to send sane values; this is defense-in-depth

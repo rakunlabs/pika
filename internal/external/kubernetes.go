@@ -310,7 +310,7 @@ func (kc *KubeClient) doRequest(ctx context.Context, method, path string, reqBod
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}

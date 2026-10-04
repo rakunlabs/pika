@@ -6,6 +6,7 @@
     estimateStrength,
   } from "@/lib/vault/generator";
   import { addToast } from "@/lib/store/toast.svelte";
+  import { copySecret } from "@/lib/vault/clipboard";
 
   interface Props {
     onApply?: (value: string) => void;
@@ -70,7 +71,7 @@
 
   const strength = $derived(estimateStrength(value));
   const strengthColors: Record<string, string> = {
-    terrible: "bg-red-500",
+    terrible: "bg-vermilion-500",
     weak: "bg-orange-500",
     fair: "bg-yellow-500",
     strong: "bg-emerald-500",
@@ -80,7 +81,7 @@
   async function copyToClipboard() {
     if (!value) return;
     try {
-      await navigator.clipboard.writeText(value);
+      await copySecret(value);
       copied = true;
       setTimeout(() => (copied = false), 1500);
     } catch {
@@ -129,7 +130,7 @@
       class="p-2 rounded border border-slate-300 dark:border-warm-700 hover:bg-slate-100 dark:hover:bg-warm-800 cursor-pointer"
       title="Copy"
     >
-      {#if copied}<Check size={16} class="text-emerald-600" />{:else}<Copy
+      {#if copied}<Check size={16} class="text-emerald-600 dark:text-emerald-300" />{:else}<Copy
           size={16}
         />{/if}
     </button>

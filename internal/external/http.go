@@ -3,11 +3,12 @@ package external
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
 	"github.com/rakunlabs/ok"
+
+	"github.com/rakunlabs/pika/internal/netguard"
 )
 
 // HTTPProvider serves config fetched from a plain HTTP endpoint.
@@ -47,7 +48,7 @@ func (p *HTTPProvider) Validate() error {
 }
 
 func (p *HTTPProvider) Fetch(ctx context.Context, path string) ([]byte, error) {
-	client, err := p.Config.New()
+	client, err := p.Config.New(ok.WithBaseTransport(guardedTransport()))
 	if err != nil {
 		return nil, fmt.Errorf("creating HTTP client: %w", err)
 	}
@@ -68,13 +69,22 @@ func (p *HTTPProvider) Fetch(ctx context.Context, path string) ([]byte, error) {
 			return fmt.Errorf("HTTP request returned status %d", resp.StatusCode)
 		}
 		var readErr error
-		body, readErr = io.ReadAll(resp.Body)
+		body, readErr = readBody(resp.Body)
 		return readErr
 	}); err != nil {
 		return nil, fmt.Errorf("fetching HTTP config: %w", err)
 	}
 
 	return body, nil
+}
+
+// guardedTransport mirrors ok's default transport but dials through
+// netguard, so operator-supplied URLs can't reach blocked addresses
+// (e.g. cloud metadata).
+func guardedTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.DialContext = netguard.Dialer().DialContext
+	return t
 }
 
 // List has no meaning for arbitrary HTTP endpoints — callers should

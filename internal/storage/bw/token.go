@@ -2,6 +2,7 @@ package bw
 
 import (
 	"context"
+	"time"
 
 	"github.com/rakunlabs/bw"
 	"github.com/rakunlabs/pika/internal/service"
@@ -56,8 +57,15 @@ func (s *tokenStorage) FindByHash(ctx context.Context, hashedKey string) (*servi
 	return rows[0].toService(), nil
 }
 
+// tokenTimeFields are the time columns List can sort on.
+var tokenTimeFields = map[string]func(*tokenRow) time.Time{
+	"created_at":   func(r *tokenRow) time.Time { return r.CreatedAt },
+	"expires_at":   func(r *tokenRow) time.Time { return derefTime(r.ExpiresAt) },
+	"last_used_at": func(r *tokenRow) time.Time { return derefTime(r.LastUsedAt) },
+}
+
 func (s *tokenStorage) List(ctx context.Context, q *query.Query) ([]service.Token, int64, error) {
-	rows, err := bucketFind(ctx, s.scope, s.bucket, q)
+	rows, err := bucketFindSorted(ctx, s.scope, s.bucket, q, tokenTimeFields)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -849,6 +849,8 @@ export interface TokenInfo {
   created_by: string;
   expires_at?: string;
   active: boolean;
+  /** Updated in batches server-side, so it can lag by about a minute. */
+  last_used_at?: string;
 }
 
 // Create token request
@@ -869,4 +871,23 @@ export interface PatchTokenRequest {
   scopes?: TokenScope[];
   active?: boolean;
   expires_at?: string;
+}
+
+// Audit log entry (GET /api/v1/audit).
+export interface AuditEntry {
+  id: string;
+  time: string;
+  action: string;
+  actor?: string;
+  actor_type?: string;
+  target?: string;
+  status?: number;
+  ip?: string;
+  request_id?: string;
+  detail?: string;
+}
+
+export interface AuditPage {
+  entries: AuditEntry[];
+  total: number;
 }

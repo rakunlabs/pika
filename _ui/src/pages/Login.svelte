@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { apiErrorMessage, apiServerMessage, apiErrorStatus, apiErrorCode } from "@/lib/api/client";
     import { appStore } from "@/lib/store/store.svelte";
     import {
         Blocks,
@@ -169,10 +170,8 @@
             if (passkeyStrategy) {
                 void tryConditionalAuth(passkeyStrategy);
             }
-        } catch (err: any) {
-            infoError =
-                err?.response?.data?.message ||
-                "Failed to load login configuration";
+        } catch (err) {
+            infoError = apiServerMessage(err, "Failed to load login configuration");
         } finally {
             infoLoading = false;
         }
@@ -240,8 +239,8 @@
             // still contains whatever deep-link the user was trying to reach
             // (e.g. #/settings). Forcing location.href = '/' would wipe that
             // hash and dump the user at the root.
-        } catch (err: any) {
-            error = err?.response?.data?.message || "Login failed";
+        } catch (err) {
+            error = apiServerMessage(err, "Login failed");
         } finally {
             loading = false;
         }
@@ -268,16 +267,16 @@
             // On success App.svelte swaps us out of the login view.
             mfaChallenge = null;
             mfaCode = "";
-        } catch (err: any) {
-            error = err?.response?.data?.message || "Verification failed";
+        } catch (err) {
+            error = apiServerMessage(err, "Verification failed");
             // Don't clear mfaChallenge — the server only marks the session as
             // consumed after a successful verification, so the user can retry
             // with a fresh code from their authenticator. But the server-side
             // ConsumePending actually drops the entry on first attempt; surface
             // the message and let them retry from password.
             if (
-                err?.response?.status === 401 &&
-                err?.response?.data?.error === "invalid_session"
+                apiErrorStatus(err) === 401 &&
+                apiErrorCode(err) === "invalid_session"
             ) {
                 // Session was already consumed or expired — start over.
                 mfaChallenge = null;
@@ -347,9 +346,9 @@
             // On auto-login success: App.svelte's reactive gate swaps us out
             // for the router, which reads location.hash — so any deep-link the
             // user was trying to reach before signup is preserved.
-        } catch (err: any) {
-            const code = err?.response?.data?.error;
-            const msg = err?.response?.data?.message;
+        } catch (err) {
+            const code = apiErrorCode(err);
+            const msg = apiServerMessage(err, "");
             if (code === "password_mismatch") {
                 error = "Passwords do not match";
             } else if (code === "user_exists") {
@@ -550,10 +549,7 @@
             if (code === "NotAllowedError") {
                 // User cancelled. No toast — silent is friendlier here.
             } else {
-                error =
-                    err?.response?.data?.message ??
-                    err?.message ??
-                    "Passkey sign-in failed";
+                error = apiErrorMessage(err, "Passkey sign-in failed");
             }
         } finally {
             loading = false;

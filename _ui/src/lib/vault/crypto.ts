@@ -586,7 +586,13 @@ export async function buildSetup(
   const secretKey = await generateSecretKey();
   const accountKey = await deriveAccountKey(masterPassword, secretKey.bytes, kdf);
   const vaultKey = await generateVaultKey();
-  const wrapped = await wrapVaultKey(vaultKey, accountKey);
+  let wrapped: Uint8Array;
+  try {
+    wrapped = await wrapVaultKey(vaultKey, accountKey);
+  } finally {
+    // The account key is only needed to wrap; never let it outlive setup.
+    zeroize(accountKey);
+  }
   const skHash = await hashSecretKey(secretKey.bytes);
 
   return {
@@ -622,7 +628,11 @@ export async function unlockVault(
   await ready();
   const accountKey = await deriveAccountKey(masterPassword, secretKey, account.kdf);
   const wrapped = fromBase64(account.wrapped_vault_key);
-  return unwrapVaultKey(wrapped, accountKey);
+  try {
+    return await unwrapVaultKey(wrapped, accountKey);
+  } finally {
+    zeroize(accountKey);
+  }
 }
 
 // ─── Rotation helper ─────────────────────────────────────────────
@@ -652,7 +662,12 @@ export async function buildRotatePayload(
   const salt = sodium.randombytes_buf(sodium.crypto_pwhash_SALTBYTES);
   const kdf: VaultKDFParams = { ...params, salt: toBase64(salt) };
   const accountKey = await deriveAccountKey(newMasterPassword, secretKey, kdf);
-  const wrapped = await wrapVaultKey(vaultKey, accountKey);
+  let wrapped: Uint8Array;
+  try {
+    wrapped = await wrapVaultKey(vaultKey, accountKey);
+  } finally {
+    zeroize(accountKey);
+  }
   const skHash = await hashSecretKey(secretKey);
 
   return {

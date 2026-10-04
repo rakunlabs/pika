@@ -14,6 +14,7 @@
         Network,
         Plug,
         Lock,
+        ScrollText,
     } from "lucide-svelte";
     import { appStore } from "@/lib/store/store.svelte";
     import { link, replace, router } from "svelte-spa-router";
@@ -34,6 +35,7 @@
     import CertificateSection from "@/pages/settings/CertificateSection.svelte";
     import PublicEndpointsSection from "@/pages/settings/PublicEndpointsSection.svelte";
     import BackupSection from "@/pages/settings/BackupSection.svelte";
+    import AuditSection from "@/pages/settings/AuditSection.svelte";
     import AboutSection from "@/pages/settings/AboutSection.svelte";
 
     type Section =
@@ -51,6 +53,7 @@
         | "certificates"
         | "public_endpoints"
         | "backup"
+        | "audit"
         | "about";
 
     // Section → required capability. `null` means no capability requirement.
@@ -71,6 +74,7 @@
         certificates: "settings.manage",
         public_endpoints: "settings.manage",
         backup: "settings.manage",
+        audit: "settings.manage",
         about: null,
     };
 
@@ -89,6 +93,7 @@
         { key: "certificates", label: "Certificates", icon: Lock },
         { key: "public_endpoints", label: "Endpoints", icon: Plug },
         { key: "backup", label: "Backup", icon: HardDrive },
+        { key: "audit", label: "Audit Log", icon: ScrollText },
         { key: "about", label: "About", icon: Info },
     ];
 
@@ -191,6 +196,8 @@
                 <PublicEndpointsSection />
             {:else if activeSection === "backup"}
                 <BackupSection />
+            {:else if activeSection === "audit"}
+                <AuditSection />
             {:else if activeSection === "about"}
                 <AboutSection />
             {/if}

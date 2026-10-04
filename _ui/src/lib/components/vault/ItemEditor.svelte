@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { confirmDialog } from "@/lib/store/confirm.svelte";
+  import { apiErrorMessage, apiServerMessage, apiErrorStatus } from "@/lib/api/client";
   import {
     Star,
     Archive,
@@ -47,6 +49,7 @@
   import { backdropClose } from "@/lib/actions/backdropClose";
   import TOTPDisplay from "./TOTPDisplay.svelte";
   import PasswordGenerator from "./PasswordGenerator.svelte";
+  import { copySecret } from "@/lib/vault/clipboard";
 
   interface Props {
     item: VaultItem;
@@ -261,7 +264,7 @@
   async function copyValue(id: string, value: string) {
     if (!value) return;
     try {
-      await navigator.clipboard.writeText(value);
+      await copySecret(value);
       copiedField = id;
       setTimeout(() => {
         copiedField = null;
@@ -326,16 +329,15 @@
       // reflects the freshly created snapshot.
       versionsCache = null;
       mode = "view";
-    } catch (e: any) {
-      const status = e?.response?.status;
+    } catch (e) {
+      const status = apiErrorStatus(e);
       if (status === 409) {
         addToast(
           "This item was changed elsewhere. Reload to see the latest version.",
           "alert",
         );
       } else {
-        addToast(
-          e?.response?.data?.message ?? e?.message ?? "Save failed",
+        addToast(apiErrorMessage(e, "Save failed"),
           "alert",
         );
       }
@@ -361,22 +363,29 @@
       await vaultStore.softDeleteItem(item.id);
       addToast("Moved to trash", "success", 1500);
       onClose();
-    } catch (e: any) {
-      addToast(e?.response?.data?.message ?? "Delete failed", "alert");
+    } catch (e) {
+      addToast(apiServerMessage(e, "Delete failed"), "alert");
     } finally {
       busy = false;
     }
   }
   async function purge() {
-    if (!confirm("Permanently delete this item? This cannot be undone."))
+    if (
+      !(await confirmDialog({
+        title: "Permanently delete this item?",
+        message: "This cannot be undone.",
+        confirmLabel: "Delete permanently",
+        danger: true,
+      }))
+    )
       return;
     busy = true;
     try {
       await vaultStore.purgeItem(item.id);
       addToast("Deleted permanently", "success", 1500);
       onClose();
-    } catch (e: any) {
-      addToast(e?.response?.data?.message ?? "Delete failed", "alert");
+    } catch (e) {
+      addToast(apiServerMessage(e, "Delete failed"), "alert");
     } finally {
       busy = false;
     }
@@ -387,8 +396,8 @@
       await vaultStore.restoreItem(item.id);
       addToast("Restored", "success", 1500);
       onClose();
-    } catch (e: any) {
-      addToast(e?.response?.data?.message ?? "Restore failed", "alert");
+    } catch (e) {
+      addToast(apiServerMessage(e, "Restore failed"), "alert");
     } finally {
       busy = false;
     }
@@ -403,8 +412,8 @@
       );
       addToast(item.archived ? "Unarchived" : "Archived", "success", 1500);
       onClose();
-    } catch (e: any) {
-      addToast(e?.response?.data?.message ?? "Update failed", "alert");
+    } catch (e) {
+      addToast(apiServerMessage(e, "Update failed"), "alert");
     } finally {
       busy = false;
     }
@@ -421,9 +430,9 @@
         { expected_version: item.version },
         { favorite },
       );
-    } catch (e: any) {
+    } catch (e) {
       favorite = item.favorite ?? false;
-      addToast(e?.response?.data?.message ?? "Failed to update", "alert");
+      addToast(apiServerMessage(e, "Failed to update"), "alert");
     }
   }
 
@@ -488,7 +497,7 @@
   async function copyHistoryValue(key: string, value: string): Promise<void> {
     if (!value) return;
     try {
-      await navigator.clipboard.writeText(value);
+      await copySecret(value);
       copiedHistKey = key;
       setTimeout(() => {
         copiedHistKey = null;
@@ -533,8 +542,8 @@
         });
       }
       versionsCache = out;
-    } catch (e: any) {
-      addToast(e?.response?.data?.message ?? "Failed to load history", "alert");
+    } catch (e) {
+      addToast(apiServerMessage(e, "Failed to load history"), "alert");
     } finally {
       versionsLoading = false;
     }
@@ -810,7 +819,7 @@
         <button
           onclick={purge}
           disabled={busy}
-          class="flex items-center gap-1 px-2 py-1 text-xs rounded bg-red-600 text-white hover:bg-red-700 cursor-pointer"
+          class="flex items-center gap-1 px-2 py-1 text-xs rounded bg-vermilion-600 text-white hover:bg-vermilion-700 cursor-pointer"
         >
           <Trash2 size={12} /> Delete forever
         </button>
@@ -863,7 +872,7 @@
           class="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-warm-800 cursor-pointer disabled:opacity-40"
           title="Move to trash"
         >
-          <Trash2 size={14} class="text-slate-400 hover:text-red-600" />
+          <Trash2 size={14} class="text-slate-400 hover:text-vermilion-600" />
         </button>
         <div class="w-px h-5 bg-slate-200 dark:bg-warm-700 mx-1"></div>
         <button
@@ -1246,7 +1255,7 @@
                                     >
                                       {#if copiedHistKey === valueKey}<Check
                                           size={11}
-                                          class="text-emerald-600"
+                                          class="text-emerald-600 dark:text-emerald-300"
                                         />{:else}<Copy size={11} />{/if}
                                     </button>
                                   {/if}
@@ -1368,7 +1377,7 @@
                 <button
                   type="button"
                   onclick={() => removeTag(tag)}
-                  class="hover:text-red-600 cursor-pointer"
+                  class="hover:text-vermilion-600 cursor-pointer"
                   aria-label="Remove tag"
                 >
                   <X size={10} />
@@ -1467,7 +1476,7 @@
                   <button
                     type="button"
                     onclick={() => removeField(field.id)}
-                    class="text-slate-400 hover:text-red-600 cursor-pointer"
+                    class="text-slate-400 hover:text-vermilion-600 cursor-pointer"
                     aria-label="Remove field"
                   >
                     <X size={14} />
@@ -1525,7 +1534,7 @@
                   >
                     {#if copiedField === field.id}<Check
                         size={14}
-                        class="text-emerald-600"
+                        class="text-emerald-600 dark:text-emerald-300"
                       />{:else}<Copy size={14} />{/if}
                   </button>
                   {#if field.type === "password"}

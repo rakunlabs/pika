@@ -1,4 +1,7 @@
 <script lang="ts">
+  import Modal from "@/lib/components/Modal.svelte";
+  import { confirmDialog } from "@/lib/store/confirm.svelte";
+  import { apiErrorMessage, apiErrorStatus } from "@/lib/api/client";
   import axios from "axios";
   import { onMount } from "svelte";
   import {
@@ -127,12 +130,9 @@
     try {
       const res = await axios.get<TOTPStatus>("/api/v1/me/totp");
       totpStatus = res.data;
-    } catch (err: any) {
+    } catch (err) {
       totpStatus = null;
-      totpLoadError =
-        err?.response?.data?.message ??
-        err?.message ??
-        "Failed to load TOTP status";
+      totpLoadError = apiErrorMessage(err, "Failed to load TOTP status");
     } finally {
       totpLoading = false;
     }
@@ -154,11 +154,8 @@
       // The page-level state is now "pending"; refresh status so the
       // header reflects the in-progress state.
       await loadTOTPStatus();
-    } catch (err: any) {
-      const msg =
-        err?.response?.data?.message ??
-        err?.message ??
-        "Could not start enrollment";
+    } catch (err) {
+      const msg = apiErrorMessage(err, "Could not start enrollment");
       addToast(msg, "alert");
     } finally {
       enrollmentBusy = false;
@@ -190,9 +187,8 @@
       qrDataURI = "";
       enrollmentCode = "";
       await loadTOTPStatus();
-    } catch (err: any) {
-      const msg =
-        err?.response?.data?.message ?? err?.message ?? "Verification failed";
+    } catch (err) {
+      const msg = apiErrorMessage(err, "Verification failed");
       addToast(msg, "alert");
     } finally {
       enrollmentBusy = false;
@@ -213,11 +209,8 @@
       disablePassword = "";
       showDisable = false;
       await loadTOTPStatus();
-    } catch (err: any) {
-      const msg =
-        err?.response?.data?.message ??
-        err?.message ??
-        "Failed to disable TOTP";
+    } catch (err) {
+      const msg = apiErrorMessage(err, "Failed to disable TOTP");
       addToast(msg, "alert");
     } finally {
       disableBusy = false;
@@ -240,11 +233,8 @@
       regenPassword = "";
       showRegen = false;
       await loadTOTPStatus();
-    } catch (err: any) {
-      const msg =
-        err?.response?.data?.message ??
-        err?.message ??
-        "Failed to regenerate codes";
+    } catch (err) {
+      const msg = apiErrorMessage(err, "Failed to regenerate codes");
       addToast(msg, "alert");
     } finally {
       regenBusy = false;
@@ -285,17 +275,14 @@
     try {
       const res = await axios.get<PasskeyCredential[]>("/api/v1/me/passkeys");
       passkeys = Array.isArray(res.data) ? res.data : [];
-    } catch (err: any) {
+    } catch (err) {
       // 503 means the deployment hasn't configured RPID — we surface
       // a friendly "feature off" placeholder rather than a noisy error.
-      if (err?.response?.status === 503) {
+      if (apiErrorStatus(err) === 503) {
         passkeys = [];
         loadError = "Passkey is not configured on this server.";
       } else {
-        loadError =
-          err?.response?.data?.message ??
-          err?.message ??
-          "Failed to load passkeys";
+        loadError = apiErrorMessage(err, "Failed to load passkeys");
       }
     } finally {
       loading = false;
@@ -344,8 +331,7 @@
       newAttachment = "";
     } catch (err: any) {
       const code = err?.name ?? "";
-      const msg =
-        err?.response?.data?.message ?? err?.message ?? "Enrollment failed";
+      const msg = apiErrorMessage(err, "Enrollment failed");
       if (code === "NotAllowedError") {
         // User cancelled or timeout — silent is friendlier here.
         addToast("Enrollment cancelled", "info");
@@ -382,9 +368,8 @@
       );
       passkeys = passkeys.map((x) => (x.id === p.id ? res.data : x));
       addToast("Passkey renamed", "success");
-    } catch (err: any) {
-      const msg =
-        err?.response?.data?.message ?? err?.message ?? "Rename failed";
+    } catch (err) {
+      const msg = apiErrorMessage(err, "Rename failed");
       addToast(`Rename failed: ${msg}`, "alert");
     } finally {
       cancelRename();
@@ -400,16 +385,23 @@
     // password login alive, but warning out loud is cheap insurance.
     const isLastOne = passkeys.length === 1;
     const message = isLastOne
-      ? `Delete passkey "${p.name}"?\n\nThis is your only passkey. After deleting, you'll need to sign in with another method (password, OAuth, etc.). If you don't have one configured, you may be locked out.`
-      : `Delete passkey "${p.name}"? You won't be able to sign in with it again.`;
-    if (!confirm(message)) return;
+      ? "This is your only passkey. After deleting, you'll need to sign in with another method (password, OAuth, etc.). If you don't have one configured, you may be locked out."
+      : "You won't be able to sign in with it again.";
+    if (
+      !(await confirmDialog({
+        title: `Delete passkey "${p.name}"?`,
+        message,
+        confirmLabel: "Delete",
+        danger: true,
+      }))
+    )
+      return;
     try {
       await axios.delete(`/api/v1/me/passkeys/${p.id}`);
       passkeys = passkeys.filter((x) => x.id !== p.id);
       addToast(`Passkey "${p.name}" deleted`, "success");
-    } catch (err: any) {
-      const msg =
-        err?.response?.data?.message ?? err?.message ?? "Delete failed";
+    } catch (err) {
+      const msg = apiErrorMessage(err, "Delete failed");
       addToast(`Delete failed: ${msg}`, "alert");
     }
   }
@@ -616,7 +608,7 @@
                     />
                     <button
                       type="button"
-                      class="p-1 rounded text-accent-600 hover:text-accent-700 hover:bg-slate-100 dark:hover:bg-warm-700 cursor-pointer"
+                      class="p-1 rounded text-accent-600 hover:text-accent-700 hover:bg-slate-100 dark:hover:bg-warm-700 cursor-pointer dark:text-accent-400"
                       onclick={() => saveRename(p)}
                       title="Save"
                     >
@@ -970,13 +962,14 @@
   </div>
 
   <!-- Recovery codes modal: shown after enrollment / regen, dismissed by user. -->
-  {#if lastRecoveryCodes.length > 0}
-    <div
-      class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-    >
-      <div
-        class="bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg shadow-xl max-w-md w-full p-5 space-y-3"
-      >
+  <Modal
+    open={lastRecoveryCodes.length > 0}
+    onClose={dismissRecoveryCodes}
+    closeOnBackdrop={false}
+    closeOnEscape={false}
+    labelledby="recovery-codes-title"
+    panelClass="rounded-lg max-w-md w-full p-5 space-y-3"
+  >
         <div class="flex items-start gap-2">
           <AlertTriangle
             size={18}
@@ -984,6 +977,7 @@
           />
           <div>
             <h3
+              id="recovery-codes-title"
               class="text-base font-semibold text-slate-800 dark:text-slate-100"
             >
               Save your recovery codes
@@ -1022,7 +1016,5 @@
             I've saved them
           </button>
         </div>
-      </div>
-    </div>
-  {/if}
+  </Modal>
 </div>

@@ -616,7 +616,7 @@
         </button>
         {#if !confirmDelete}
           <button
-            class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded transition-colors cursor-pointer"
+            class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-vermilion-500 hover:bg-vermilion-50 dark:hover:bg-vermilion-900/40 rounded transition-colors cursor-pointer"
             onclick={() => (confirmDelete = true)}
             title="Delete resource"
           >
@@ -627,7 +627,7 @@
             >Really delete?</span
           >
           <button
-            class="px-2 py-1 text-xs font-medium text-white bg-red-600 rounded hover:bg-red-700 transition-colors cursor-pointer disabled:opacity-50"
+            class="px-2 py-1 text-xs font-medium text-white bg-vermilion-600 rounded hover:bg-vermilion-700 transition-colors cursor-pointer disabled:opacity-50"
             onclick={handleDelete}
             disabled={deleting}
           >
@@ -732,7 +732,7 @@
                 type="radio"
                 bind:group={formType}
                 value={opt.value}
-                class="text-accent-600"
+                class="text-accent-600 dark:text-accent-400"
               />
               {opt.label}
             </label>
@@ -812,7 +812,7 @@
                   />
                   <button
                     type="button"
-                    class="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded transition-colors cursor-pointer shrink-0"
+                    class="p-1 text-slate-400 hover:text-vermilion-500 hover:bg-vermilion-50 dark:hover:bg-vermilion-900/40 rounded transition-colors cursor-pointer shrink-0"
                     onclick={() => removeHttpHeaderRow(i)}
                     title="Remove header"
                   >
@@ -1016,7 +1016,7 @@
                 type="radio"
                 bind:group={k8sMode}
                 value="in-cluster"
-                class="text-accent-600"
+                class="text-accent-600 dark:text-accent-400"
               /> In-cluster
             </label>
             <label
@@ -1026,7 +1026,7 @@
                 type="radio"
                 bind:group={k8sMode}
                 value="path"
-                class="text-accent-600"
+                class="text-accent-600 dark:text-accent-400"
               /> File path
             </label>
             <label
@@ -1036,7 +1036,7 @@
                 type="radio"
                 bind:group={k8sMode}
                 value="inline"
-                class="text-accent-600"
+                class="text-accent-600 dark:text-accent-400"
               /> Inline YAML
             </label>
           </div>
@@ -1229,7 +1229,7 @@
                 type="radio"
                 bind:group={awsService}
                 value="secretsmanager"
-                class="text-accent-600"
+                class="text-accent-600 dark:text-accent-400"
               /> Secrets Manager
             </label>
             <label
@@ -1239,7 +1239,7 @@
                 type="radio"
                 bind:group={awsService}
                 value="ssm"
-                class="text-accent-600"
+                class="text-accent-600 dark:text-accent-400"
               /> SSM Parameter Store
             </label>
           </div>
@@ -1353,7 +1353,7 @@
             <input
               type="checkbox"
               bind:checked={gcpRawValue}
-              class="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 focus:ring-offset-0"
+              class="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 focus:ring-offset-0 dark:text-accent-400"
             />
             <span class="flex-1">
               Return raw value

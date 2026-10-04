@@ -72,6 +72,11 @@ func (c *Cluster) Middleware() func(next http.Handler) http.Handler {
 			r.Header.Set(internalForwardHeader, "1")
 			payload, err := SerializeRequest(r)
 			if err != nil {
+				var maxBytesErr *http.MaxBytesError
+				if errors.As(err, &maxBytesErr) {
+					http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+					return
+				}
 				slog.Error("cluster: failed to serialize forward request", "error", err, "path", r.URL.Path)
 				http.Error(w, "cluster: failed to serialize request", http.StatusInternalServerError)
 				return

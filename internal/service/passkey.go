@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rakunlabs/ada/middleware/auth/identity"
@@ -56,11 +55,9 @@ type PasskeyService struct {
 	// shutdown hook) drain the pending batch synchronously.
 	flushReqCh chan flushReq
 
-	// gcOnce gates the lazy-launch of the periodic sweep so tests
-	// that spin up many short-lived PasskeyService instances don't
-	// fork a new goroutine each time. Background sweeps still run
-	// on every instance but only one per process per service.
-	gcOnce sync.Once
+	// worker owns the challenge sweep and LastUsedAt flusher; stopped
+	// when the service is replaced on auth reload.
+	worker *worker
 }
 
 // challengeKind values distinguish enrollment from login challenges
@@ -117,17 +114,32 @@ func NewPasskeyService(svc *Service, engine *passkey.WebAuthn, challengeTTL time
 		challengeTTL: challengeTTL,
 		lastUsedCh:   make(chan lastUsedEvent, lastUsedBufferSize),
 		flushReqCh:   make(chan flushReq),
+		worker:       newWorker(),
 	}
-	go ps.gcLoop()
-	go ps.lastUsedLoop()
+	ps.worker.every(30*time.Second, ps.sweepChallenges)
+	ps.worker.goLoop(ps.lastUsedLoop)
 	return ps
+}
+
+// Close stops the background loops, flushing pending LastUsedAt bumps
+// first. Safe on a nil receiver.
+func (ps *PasskeyService) Close() {
+	if ps != nil {
+		ps.worker.stop()
+	}
 }
 
 // SetPasskeyService attaches a PasskeyService to a parent Service.
 // The helper keeps the wiring explicit at boot rather than relying
 // on package-level globals.
 func (s *Service) SetPasskeyService(ps *PasskeyService) {
+	s.coordMu.Lock()
+	prev := s.passkeys
 	s.passkeys = ps
+	s.coordMu.Unlock()
+	if prev != ps {
+		prev.Close()
+	}
 }
 
 // PasskeyCoord returns the bound PasskeyService, or nil when
@@ -560,20 +572,16 @@ func (ps *PasskeyService) LookupCredentialIDs(ctx context.Context, handle []byte
 // would be to gate the sweep on cluster leadership, but that adds a
 // dependency on the cluster package and is not worth the complexity
 // for a 30-second job.
-func (ps *PasskeyService) gcLoop() {
-	t := time.NewTicker(30 * time.Second)
-	defer t.Stop()
-	for range t.C {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		n, err := ps.svc.store.PasskeyChallenges().DeleteExpired(ctx)
-		cancel()
-		if err != nil {
-			slog.Warn("passkey: challenge sweep", "error", err)
-			continue
-		}
-		if n > 0 {
-			slog.Debug("passkey: challenge sweep", "removed", n)
-		}
+func (ps *PasskeyService) sweepChallenges() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	n, err := ps.svc.store.PasskeyChallenges().DeleteExpired(ctx)
+	cancel()
+	if err != nil {
+		slog.Warn("passkey: challenge sweep", "error", err)
+		return
+	}
+	if n > 0 {
+		slog.Debug("passkey: challenge sweep", "removed", n)
 	}
 }
 
@@ -591,13 +599,26 @@ func (ps *PasskeyService) gcLoop() {
 // the originating request may have completed long before we get to
 // the row, and we don't want a cancelled context to drop a legitimate
 // write. Each flush attaches its own short-lived background context.
-func (ps *PasskeyService) lastUsedLoop() {
+func (ps *PasskeyService) lastUsedLoop(ctx context.Context) {
 	pending := make(map[string]time.Time)
 	flush := time.NewTicker(lastUsedFlushInterval)
 	defer flush.Stop()
 
 	for {
 		select {
+		case <-ctx.Done():
+			// Persist what was already queued before exiting.
+		drainOnStop:
+			for {
+				select {
+				case ev := <-ps.lastUsedCh:
+					pending[ev.rowID] = ev.at
+				default:
+					break drainOnStop
+				}
+			}
+			ps.persistLastUsed(pending)
+			return
 		case ev := <-ps.lastUsedCh:
 			// Coalesce: a second login to the same credential within
 			// the flush window overwrites the timestamp (we want the
@@ -672,8 +693,12 @@ func (ps *PasskeyService) FlushLastUsed() {
 		return
 	}
 	done := make(chan struct{})
-	ps.flushReqCh <- flushReq{done: done}
-	<-done
+	select {
+	case ps.flushReqCh <- flushReq{done: done}:
+		<-done
+	case <-ps.worker.ctx.Done():
+		// Stopped: the loop already persisted pending bumps on exit.
+	}
 }
 
 // userIDToHandle maps a pika user id (hex string) to the byte slice

@@ -17,6 +17,8 @@ import (
 
 	"github.com/rakunlabs/pika/internal/cluster"
 	"github.com/rakunlabs/pika/internal/config"
+	"github.com/rakunlabs/pika/internal/external"
+	"github.com/rakunlabs/pika/internal/netguard"
 	"github.com/rakunlabs/pika/internal/secret"
 	"github.com/rakunlabs/pika/internal/server/api"
 	"github.com/rakunlabs/pika/internal/server/authx"
@@ -43,6 +45,7 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	// without dragging an event-bus dependency through the API.
 	dispatcher := api.BuildHookDispatcher(ctx, svc)
 	svc.SetHookDispatcher(dispatcher)
+	defer dispatcher.Stop()
 
 	// Personal vault coordinator. Always-on (no AuthSettings dependency),
 	// because the feature is per-user opt-in (the SPA hides the route
@@ -51,14 +54,20 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	// it here keeps the wiring single-source.
 	svc.SetVaultService(service.NewVaultService(svc))
 
+	external.SetMaxResponseBytes(cfg.Server.Limits.ExternalResponseBytes())
+	if err := applyOutboundPolicy(cfg.Server.Outbound); err != nil {
+		return err
+	}
+
 	server := ada.New()
 	server.Use(
 		mrecover.Middleware(),
 		mserver.Middleware(config.Service),
-		mcors.Middleware(),
+		mcors.Middleware(mcors.WithConfig(cfg.Server.CORS)),
 		mrequestid.Middleware(),
 		mlog.Middleware(),
 		mtelemetry.Middleware(),
+		bodyLimitMiddleware(cfg.Server.Limits, cfg.Server.BasePath),
 	)
 
 	// Cluster routing wraps everything below: reads stay local on every
@@ -134,7 +143,7 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 	}
 	rlSettings = rlSettings.WithDefaults()
 	trustedProxies := authx.ParseCIDRs(rlSettings.TrustedProxyCIDRs)
-	mLogin := server.Group("", authx.LoginGuard(rlSettings, trustedProxies))
+	mLogin := server.Group("", authx.LoginAudit(svc, trustedProxies), authx.LoginGuard(rlSettings, trustedProxies))
 
 	// Mount /login/* and /logout on the unprotected group.
 	mgr.Mount(mLogin)
@@ -156,7 +165,19 @@ func Start(ctx context.Context, cfg *config.Config, svc *service.Service, info a
 
 	peMgr := publicendpoint.New(ctx, svc, slog.Default(), tlsMgr)
 
-	if err := api.Handle(m, mData, mAuth, svc, info, encStore, mgr, dispatcher, cl, peMgr, tlsMgr); err != nil {
+	if err := api.Handle(api.Muxes{Protected: m, Data: mData, Public: mAuth}, api.Deps{
+		Svc:             svc,
+		Info:            info,
+		EncStore:        encStore,
+		Mgr:             mgr,
+		Dispatcher:      dispatcher,
+		Cluster:         cl,
+		PublicEndpoints: peMgr,
+		TLS:             tlsMgr,
+		RateLimit:       rlSettings,
+		TrustedProxies:  trustedProxies,
+		BasePath:        basePath,
+	}); err != nil {
 		return err
 	}
 
@@ -202,4 +223,26 @@ func authBasePath(basePath string) string {
 		return "/"
 	}
 	return basePath + "/"
+}
+
+// applyOutboundPolicy installs the process-wide netguard policy used by
+// webhooks and HTTP inheritance sources.
+func applyOutboundPolicy(cfg config.Outbound) error {
+	if cfg.DisableGuard {
+		netguard.SetPolicy(nil)
+		slog.Warn("outbound address guard disabled (server.outbound.disable_guard)")
+		return nil
+	}
+
+	deny := cfg.DenyCIDRs
+	if len(deny) == 0 {
+		deny = netguard.DefaultDenyCIDRs
+	}
+
+	policy, err := netguard.NewPolicy(cfg.AllowCIDRs, deny)
+	if err != nil {
+		return fmt.Errorf("server.outbound: %w", err)
+	}
+	netguard.SetPolicy(policy)
+	return nil
 }

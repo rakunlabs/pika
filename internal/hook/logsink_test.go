@@ -376,6 +376,7 @@ func TestDispatcherLogTargetIgnoresBodyTemplate(t *testing.T) {
 		Mount: "uploads",
 		Path:  "a.txt",
 	})
+	d.Stop() // waits for sink workers to deliver
 
 	// The structured "hi uploads" line should be present; the dispatcher
 	// warning about body_template should also be in the captured output.

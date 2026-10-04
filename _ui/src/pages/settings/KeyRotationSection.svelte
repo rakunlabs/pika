@@ -145,7 +145,7 @@
            into "encryption on" mode permanently; every restart from
            this point on will require unlock. -->
       <div
-        class="p-5 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
+        class="p-5 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
       >
         <h3
           class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2 flex items-center gap-1.5"
@@ -247,7 +247,7 @@
     {:else}
       <!-- Rotate panel -->
       <div
-        class="p-5 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
+        class="p-5 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
       >
         <h3
           class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2 flex items-center gap-1.5"
@@ -384,7 +384,7 @@
          the next request through the unlock flow without restarting
          the process. Useful for rehearsals and operator handovers. -->
       <div
-        class="p-5 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
+        class="p-5 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
       >
         <h3
           class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2 flex items-center gap-1.5"

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { apiServerMessage, apiErrorStatus } from "@/lib/api/client";
   import { X, Copy, Check, Loader2, Eye, EyeOff } from "lucide-svelte";
   import AppCodeMirror from "@/lib/editor/AppCodeMirror.svelte";
   import { json } from "@codemirror/lang-json";
@@ -144,13 +145,13 @@
           // renders it; reformatting a broken doc would mask the bug.
         }
       }
-    } catch (err: any) {
+    } catch (err) {
       // If render endpoint doesn't exist yet, just show the current content
-      if (err.response?.status === 404) {
+      if (apiErrorStatus(err) === 404) {
         renderedContent = activeTab.content;
         error = "Render endpoint not available. Showing current content.";
       } else {
-        error = err.response?.data?.message || "Failed to render configuration";
+        error = apiServerMessage(err, "Failed to render configuration");
         renderedContent = "";
       }
     } finally {
@@ -204,7 +205,7 @@
     tabindex="-1"
   >
     <div
-      class="bg-white dark:bg-warm-900 rounded-lg shadow-xl w-full max-w-[900px] max-h-[85vh] flex flex-col overflow-hidden"
+      class="bg-white dark:bg-warm-800 rounded-lg shadow-xl w-full max-w-[900px] max-h-[85vh] flex flex-col overflow-hidden"
     >
       <!-- Header: title + action buttons. `flex-wrap` so narrow viewports
       (or extra action buttons in the future) spill onto a second

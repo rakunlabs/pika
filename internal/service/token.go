@@ -34,17 +34,21 @@ type Token struct {
 	CreatedBy string       `json:"created_by"`
 	ExpiresAt *time.Time   `json:"expires_at,omitempty"`
 	Active    bool         `json:"active"`
+	// LastUsedAt is updated in batches (see tokenUsage), so it may lag
+	// the real last use by up to tokenUsageFlushInterval.
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
 
 // TokenInfo is the public representation of a token (no hash exposed).
 type TokenInfo struct {
-	ID        string       `json:"id"`
-	Name      string       `json:"name"`
-	Scopes    []TokenScope `json:"scopes"`
-	CreatedAt time.Time    `json:"created_at"`
-	CreatedBy string       `json:"created_by"`
-	ExpiresAt *time.Time   `json:"expires_at,omitempty"`
-	Active    bool         `json:"active"`
+	ID         string       `json:"id"`
+	Name       string       `json:"name"`
+	Scopes     []TokenScope `json:"scopes"`
+	CreatedAt  time.Time    `json:"created_at"`
+	CreatedBy  string       `json:"created_by"`
+	ExpiresAt  *time.Time   `json:"expires_at,omitempty"`
+	Active     bool         `json:"active"`
+	LastUsedAt *time.Time   `json:"last_used_at,omitempty"`
 }
 
 // CreateTokenRequest is the request body for creating a new token.
@@ -154,13 +158,14 @@ func (s *Service) ListTokens(ctx context.Context, q *query.Query) ([]TokenInfo, 
 	infos := make([]TokenInfo, 0, len(tokens))
 	for _, token := range tokens {
 		infos = append(infos, TokenInfo{
-			ID:        token.ID,
-			Name:      token.Name,
-			Scopes:    token.Scopes,
-			CreatedAt: token.CreatedAt,
-			CreatedBy: token.CreatedBy,
-			ExpiresAt: token.ExpiresAt,
-			Active:    token.Active,
+			ID:         token.ID,
+			Name:       token.Name,
+			Scopes:     token.Scopes,
+			CreatedAt:  token.CreatedAt,
+			CreatedBy:  token.CreatedBy,
+			ExpiresAt:  token.ExpiresAt,
+			Active:     token.Active,
+			LastUsedAt: s.tokenLastUsed(token.ID, token.LastUsedAt),
 		})
 	}
 
@@ -169,7 +174,11 @@ func (s *Service) ListTokens(ctx context.Context, q *query.Query) ([]TokenInfo, 
 
 // DeleteToken deletes a token by ID.
 func (s *Service) DeleteToken(ctx context.Context, id string) error {
-	return s.store.Tokens().Delete(ctx, id)
+	if err := s.store.Tokens().Delete(ctx, id); err != nil {
+		return err
+	}
+	s.tokenUsage.forget(id)
+	return nil
 }
 
 // PatchToken updates a token's properties.
@@ -226,6 +235,8 @@ func (s *Service) AuthenticateToken(ctx context.Context, rawKey string) (*TokenA
 	if token.ExpiresAt != nil && time.Now().After(*token.ExpiresAt) {
 		return nil, fmt.Errorf("token has expired: %w", ErrForbidden)
 	}
+
+	s.tokenUsage.record(token.ID)
 
 	return &TokenAuth{ID: token.ID, Name: token.Name, Scopes: token.Scopes}, nil
 }

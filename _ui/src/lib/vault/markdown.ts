@@ -133,6 +133,11 @@ interface RuleBlock {
 
 type Block = CodeBlock | ListBlock | QuoteBlock | ParaBlock | HeadingBlock | RuleBlock;
 
+// Opening fence. Must stay in sync between the block detector and the
+// paragraph collector — a mismatch (e.g. "```c++") previously left the
+// tokenizer spinning forever without consuming the line.
+const FENCE_OPEN = /^```([\w+#.-]*)\s*$/;
+
 function tokenize(src: string): Block[] {
   const blocks: Block[] = [];
   const lines = src.replace(/\r\n?/g, '\n').split('\n');
@@ -143,7 +148,7 @@ function tokenize(src: string): Block[] {
     const trimmed = line.trim();
 
     // Fenced code block.
-    const fence = /^```(\w*)\s*$/.exec(trimmed);
+    const fence = FENCE_OPEN.exec(trimmed);
     if (fence) {
       const lang = fence[1] ?? '';
       const buf: string[] = [];
@@ -214,7 +219,7 @@ function tokenize(src: string): Block[] {
       const t = lines[i].trim();
       if (t === '') break;
       if (/^#{1,6}\s+/.test(t)) break;
-      if (/^```/.test(t)) break;
+      if (FENCE_OPEN.test(t)) break;
       if (/^>\s?/.test(t)) break;
       if (/^[-*+]\s+/.test(t)) break;
       if (/^\d+\.\s+/.test(t)) break;
@@ -222,7 +227,14 @@ function tokenize(src: string): Block[] {
       buf.push(lines[i]);
       i++;
     }
-    if (buf.length > 0) blocks.push({ kind: 'para', lines: buf });
+    // Guard against an infinite loop if a line matched none of the
+    // block openers above but was still rejected by the paragraph
+    // collector: always consume at least one line per iteration.
+    if (buf.length === 0) {
+      buf.push(lines[i]);
+      i++;
+    }
+    blocks.push({ kind: 'para', lines: buf });
   }
 
   return blocks;

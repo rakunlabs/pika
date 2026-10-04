@@ -95,11 +95,15 @@ function pick(alphabet: string): string {
 }
 
 function secureRandIndex(max: number): number {
-  // Same rejection-sampling pattern, single byte at a time.
-  const buf = new Uint8Array(1);
-  const ceil = 256 - (256 % max);
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
+  // Rejection sampling over a 32-bit draw. The previous single-byte
+  // version computed `ceil = 256 - (256 % max)`, which is 0 for any
+  // max > 256 (e.g. the 3-digit passphrase suffix uses 900) and spun
+  // forever. 2^32 comfortably covers every range we use.
+  if (max <= 0 || max > 0x1_0000_0000) throw new RangeError(`invalid range ${max}`);
+  const range = 0x1_0000_0000;
+  const ceil = range - (range % max);
+  const buf = new Uint32Array(1);
+  for (;;) {
     crypto.getRandomValues(buf);
     if (buf[0] < ceil) return buf[0] % max;
   }

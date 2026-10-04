@@ -115,26 +115,26 @@
     class="flex items-center justify-between px-3 py-2 bg-slate-100 dark:bg-warm-800 border-b border-slate-200 dark:border-warm-700"
   >
     <span
-      class="text-xs font-semibold text-gray-700 dark:text-warm-100 uppercase tracking-wide"
+      class="text-xs font-semibold text-slate-700 dark:text-warm-100 uppercase tracking-wide"
       >Explorer</span
     >
     <div class="flex gap-0.5">
       <button
-        class="flex items-center justify-center w-6 h-6 text-gray-500 dark:text-warm-200 bg-transparent border-none cursor-pointer hover:text-gray-800 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-warm-600 rounded"
+        class="flex items-center justify-center w-6 h-6 text-slate-500 dark:text-warm-200 bg-transparent border-none cursor-pointer hover:text-slate-800 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-warm-600 rounded"
         onclick={() => handleCreateFile("")}
         title="New Config"
       >
         <FilePlus size={14} />
       </button>
       <button
-        class="flex items-center justify-center w-6 h-6 text-gray-500 dark:text-warm-200 bg-transparent border-none cursor-pointer hover:text-gray-800 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-warm-600 rounded"
+        class="flex items-center justify-center w-6 h-6 text-slate-500 dark:text-warm-200 bg-transparent border-none cursor-pointer hover:text-slate-800 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-warm-600 rounded"
         onclick={() => handleCreateFolder("")}
         title="New Folder"
       >
         <FolderPlus size={14} />
       </button>
       <button
-        class="flex items-center justify-center w-6 h-6 text-gray-500 dark:text-warm-200 bg-transparent border-none cursor-pointer hover:text-gray-800 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-warm-600 rounded"
+        class="flex items-center justify-center w-6 h-6 text-slate-500 dark:text-warm-200 bg-transparent border-none cursor-pointer hover:text-slate-800 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-warm-600 rounded"
         onclick={() => configStore.loadTree()}
         title="Refresh"
         aria-label="Refresh tree"
@@ -150,7 +150,7 @@
       class="flex items-center gap-1.5 px-2 py-1 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded transition-all
  {isSearchFocused ? 'border-brand-500 ring-2 ring-brand-500/10' : ''}"
     >
-      <Search size={14} class="text-gray-400 dark:text-slate-500 shrink-0" />
+      <Search size={14} class="text-slate-400 dark:text-slate-500 shrink-0" />
       <input
         type="text"
         placeholder={configStore.searchMode === "name"
@@ -161,13 +161,13 @@
         onkeydown={handleSearchKeyDown}
         onfocus={() => (isSearchFocused = true)}
         onblur={() => (isSearchFocused = false)}
-        class="flex-1 border-none outline-none text-xs bg-transparent min-w-0 placeholder:text-gray-400 dark:text-slate-500"
+        class="flex-1 border-none outline-none text-xs bg-transparent min-w-0 placeholder:text-slate-400 dark:placeholder:text-slate-500"
       />
       <button
         class="flex items-center justify-center p-0.5 rounded bg-transparent border-none cursor-pointer transition-colors
  {configStore.searchMode === 'name'
           ? 'text-brand-500 bg-brand-50 dark:bg-brand-900/30 hover:bg-brand-100 dark:hover:bg-brand-900/50'
-          : 'text-gray-400 dark:text-slate-500 hover:text-gray-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700'}"
+          : 'text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700'}"
         onclick={toggleSearchMode}
         title={configStore.searchMode === "name"
           ? "Name-only search active — click to also search file contents"
@@ -179,7 +179,7 @@
       </button>
       {#if configStore.isSearching}
         <button
-          class="flex items-center justify-center p-0.5 rounded text-amber-500 bg-transparent border-none cursor-pointer hover:text-red-500 hover:bg-red-50"
+          class="flex items-center justify-center p-0.5 rounded text-amber-500 bg-transparent border-none cursor-pointer hover:text-vermilion-500 hover:bg-vermilion-50 dark:hover:bg-vermilion-900/40"
           onclick={() => configStore.cancelSearch()}
           title="Stop search"
         >
@@ -187,7 +187,7 @@
         </button>
       {:else if searchInput}
         <button
-          class="flex items-center justify-center p-0.5 rounded text-gray-400 dark:text-slate-500 bg-transparent border-none cursor-pointer hover:text-gray-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700"
+          class="flex items-center justify-center p-0.5 rounded text-slate-400 dark:text-slate-500 bg-transparent border-none cursor-pointer hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700"
           onclick={clearSearch}
           aria-label="Clear search"
         >
@@ -235,7 +235,7 @@
               class="text-slate-400 dark:text-slate-500 shrink-0"
             />
             <span
-              class="text-xs text-gray-700 dark:text-slate-200 overflow-hidden text-ellipsis whitespace-nowrap"
+              class="text-xs text-slate-700 dark:text-slate-200 overflow-hidden text-ellipsis whitespace-nowrap"
               >{result.path}</span
             >
           </button>
@@ -259,7 +259,7 @@
               class="text-slate-400 dark:text-slate-500 shrink-0"
             />
             <span
-              class="text-[11px] font-medium text-gray-700 dark:text-slate-200 overflow-hidden text-ellipsis whitespace-nowrap"
+              class="text-[11px] font-medium text-slate-700 dark:text-slate-200 overflow-hidden text-ellipsis whitespace-nowrap"
               >{result.path}</span
             >
           </button>
@@ -296,7 +296,7 @@
     <div class="flex-1 overflow-y-auto py-1" role="tree">
       {#if configStore.isLoading}
         <div
-          class="p-5 text-center text-gray-400 dark:text-slate-500 text-[13px]"
+          class="p-5 text-center text-slate-400 dark:text-slate-500 text-[13px]"
         >
           Loading...
         </div>
@@ -311,14 +311,14 @@
           {/each}
         {:else}
           <div
-            class="p-5 text-center text-gray-400 dark:text-slate-500 text-[13px]"
+            class="p-5 text-center text-slate-400 dark:text-slate-500 text-[13px]"
           >
             No files found
           </div>
         {/if}
       {:else}
         <div
-          class="p-5 text-center text-gray-400 dark:text-slate-500 text-[13px]"
+          class="p-5 text-center text-slate-400 dark:text-slate-500 text-[13px]"
         >
           No configurations
         </div>

@@ -2,6 +2,7 @@
   import Router from "svelte-spa-router";
   import Navbar from "@/lib/components/Navbar.svelte";
   import Toast from "@/lib/components/Toast.svelte";
+  import ConfirmDialog from "@/lib/components/ConfirmDialog.svelte";
   import UnlockScreen from "@/lib/components/UnlockScreen.svelte";
   import Login from "@/pages/Login.svelte";
   import routes from "@/routes";
@@ -77,6 +78,7 @@
 </script>
 
 <Toast />
+<ConfirmDialog />
 
 {#if loading}
   <!-- Loading state while checking auth -->

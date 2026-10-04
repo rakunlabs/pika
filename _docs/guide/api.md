@@ -90,7 +90,21 @@ Like `/data/*`, this endpoint authenticates itself and accepts either credential
 | `DELETE`                       | `/api/v1/users-totp/*`                | `users.manage`         | Admin reset of a user's TOTP enrolment.                               |
 | `GET`,`POST`,`PATCH`,`DELETE`  | `/api/v1/permissions[/*]`             | `permissions.manage`   | Permission bundle CRUD.                                              |
 | `GET`,`PUT`                    | `/api/v1/user-permissions/*`          | `permissions.manage`   | Read / replace a user's bundle assignments.                          |
-| `GET`,`POST`,`DELETE`,`PATCH`  | `/api/v1/tokens[/*]`                  | `tokens.manage`        | API token CRUD.                                                       |
+| `GET`,`POST`,`DELETE`,`PATCH`  | `/api/v1/tokens[/*]`                  | `tokens.manage`        | API token CRUD. See [Listing tokens](#listing-tokens).                |
+
+### Listing tokens
+
+`GET /api/v1/tokens` without query parameters returns a plain JSON array of every token (the original shape). Adding any paging or filter parameter switches the response to `{ "tokens": [...], "total": N }`:
+
+| Parameter  | Example          | Meaning                                       |
+| ---------- | ---------------- | --------------------------------------------- |
+| `_limit`   | `_limit=20`      | Page size (default 50 when paging).           |
+| `_offset`  | `_offset=40`     | Page offset.                                  |
+| `_sort`    | `_sort=-last_used_at` | Sort field; prefix `-` for descending. `name`, `created_at`, `expires_at` and `last_used_at` are supported. |
+| `name`     | `name=ci`        | Case-insensitive substring match.             |
+| `active`   | `active=true`    | Filter by enabled state.                      |
+
+Each token carries `last_used_at`, the last time it authenticated. It is written in batches about once a minute, so it can lag slightly; in a cluster only the leader persists it.
 
 ## Server administration
 
@@ -111,6 +125,15 @@ Like `/data/*`, this endpoint authenticates itself and accepts either credential
 | `POST`        | `/api/v1/public-endpoints/test-rules`         | `settings.manage` | Dry-run draft Endpoint request rules and return a trace.      |
 | `POST`        | `/api/v1/public-endpoints/{id}/test`          | `settings.manage` | Synthetic probe against a saved Endpoint.                     |
 | `GET`,`POST`  | `/api/v1/backup[/info]`                       | `settings.manage` | Export / inspect / import a full backup archive.              |
+| `GET`         | `/api/v1/audit`                               | `settings.manage` | List the audit log. See [Audit log](#audit-log).              |
+
+### Audit log
+
+Every state-changing request on the admin API (any method other than `GET`/`HEAD`/`OPTIONS`) and every password login or registration attempt is recorded with its time, actor (`alice` or `token:<name>`), action (`POST /api/v1/file/*`, `login.failed`, …), target path, HTTP status, client IP and request ID. Request and response bodies are never stored.
+
+`GET /api/v1/audit` returns `{ "entries": [...], "total": N }`, newest first. It accepts `_limit` (default 50), `_offset`, `_sort` (`time` or `-time`), and filters such as `actor=alice` or `action=login.failed`.
+
+Entries are kept for `audit.retention` (default `2160h`, 90 days; `0` keeps them forever). The UI view is **Settings → Audit Log**.
 
 ## Per-user endpoints
 
@@ -140,6 +163,7 @@ Provided by the [ada](https://rakunlabs.github.io/ada/) auth manager — paths a
 ## Conventions
 
 - All write endpoints accept JSON request bodies and return JSON responses.
-- 4xx responses include a `{ "message": "..." }` body.
+- Error responses include a `{ "message": "..." }` body. 5xx responses also carry `request_id`; the same id is in the server's error log line and the `X-Request-Id` response header.
+- Request bodies are capped by `server.limits.request_body_mb` (backup uploads by `server.limits.backup_body_mb`); larger requests get `413`.
 - Long-running operations (search, backup export) stream over Server-Sent Events.
 - When the server is locked, all endpoints except the discovery group and `/login/*` / `/api/v1/key/{status,unlock}` return `503 Service Unavailable` with `X-Pika-Locked: true`. See [Encryption](./encryption).

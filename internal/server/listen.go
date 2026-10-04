@@ -58,6 +58,7 @@ func startAppServer(ctx context.Context, app *ada.Server, cfg *config.Config, sv
 
 	srv := &http.Server{
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 		BaseContext: func(_ net.Listener) context.Context {
 			return context.WithValue(context.Background(), ada.ListenerAddrContextKey, ln.Addr())
 		},

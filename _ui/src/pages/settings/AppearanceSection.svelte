@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { confirmDialog } from "@/lib/store/confirm.svelte";
+  import { apiErrorMessage } from "@/lib/api/client";
   import { RotateCcw, Save, Undo2 } from "lucide-svelte";
 
   import { prefsStore, type EditorThemeKey } from "@/lib/store/prefs.svelte";
@@ -44,8 +46,8 @@
     try {
       await prefsStore.savePreferences();
       addToast("Appearance preferences saved", "success");
-    } catch (err: any) {
-      const msg = err?.response?.data?.message ?? err?.message ?? String(err);
+    } catch (err) {
+      const msg = apiErrorMessage(err, String(err));
       addToast(`Failed to save: ${msg}`, "alert");
     }
   }
@@ -56,16 +58,19 @@
 
   async function resetAll() {
     if (
-      !confirm(
-        "Reset all appearance preferences to defaults? This will be saved immediately.",
-      )
+      !(await confirmDialog({
+        title: "Reset all appearance preferences to defaults?",
+        message: "This will be saved immediately.",
+        confirmLabel: "Reset",
+        danger: true,
+      }))
     )
       return;
     try {
       await prefsStore.resetPreferences();
       addToast("Appearance preferences reset to defaults", "success");
-    } catch (err: any) {
-      addToast(`Failed to reset: ${err?.message ?? err}`, "alert");
+    } catch (err) {
+      addToast(`Failed to reset: ${apiErrorMessage(err, String(err))}`, "alert");
     }
   }
 </script>
@@ -125,7 +130,7 @@
 
   <!-- Editor preferences -->
   <section
-    class="p-5 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm mb-4"
+    class="p-5 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm mb-4"
   >
     <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-1">
       Editor

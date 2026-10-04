@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { confirmDialog } from "@/lib/store/confirm.svelte";
     import { configStore } from "@/lib/store/config.svelte";
     import { addToast } from "@/lib/store/toast.svelte";
     import { onMount } from "svelte";
@@ -87,7 +88,15 @@
     }
 
     async function handleDeleteToken(id: string) {
-        if (!confirm("Are you sure you want to delete this token?")) return;
+        if (
+            !(await confirmDialog({
+                title: "Delete this token?",
+                message: "Are you sure you want to delete this token?",
+                confirmLabel: "Delete",
+                danger: true,
+            }))
+        )
+            return;
         try {
             await configStore.deleteToken(id);
         } catch (error) {
@@ -117,36 +126,38 @@
 
 <!-- Token Created Banner -->
 {#if createdTokenKey}
-    <div class="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
-        <p class="text-sm font-semibold text-green-800 mb-2">
+    <div class="mb-6 p-4 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-700 rounded-lg">
+        <p class="text-sm font-semibold text-emerald-800 dark:text-emerald-200 mb-2">
             Token Created Successfully
         </p>
-        <p class="text-xs text-green-700 mb-3">
+        <p class="text-xs text-emerald-700 dark:text-emerald-300 mb-3">
             Copy this token now. It will not be shown again.
         </p>
         <div class="flex items-center gap-2">
             <code
-                class="flex-1 px-3 py-2 bg-white dark:bg-warm-900 border border-green-200 rounded text-xs font-mono text-green-900 overflow-hidden text-ellipsis"
+                class="flex-1 px-3 py-2 bg-white dark:bg-warm-900 border border-emerald-200 dark:border-emerald-700 rounded text-xs font-mono text-emerald-900 dark:text-emerald-100 overflow-hidden text-ellipsis"
             >
                 {showKey ? createdTokenKey : "••••••••••••••••••••••••••••••••"}
             </code>
             <button
-                class="p-2 bg-white dark:bg-warm-900 border border-green-200 rounded hover:bg-green-100 transition-colors cursor-pointer"
+                class="p-2 bg-white dark:bg-warm-900 border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 rounded hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors cursor-pointer"
                 onclick={() => (showKey = !showKey)}
                 title={showKey ? "Hide" : "Show"}
+                aria-label={showKey ? "Hide token" : "Show token"}
             >
                 {#if showKey}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
             </button>
             <button
-                class="p-2 bg-white dark:bg-warm-900 border border-green-200 rounded hover:bg-green-100 transition-colors cursor-pointer"
+                class="p-2 bg-white dark:bg-warm-900 border border-emerald-200 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 rounded hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors cursor-pointer"
                 onclick={copyTokenKey}
                 title="Copy"
+                aria-label="Copy token"
             >
                 <Copy size={14} />
             </button>
         </div>
         <button
-            class="mt-3 px-3 py-1.5 text-xs text-green-700 bg-transparent border border-green-300 rounded hover:bg-green-100 transition-colors cursor-pointer"
+            class="mt-3 px-3 py-1.5 text-xs text-emerald-700 dark:text-emerald-300 bg-transparent border border-emerald-300 dark:border-emerald-700 rounded hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors cursor-pointer"
             onclick={dismissTokenKey}
         >
             Dismiss
@@ -223,7 +234,7 @@
                         >Scopes</span
                     >
                     <button
-                        class="flex items-center gap-1 px-2 py-1 text-xs text-accent-700 bg-accent-50 rounded hover:bg-accent-100 transition-colors cursor-pointer"
+                        class="flex items-center gap-1 px-2 py-1 text-xs text-accent-700 bg-accent-50 rounded hover:bg-accent-100 transition-colors cursor-pointer dark:text-accent-300 dark:bg-accent-950/30 dark:hover:bg-accent-900/40"
                         onclick={addScope}
                     >
                         <Plus size={12} /> Add Scope
@@ -273,7 +284,7 @@
                         </div>
                         {#if newTokenScopes.length > 1}
                             <button
-                                class="p-1 text-slate-400 dark:text-slate-500 hover:text-red-500 transition-colors cursor-pointer"
+                                class="p-1 text-slate-400 dark:text-slate-500 hover:text-vermilion-500 transition-colors cursor-pointer"
                                 onclick={() => removeScope(i)}
                             >
                                 <Trash2 size={14} />
@@ -285,7 +296,7 @@
 
             <div class="flex justify-end gap-2">
                 <button
-                    class="px-3 py-2 text-sm text-slate-600 dark:text-slate-300 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md hover:bg-slate-50 dark:bg-warm-900 transition-colors cursor-pointer"
+                    class="px-3 py-2 text-sm text-slate-600 dark:text-slate-300 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md hover:bg-slate-50 dark:hover:bg-warm-700 transition-colors cursor-pointer"
                     onclick={() => (showCreateToken = false)}
                 >
                     Cancel
@@ -303,7 +314,7 @@
     <!-- Token List -->
     {#if tokens.length === 0}
         <div
-            class="text-center py-12 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg"
+            class="text-center py-12 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg"
         >
             <Shield size={32} class="mx-auto text-slate-300 mb-3" />
             <p class="text-sm text-slate-500 dark:text-slate-400">
@@ -317,7 +328,7 @@
         <div class="space-y-2">
             {#each tokens as token (token.id)}
                 <div
-                    class="flex items-center gap-4 p-4 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg hover:border-slate-300 transition-colors"
+                    class="flex items-center gap-4 p-4 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg hover:border-slate-300 dark:hover:border-warm-600 transition-colors"
                 >
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-2">
@@ -328,7 +339,7 @@
                             <span
                                 class="px-1.5 py-0.5 text-[10px] font-medium rounded
  {token.active
-                                    ? 'bg-green-100 text-green-700'
+                                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
                                     : 'bg-slate-100 dark:bg-warm-900 text-slate-500 dark:text-slate-400'}"
                             >
                                 {token.active ? "Active" : "Disabled"}
@@ -356,6 +367,12 @@
                                     )}</span
                                 >
                             {/if}
+                            <span
+                                class="text-xs text-slate-400 dark:text-slate-500"
+                                >Last used: {token.last_used_at
+                                    ? formatDate(token.last_used_at)
+                                    : "never"}</span
+                            >
                         </div>
                         <div class="flex flex-wrap gap-1.5 mt-2">
                             {#each token.scopes as scope}
@@ -371,15 +388,15 @@
                         <button
                             class="px-2.5 py-1.5 text-xs rounded transition-colors
  {token.active
-                                ? 'text-amber-600 bg-amber-50 hover:bg-amber-100'
-                                : 'text-green-600 bg-green-50 hover:bg-green-100'} cursor-pointer"
+                                ? 'text-amber-600 bg-amber-50 hover:bg-amber-100 dark:text-amber-300 dark:bg-amber-950/30 dark:hover:bg-amber-900/40'
+                                : 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100 dark:text-emerald-300 dark:bg-emerald-950/30 dark:hover:bg-emerald-900/40'} cursor-pointer"
                             onclick={() =>
                                 handleToggleToken(token.id, token.active)}
                         >
                             {token.active ? "Disable" : "Enable"}
                         </button>
                         <button
-                            class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-red-500 hover:bg-red-50 rounded transition-colors cursor-pointer"
+                            class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-vermilion-500 hover:bg-vermilion-50 dark:hover:bg-vermilion-900/40 rounded transition-colors cursor-pointer"
                             onclick={() => handleDeleteToken(token.id)}
                             title="Delete token"
                         >

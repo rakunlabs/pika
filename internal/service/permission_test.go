@@ -21,7 +21,9 @@ func newTestService(t *testing.T) *service.Service {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	return service.New(store)
+	svc := service.New(store)
+	t.Cleanup(svc.Close) // registered after store.Close, so it runs first
+	return svc
 }
 
 // createUserHelper inserts a user via the public CreateUser API so the

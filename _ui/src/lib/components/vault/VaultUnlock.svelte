@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { apiErrorMessage } from "@/lib/api/client";
   import {
     Lock,
     Loader2,
@@ -75,8 +76,8 @@
       addToast("Vault reset — you can create a new one now", "success", 3500);
       // The parent Vault.svelte switch will flip to the setup view
       // automatically because status.initialized is now false.
-    } catch (e: any) {
-      resetErr = e?.response?.data?.message ?? e?.message ?? "Reset failed";
+    } catch (e) {
+      resetErr = apiErrorMessage(e, "Reset failed");
     } finally {
       resetBusy = false;
     }
@@ -144,8 +145,8 @@
         let sk: Uint8Array;
         try {
           sk = parseSecretKey(secretKeyRaw);
-        } catch (e: any) {
-          err = e?.message ?? "Invalid Secret Key format";
+        } catch (e) {
+          err = apiErrorMessage(e, "Invalid Secret Key format");
           return;
         }
         const ok = await vaultStore.unlock(password, sk);
@@ -169,8 +170,8 @@
       trustChecked = false;
       addToast("Vault unlocked", "success", 2000);
       onUnlocked?.();
-    } catch (e: any) {
-      err = e?.response?.data?.message ?? e?.message ?? "Unlock failed";
+    } catch (e) {
+      err = apiErrorMessage(e, "Unlock failed");
     } finally {
       busy = false;
     }
@@ -195,7 +196,7 @@
       <p
         class="text-sm text-slate-600 dark:text-slate-300 mb-2 flex items-center gap-1.5"
       >
-        <ShieldCheck size={14} class="text-green-600 dark:text-green-500" />
+        <ShieldCheck size={14} class="text-emerald-600 dark:text-emerald-500" />
         This device is trusted — only your master password is needed.
       </p>
     {:else}
@@ -324,7 +325,7 @@
             resetErr = "";
             resetConfirm = "";
           }}
-          class="w-full text-xs text-slate-500 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 underline cursor-pointer"
+          class="w-full text-xs text-slate-500 dark:text-slate-400 hover:text-vermilion-600 dark:hover:text-red-400 underline cursor-pointer"
         >
           Lost your Secret Key or master password? Reset the vault…
         </button>
@@ -370,7 +371,7 @@
               onclick={doReset}
               disabled={resetBusy ||
                 resetConfirm.trim().toUpperCase() !== "RESET"}
-              class="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm rounded bg-red-600 text-white font-medium hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              class="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm rounded bg-vermilion-600 text-white font-medium hover:bg-vermilion-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
             >
               {#if resetBusy}<Loader2 size={14} class="animate-spin" />{/if}
               Reset vault permanently

@@ -36,6 +36,16 @@ token exists.**
 - **Never** use `slate-*` for a dark-mode background. Dark mode is warm-* only.
 - **Never** use `gray-*` (the cooler Tailwind default). We use `slate-*` for light, `warm-*` for dark.
 - `accent-600` is the dark-enough teal for light-mode text + bg. `accent-400` is the dark-mode pair.
+- Destructive UI uses `vermilion-*`, not raw `red-*`. Success uses `emerald-*`, not `green-*`.
+  (`red-*` is still allowed for the destructive *input* variant in §3 and the red callout in §8.)
+
+### Documented exceptions
+
+| Where | What | Why |
+|---|---|---|
+| Config editor, hex viewer, external value editor, External page footer | `editor-*` tokens (`bg-editor-bg`, `bg-editor-panel`, `border-editor-border`, `hover:bg-editor-hover`, `bg-editor-row-hover`, `text-editor-fg`) | A fixed VS Code "Dark+" chrome around the CodeMirror surface, identical in both app themes. The hex values live in `global.css` (`--color-editor-*`); never inline them as `bg-[#…]`. |
+| `vault/EmergencyKit.svelte` standalone HTML | Hex colors inside the generated `<style>` block | The kit is downloaded/printed as a self-contained HTML document with no access to the app's Tailwind build. |
+| Brand logo glyph (`<Blocks color="#EF233C">`) | Hex passed to the Lucide `color` prop | Equals `vermilion-500`; Lucide's `color` prop needs a literal. |
 
 ---
 
@@ -65,6 +75,11 @@ mode" report you may have seen.
 ---
 
 ## 3. The canonical form input
+
+> The class strings in §3, §4 and §7 are exported from `_ui/src/lib/ui.ts`
+> (`inputClass`, `selectClass`, `labelClass`, `btnPrimary`, `btnSecondary`,
+> `btnGhost`, `btnDanger`, `btnIcon`, `cardClass`). Import them instead of
+> re-typing the class soup.
 
 Every `<input>`, `<textarea>`, `<select>` in a vault / settings context should
 match this class string:
@@ -219,6 +234,22 @@ When using an icon as the only content of a button, the button needs:
 Spacing scale: `space-y-6` between major sections of a page, `space-y-4`
 between groups inside a card, `space-y-2` between rows. Padding: `p-4` for
 compact cards, `p-6` for full-width hero-feeling cards (login, vault setup).
+
+---
+
+### Modals & confirmations
+
+- Use `lib/components/Modal.svelte` for dialogs. It renders the panel on the
+  card tier (`bg-white dark:bg-warm-800`), sets `role="dialog"`,
+  `aria-modal="true"`, `aria-labelledby` (pass `labelledby="<title id>"`),
+  closes on Escape / backdrop, moves focus inside on open (first
+  `[data-autofocus]` element, else first focusable), traps Tab, and restores
+  focus on close.
+- Never call the native `confirm()`. Use
+  `await confirmDialog({ title, message, confirmLabel, danger })` from
+  `lib/store/confirm.svelte.ts`; the single `<ConfirmDialog />` host is
+  mounted in `App.svelte`.
+- Collapsible settings cards use `lib/components/CollapsibleCard.svelte`.
 
 ---
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -34,9 +35,9 @@ func (s *Service) searchFolder(ctx context.Context, folderPath string, lowerQuer
 	folder, err := s.store.Folders().Get(ctx, folderPath)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return nil // skip folders we can't read
+			return nil // folder vanished mid-walk
 		}
-		return nil
+		return fmt.Errorf("search: reading folder %q: %w", folderPath, err)
 	}
 
 	// Search files in this folder

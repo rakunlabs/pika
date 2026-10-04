@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/rakunlabs/pika/internal/netguard"
 )
 
 // httpSink sends events as HTTP requests.
@@ -36,9 +38,13 @@ func NewHTTPSink(target *HTTPTarget) (Sink, error) {
 		timeout = d
 	}
 
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = netguard.Dialer().DialContext
+
 	return &httpSink{
 		client: &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: transport,
 		},
 		url:     target.URL,
 		method:  method,

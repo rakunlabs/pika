@@ -442,10 +442,15 @@ func (s *Service) GetForwardAuthSettings(ctx context.Context) *ForwardAuthSettin
 }
 
 func (s *Service) UpdateSettings(ctx context.Context, settings *Settings) error {
-	return s.store.Settings().Set(ctx, settings)
+	return s.SaveSettings(ctx, settings)
 }
 
-// SaveSettings persists a full Settings object — used by the auth migration path at boot.
+// SaveSettings persists a full Settings object and drops cached external
+// clients so edited credentials take effect immediately.
 func (s *Service) SaveSettings(ctx context.Context, settings *Settings) error {
-	return s.store.Settings().Set(ctx, settings)
+	if err := s.store.Settings().Set(ctx, settings); err != nil {
+		return err
+	}
+	s.purgeExternalClients()
+	return nil
 }

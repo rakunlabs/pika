@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { confirmDialog } from "@/lib/store/confirm.svelte";
   import { X, FileJson, FileCode, File, FileText } from "lucide-svelte";
   import { configStore } from "@/lib/store/config.svelte";
   import type { Tab, FileFormat } from "@/lib/types/config";
@@ -19,10 +20,17 @@
     configStore.selectTab(tab.id);
   }
 
-  function handleCloseTab(e: MouseEvent, tab: Tab) {
+  async function handleCloseTab(e: MouseEvent, tab: Tab) {
     e.stopPropagation();
     if (tab.isDirty) {
-      if (!confirm(`"${tab.name}" has unsaved changes. Close anyway?`)) {
+      if (
+        !(await confirmDialog({
+          title: `Close "${tab.name}"?`,
+          message: "It has unsaved changes that will be lost.",
+          confirmLabel: "Close anyway",
+          danger: true,
+        }))
+      ) {
         return;
       }
     }
@@ -42,7 +50,7 @@
 >
   {#if configStore.openTabs.length === 0}
     <div
-      class="flex items-center px-4 text-gray-400 dark:text-slate-500 text-[13px]"
+      class="flex items-center px-4 text-slate-400 dark:text-slate-500 text-[13px]"
     >
       No files open
     </div>
@@ -68,8 +76,8 @@
         >
           <span
             class="flex items-center shrink-0 {isActive
-              ? 'text-gray-500 dark:text-slate-400'
-              : 'text-gray-400 dark:text-slate-500'}"
+              ? 'text-slate-500 dark:text-slate-400'
+              : 'text-slate-400 dark:text-slate-500'}"
           >
             <FileIcon size={14} />
           </span>
@@ -80,11 +88,11 @@
             ></span>
           {/if}
           <button
-            class="flex items-center justify-center p-0.5 rounded text-gray-400 dark:text-slate-500 bg-transparent border-none cursor-pointer transition-all
+            class="flex items-center justify-center p-0.5 rounded text-slate-400 dark:text-slate-500 bg-transparent border-none cursor-pointer transition-all
  {tab.isDirty
               ? 'opacity-0 group-hover:opacity-100'
               : 'opacity-0 group-hover:opacity-100'}
- hover:bg-red-600 hover:text-white"
+ hover:bg-vermilion-600 hover:text-white"
             onclick={(e) => handleCloseTab(e, tab)}
             aria-label="Close tab"
           >

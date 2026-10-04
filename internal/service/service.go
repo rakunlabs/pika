@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"sync"
 
 	"github.com/rakunlabs/pika/internal/external"
@@ -14,34 +12,31 @@ import (
 type Service struct {
 	store Storage
 
-	// vaultClients caches Vault clients keyed by vault address.
-	// This avoids re-authenticating on every config fetch.
-	vaultMu      sync.RWMutex
-	vaultClients map[string]*external.VaultClient
-
-	// kubeClients caches Kubernetes clients keyed by kubeconfig path (or "" for in-cluster).
-	kubeMu      sync.RWMutex
-	kubeClients map[string]*external.KubeClient
-
-	// gcpClients caches GCP Secret Manager clients keyed by project ID.
-	gcpMu      sync.RWMutex
-	gcpClients map[string]*external.GCPSecretManagerClient
-
-	// gcpParamClients caches GCP Parameter Manager clients keyed by
-	// "<service account JSON>|<location>". Parameter Manager is
-	// location-scoped, so the same service account can drive multiple
-	// clients (e.g. one for "global", one for "us-central1") and we
-	// want each to keep its own cached access token.
-	gcpParamMu      sync.RWMutex
-	gcpParamClients map[string]*external.GCPParameterManagerClient
-
-	// azureClients caches Azure Key Vault clients keyed by vault URL.
-	azureMu      sync.RWMutex
-	azureClients map[string]*external.AzureKeyVaultClient
+	// External backend clients, cached by a hash of the full client
+	// configuration (credentials included) so editing a resource yields a
+	// fresh client. Purged on every settings save; see purgeExternalClients.
+	vaultClients    *clientCache[*external.VaultClient]
+	kubeClients     *clientCache[*external.KubeClient]
+	gcpClients      *clientCache[*external.GCPSecretManagerClient]
+	gcpParamClients *clientCache[*external.GCPParameterManagerClient]
+	azureClients    *clientCache[*external.AzureKeyVaultClient]
 
 	// hookDispatcher emits events when config operations occur.
 	// May be nil if hooks are not configured.
 	hookDispatcher *hook.Dispatcher
+
+	// auditLog buffers audit entries; nil when storage is absent.
+	auditLog *auditLog
+	// tokenUsage batches API token last-used timestamps.
+	tokenUsage *tokenUsage
+	// canWriteBackground gates background storage writes; nil = always.
+	canWriteBackground func() bool
+	// bgWorker owns Service-level background loops.
+	bgWorker *worker
+
+	// coordMu guards the swappable coordinators below (passkeys, totp,
+	// vault), which are replaced on auth reload while requests run.
+	coordMu sync.RWMutex
 
 	// passkeys is the WebAuthn coordinator. nil when the deployment
 	// has no passkey configuration (e.g. RPID unset). Set by
@@ -80,14 +75,22 @@ type Service struct {
 }
 
 func New(store Storage) *Service {
-	return &Service{
-		store:        store,
-		vaultClients: make(map[string]*external.VaultClient),
-		kubeClients:  make(map[string]*external.KubeClient),
-		gcpClients:      make(map[string]*external.GCPSecretManagerClient),
-		gcpParamClients: make(map[string]*external.GCPParameterManagerClient),
-		azureClients:    make(map[string]*external.AzureKeyVaultClient),
+	s := &Service{
+		store:           store,
+		vaultClients:    newClientCache[*external.VaultClient](),
+		kubeClients:     newClientCache[*external.KubeClient](),
+		gcpClients:      newClientCache[*external.GCPSecretManagerClient](),
+		gcpParamClients: newClientCache[*external.GCPParameterManagerClient](),
+		azureClients:    newClientCache[*external.AzureKeyVaultClient](),
+		tokenUsage:      newTokenUsage(),
+		bgWorker:        newWorker(),
 	}
+	if store != nil {
+		s.auditLog = &auditLog{retention: DefaultAuditRetention}
+		s.startTokenUsageFlusher()
+		s.startAuditWorker()
+	}
+	return s
 }
 
 // SessionStorage returns the session storage backend.
@@ -150,188 +153,110 @@ func (s *Service) AzureClient(a *external.Azure) *external.AzureKeyVaultClient {
 	return s.getAzureClient(a)
 }
 
-// kubeClientCacheKey derives a stable cache key for a Kubernetes external resource.
-// Inline kubeconfig content is hashed (not stored verbatim) so the key stays bounded.
-func kubeClientCacheKey(k8s *external.Kubernetes) string {
-	if k8s == nil {
-		return "in-cluster"
-	}
-	// Suffix the proxy mode + URL so the same kubeconfig routed through
-	// different proxies maps to distinct cached clients.
-	proxySuffix := "|" + k8s.ProxyMode + "|" + k8s.Proxy
-	if k8s.KubeconfigContent != "" {
-		sum := sha256.Sum256([]byte(k8s.KubeconfigContent))
-		return "inline:" + hex.EncodeToString(sum[:]) + proxySuffix
-	}
-	if k8s.Kubeconfig != "" {
-		return "path:" + k8s.Kubeconfig + proxySuffix
-	}
-	return "in-cluster" + proxySuffix
-}
-
 // getKubeClient returns a cached or new KubeClient for the given Kubernetes config.
 func (s *Service) getKubeClient(k8s *external.Kubernetes) (*external.KubeClient, error) {
-	key := kubeClientCacheKey(k8s)
-
-	s.kubeMu.RLock()
-	client, exists := s.kubeClients[key]
-	s.kubeMu.RUnlock()
-
-	if exists {
-		return client, nil
-	}
-
-	s.kubeMu.Lock()
-	defer s.kubeMu.Unlock()
-
-	// Double-check after acquiring write lock
-	if client, exists = s.kubeClients[key]; exists {
-		return client, nil
-	}
-
-	client, err := external.NewKubeClient(k8s)
-	if err != nil {
-		return nil, err
-	}
-
-	s.kubeClients[key] = client
-	return client, nil
+	return s.kubeClients.get(configCacheKey(k8s), func() (*external.KubeClient, func(), error) {
+		client, err := external.NewKubeClient(k8s)
+		return client, nil, err
+	})
 }
 
 // getVaultClient returns a cached or new VaultClient for the given vault config.
 // If the client doesn't exist yet, it creates one, configures authentication,
 // and starts background token renewal.
 func (s *Service) getVaultClient(ctx context.Context, vault *external.Vault) *external.VaultClient {
-	// Cache key includes the proxy mode + URL so two resources that share
-	// a Vault address but route through different proxies get distinct
-	// clients.
-	cacheKey := vault.Address + "|" + vault.ProxyMode + "|" + vault.Proxy
+	// Only the fields that shape the client (address, credentials, proxy)
+	// go into the key; mount/kv_version are per-call and share a client.
+	key := configCacheKey(struct {
+		Address, Token, Proxy, ProxyMode string
+		AppRole                          *external.VaultAppRole
+	}{vault.Address, vault.Token, vault.Proxy, vault.ProxyMode, vault.AppRole})
 
-	s.vaultMu.RLock()
-	client, exists := s.vaultClients[cacheKey]
-	s.vaultMu.RUnlock()
+	client, _ := s.vaultClients.get(key, func() (*external.VaultClient, func(), error) {
+		client := external.NewVaultClient(vault.Address, vault.ProxyMode, vault.Proxy)
 
-	if exists {
-		return client
-	}
-
-	s.vaultMu.Lock()
-	defer s.vaultMu.Unlock()
-
-	// Double-check after acquiring write lock
-	if client, exists = s.vaultClients[cacheKey]; exists {
-		return client
-	}
-
-	client = external.NewVaultClient(vault.Address, vault.ProxyMode, vault.Proxy)
-
-	// Configure authentication
-	if vault.AppRole != nil {
-		client.SetAppRole(vault.AppRole)
-		// Enable background token renewal for AppRole-based auth.
-		// The renewal goroutine must outlive the request that first
-		// created this client, so bind it to the server-lifetime
-		// context rather than the per-request ctx. Fall back to the
-		// request ctx only when no root context was set (e.g. tests).
-		renewCtx := s.rootCtx
-		if renewCtx == nil {
-			renewCtx = ctx
+		if vault.AppRole != nil {
+			client.SetAppRole(vault.AppRole)
+			// The renewal goroutine must outlive the request that first
+			// created this client, so bind it to the server-lifetime
+			// context rather than the per-request ctx. Fall back to the
+			// request ctx only when no root context was set (e.g. tests).
+			// Cancelled when the client is evicted from the cache.
+			parent := s.rootCtx
+			if parent == nil {
+				parent = ctx
+			}
+			renewCtx, cancel := context.WithCancel(parent)
+			client.StartRenewal(renewCtx)
+			return client, cancel, nil
 		}
-		client.StartRenewal(renewCtx)
-	} else if vault.Token != "" {
-		client.SetToken(vault.Token)
-	}
 
-	s.vaultClients[cacheKey] = client
+		if vault.Token != "" {
+			client.SetToken(vault.Token)
+		}
+		return client, nil, nil
+	})
+
 	return client
 }
 
 // getGCPClient returns a cached or new GCP Secret Manager client.
 func (s *Service) getGCPClient(gcp *external.GCP) (*external.GCPSecretManagerClient, error) {
-	// Cache key is the full JSON (contains project_id) plus the proxy
-	// mode + URL so resources sharing credentials but different proxies
-	// stay apart.
-	key := gcp.ServiceAccountJSON + "|" + gcp.ProxyMode + "|" + gcp.Proxy
+	key := configCacheKey(struct {
+		ServiceAccountJSON, Proxy, ProxyMode string
+	}{gcp.ServiceAccountJSON, gcp.Proxy, gcp.ProxyMode})
 
-	s.gcpMu.RLock()
-	client, exists := s.gcpClients[key]
-	s.gcpMu.RUnlock()
-
-	if exists {
-		return client, nil
-	}
-
-	s.gcpMu.Lock()
-	defer s.gcpMu.Unlock()
-
-	if client, exists = s.gcpClients[key]; exists {
-		return client, nil
-	}
-
-	client, err := external.NewGCPSecretManagerClient(gcp.ServiceAccountJSON, gcp.ProxyMode, gcp.Proxy)
-	if err != nil {
-		return nil, err
-	}
-
-	s.gcpClients[key] = client
-	return client, nil
+	return s.gcpClients.get(key, func() (*external.GCPSecretManagerClient, func(), error) {
+		client, err := external.NewGCPSecretManagerClient(gcp.ServiceAccountJSON, gcp.ProxyMode, gcp.Proxy)
+		return client, nil, err
+	})
 }
 
 // getGCPParameterClient returns a cached or new GCP Parameter Manager
-// client. Cache key combines the service-account JSON and the
-// requested location: different locations need separate clients even
-// when they share credentials, because each client pins its own
-// location for every call.
+// client. Different locations need separate clients even when they share
+// credentials, because each client pins its own location for every call.
 func (s *Service) getGCPParameterClient(g *external.GCPParameter) (*external.GCPParameterManagerClient, error) {
 	location := g.GetLocation()
-	key := g.ServiceAccountJSON + "|" + location + "|" + g.ProxyMode + "|" + g.Proxy
+	key := configCacheKey(struct {
+		ServiceAccountJSON, Location, Proxy, ProxyMode string
+	}{g.ServiceAccountJSON, location, g.Proxy, g.ProxyMode})
 
-	s.gcpParamMu.RLock()
-	client, exists := s.gcpParamClients[key]
-	s.gcpParamMu.RUnlock()
-
-	if exists {
-		return client, nil
-	}
-
-	s.gcpParamMu.Lock()
-	defer s.gcpParamMu.Unlock()
-
-	if client, exists = s.gcpParamClients[key]; exists {
-		return client, nil
-	}
-
-	client, err := external.NewGCPParameterManagerClient(g.ServiceAccountJSON, location, g.ProxyMode, g.Proxy)
-	if err != nil {
-		return nil, err
-	}
-
-	s.gcpParamClients[key] = client
-	return client, nil
+	return s.gcpParamClients.get(key, func() (*external.GCPParameterManagerClient, func(), error) {
+		client, err := external.NewGCPParameterManagerClient(g.ServiceAccountJSON, location, g.ProxyMode, g.Proxy)
+		return client, nil, err
+	})
 }
 
 // getAzureClient returns a cached or new Azure Key Vault client.
 func (s *Service) getAzureClient(azure *external.Azure) *external.AzureKeyVaultClient {
-	// Cache key includes the proxy mode + URL so the same vault URL
-	// routed through different proxies yields distinct clients.
-	cacheKey := azure.VaultURL + "|" + azure.ProxyMode + "|" + azure.Proxy
+	key := configCacheKey(struct {
+		VaultURL, TenantID, ClientID, ClientSecret, Proxy, ProxyMode string
+	}{azure.VaultURL, azure.TenantID, azure.ClientID, azure.ClientSecret, azure.Proxy, azure.ProxyMode})
 
-	s.azureMu.RLock()
-	client, exists := s.azureClients[cacheKey]
-	s.azureMu.RUnlock()
+	client, _ := s.azureClients.get(key, func() (*external.AzureKeyVaultClient, func(), error) {
+		return external.NewAzureKeyVaultClient(azure.VaultURL, azure.TenantID, azure.ClientID, azure.ClientSecret, azure.ProxyMode, azure.Proxy), nil, nil
+	})
 
-	if exists {
-		return client
-	}
-
-	s.azureMu.Lock()
-	defer s.azureMu.Unlock()
-
-	if client, exists = s.azureClients[cacheKey]; exists {
-		return client
-	}
-
-	client = external.NewAzureKeyVaultClient(azure.VaultURL, azure.TenantID, azure.ClientID, azure.ClientSecret, azure.ProxyMode, azure.Proxy)
-	s.azureClients[cacheKey] = client
 	return client
+}
+
+// purgeExternalClients drops every cached external client (stopping
+// background Vault renewals). Called after settings change so removed or
+// edited resources don't keep stale clients alive.
+func (s *Service) purgeExternalClients() {
+	s.vaultClients.purge()
+	s.kubeClients.purge()
+	s.gcpClients.purge()
+	s.gcpParamClients.purge()
+	s.azureClients.purge()
+}
+
+// Close stops the background workers of every attached coordinator.
+// Call once on shutdown.
+func (s *Service) Close() {
+	s.bgWorker.stop()
+	s.SetPasskeyService(nil)
+	s.SetTOTPService(nil)
+	s.SetVaultService(nil)
+	s.purgeExternalClients()
 }

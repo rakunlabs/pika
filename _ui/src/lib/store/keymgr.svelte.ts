@@ -26,6 +26,7 @@
 // header signal is sufficient and lower-latency.
 
 import axios from 'axios';
+import { apiErrorMessage, apiServerMessage, apiErrorStatus } from '@/lib/api/client';
 
 export interface KeyStatus {
   initialized: boolean;
@@ -93,12 +94,12 @@ function createKeymgrStore() {
       await axios.post('/api/v1/key/initialize', { key });
       status = { initialized: true, unlocked: true };
       return true;
-    } catch (err: any) {
-      const msg = err?.response?.data?.message ?? err?.message ?? 'Initialize failed';
+    } catch (err) {
+      const msg = apiErrorMessage(err, 'Initialize failed');
       setError(msg);
       // 409 means "already initialized" — refresh status so the UI
       // can switch to the unlock form on the next render.
-      if (err?.response?.status === 409) {
+      if (apiErrorStatus(err) === 409) {
         await refreshStatus();
       }
       return false;
@@ -119,19 +120,19 @@ function createKeymgrStore() {
       await axios.post('/api/v1/key/unlock', { key });
       status = { initialized: true, unlocked: true };
       return true;
-    } catch (err: any) {
-      const code = err?.response?.status;
+    } catch (err) {
+      const code = apiErrorStatus(err);
       // 400 / 401 / 403 are all "user-facing rejection" cases — the
       // server told us why and we should show that to the user
       // without further alarm.
       if (code === 400 || code === 401 || code === 403) {
-        const msg = err?.response?.data?.message ?? 'Wrong key';
+        const msg = apiServerMessage(err, 'Wrong key');
         setError(msg);
         return false;
       }
       // Anything else is unexpected — surface it but don't pretend
       // the unlock succeeded.
-      const msg = err?.response?.data?.message ?? err?.message ?? 'Unlock failed';
+      const msg = apiErrorMessage(err, 'Unlock failed');
       setError(msg);
       return false;
     } finally {
@@ -151,8 +152,8 @@ function createKeymgrStore() {
       await axios.post('/api/v1/key/lock');
       if (status) status = { ...status, unlocked: false };
       return true;
-    } catch (err: any) {
-      setError(err?.response?.data?.message ?? 'Lock failed');
+    } catch (err) {
+      setError(apiServerMessage(err, 'Lock failed'));
       return false;
     } finally {
       busy = false;
@@ -174,8 +175,8 @@ function createKeymgrStore() {
       // Server stays unlocked under the new key.
       status = { initialized: true, unlocked: true };
       return true;
-    } catch (err: any) {
-      setError(err?.response?.data?.message ?? 'Rotate failed');
+    } catch (err) {
+      setError(apiServerMessage(err, 'Rotate failed'));
       return false;
     } finally {
       busy = false;

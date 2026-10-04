@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/felixge/httpsnoop"
 	"github.com/rakunlabs/ada/middleware/ratelimit"
 
 	"github.com/rakunlabs/pika/internal/service"
@@ -211,4 +212,86 @@ func userKeyFromBody(r *http.Request) []string {
 		return nil
 	}
 	return []string{"user:" + username}
+}
+
+// UnlockGuard rate-limits a single endpoint that verifies a secret (e.g.
+// the server key unlock) per client IP, reusing the login rate-limit
+// settings. Failed attempts are 401/403 responses. Returns a passthrough
+// when rate limiting is disabled.
+func UnlockGuard(name string, cfg *service.AuthRateLimitSettings, trustedProxies []*net.IPNet) func(http.Handler) http.Handler {
+	if cfg == nil || !cfg.Enabled {
+		return passthrough
+	}
+
+	store, err := ratelimit.NewMemoryStore(loginGuardStoreCapacity)
+	if err != nil {
+		slog.Error("authx: unlock guard disabled — failed to create store", "guard", name, "error", err.Error())
+		return passthrough
+	}
+
+	return ratelimit.Middleware(ratelimit.Config{
+		Window:        cfg.Window,
+		SoftThreshold: cfg.IPSoftThreshold,
+		HardThreshold: cfg.IPHardThreshold,
+		BackoffBase:   cfg.BackoffBase,
+		BackoffMax:    cfg.BackoffMax,
+		KeyFunc: func(r *http.Request) []string {
+			ip := ClientIP(r, trustedProxies)
+			if ip == "" {
+				return nil
+			}
+			return []string{name + ":" + ip}
+		},
+		ShouldCount: func(_ *http.Request, status int) bool {
+			return status == http.StatusUnauthorized || status == http.StatusForbidden
+		},
+		OnReject: func(r *http.Request, key string, reason ratelimit.RejectReason, retryAfter time.Duration) {
+			slog.Warn("auth: unlock blocked",
+				"guard", name,
+				"key", key,
+				"reason", string(reason),
+				"retry_after_s", int(retryAfter.Seconds()),
+				"path", r.URL.Path,
+			)
+		},
+		Store: store,
+	})
+}
+
+// LoginAudit records password-login and registration attempts (success
+// or failure) in the audit log. Only the submitted username is kept.
+func LoginAudit(svc *service.Service, trustedProxies []*net.IPNet) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !shouldGuard(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			username := ""
+			if keys := userKeyFromBody(r); len(keys) == 1 {
+				username = strings.TrimPrefix(keys[0], "user:")
+			}
+
+			m := httpsnoop.CaptureMetrics(next, w, r)
+
+			action := "login.succeeded"
+			if strings.Contains(r.URL.Path, "/login/register/") {
+				action = "register.succeeded"
+			}
+			if m.Code >= 400 {
+				action = strings.TrimSuffix(action, "succeeded") + "failed"
+			}
+
+			svc.Audit(service.AuditEntry{
+				Action:    action,
+				Actor:     username,
+				ActorType: "user",
+				Target:    r.URL.Path,
+				Status:    m.Code,
+				IP:        ClientIP(r, trustedProxies),
+				RequestID: r.Header.Get("X-Request-Id"),
+			})
+		})
+	}
 }

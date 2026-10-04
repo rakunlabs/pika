@@ -198,127 +198,14 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 			}
 		}
 
-		var sourceData []byte
-		var sourceName string
-		var sourceMeta *FileMeta // populated for internal sources so we can recurse
-		var err error
-
-		if entry.Resource != "" {
-			// External resource: lookup by resource name and fetch with path
-			sourceName = entry.Resource + ":" + entry.Path
-			sourceData, err = s.fetchExternalConfig(ctx, entry.Resource, entry.Path)
-		} else {
-			// Internal file or legacy external (backward compat).
-			// Cycle guard: if this path is already on the current ancestor
-			// chain we'd recurse forever — fail fast with a clear error.
-			if visiting[entry.Source] {
-				return nil, fmt.Errorf("inheritance cycle detected at %q", entry.Source)
-			}
-			sourceName = entry.Source
-			var srcFile *File
-			srcFile, err = s.File(ctx, entry.Source, 0)
-			if err == nil {
-				sourceData = srcFile.Data
-				meta := srcFile.Meta
-				sourceMeta = &meta
-				if sourceData, err = renderConfigTemplate(sourceData, entry.Source, "", sourceMeta.Format, sourceMeta); err != nil {
-					err = fmt.Errorf("rendering template from %q: %w", sourceName, err)
-				}
-			}
-		}
-
+		sourceJSON, sourceName, err := s.loadInheritSource(ctx, entry, visiting)
 		if err != nil {
-			return nil, fmt.Errorf("resolving inheritance from %q: %w", sourceName, err)
+			return nil, err
 		}
 
-		// Ensure source data is JSON for merging
-		sourceJSON := sourceData
-		if entry.Resource == "" {
-			// For internal sources, try to detect format and convert
-			if sourceMeta != nil && sourceMeta.Format != "" && sourceMeta.Format != "json" && sourceMeta.Format != "raw" {
-				converted, convErr := ConvertFormat(sourceData, sourceMeta.Format, "json")
-				if convErr == nil {
-					sourceJSON = converted
-				}
-			}
-
-			// Transitively resolve the source's own inherits before
-			// applying paths/inject/merge so e.g. A -> B -> C composes
-			// correctly: B's view of itself includes everything inherited
-			// from C, which is then what A sees.
-			if sourceMeta != nil && len(sourceMeta.Inherits) > 0 {
-				visiting[entry.Source] = true
-				resolved, recErr := s.resolveInherits(ctx, sourceJSON, sourceMeta.Inherits, visiting)
-				delete(visiting, entry.Source)
-				if recErr != nil {
-					return nil, fmt.Errorf("resolving nested inheritance from %q: %w", sourceName, recErr)
-				}
-				sourceJSON = resolved
-			}
-		}
-
-		// Explicit format hint for external sources.
-		//
-		// Providers differ in what Fetch returns:
-		//   - HTTP: raw response bytes (could be YAML/TOML/anything).
-		//   - Consul/etcd/GCP: JSON-marshalled map. If the upstream
-		//     value parsed as a JSON object the map is that object;
-		//     otherwise it's the synthetic {"value":"<raw-string>"}
-		//     wrapper.
-		//   - Vault/Kubernetes/AWS/Azure: JSON-marshalled map of the
-		//     structured payload (no wrapper).
-		//
-		// When the user picks Decode As, we must handle both shapes:
-		//
-		//   1. sourceJSON is already valid JSON (Consul wrapper or
-		//      otherwise) → try decodeWrappedValue first; if a wrapper
-		//      is detected, decode the inner string with the chosen
-		//      format. Non-wrapper JSON gets the user's format
-		//      ignored (overriding a successful structured parse with
-		//      a different decoder is almost always a mistake).
-		//   2. sourceJSON is not valid JSON (HTTP returning raw YAML
-		//      bytes) → ConvertFormat the whole payload with the
-		//      chosen decoder so the merge pipeline gets real
-		//      structure.
-		//
-		if entry.Format != "" && entry.Resource != "" {
-			if decoded, ok := decodeWrappedValue(sourceJSON, entry.Format); ok {
-				sourceJSON = decoded
-			} else if !json.Valid(sourceJSON) {
-				// Raw non-JSON payload (the HTTP-provider case). Try
-				// to parse it directly with the requested decoder.
-				// Swallow errors quietly: an invalid YAML/TOML body
-				// is a user mistake the Render output will surface
-				// downstream when merge fails or returns empty.
-				if converted, convErr := ConvertFormat(sourceJSON, entry.Format, "json"); convErr == nil {
-					sourceJSON = converted
-				}
-			}
-		}
-
-		// Filter by paths if specified. The pipeline is intentionally
-		// literal here: provider output → optional Format decode →
-		// paths filter applied verbatim. No "renames" or "value"
-		// magic — the user sees exactly the keys the source produced
-		// and picks among them with names they typed themselves. If
-		// the user wants the wrapper's literal "value" key they put
-		// "value" in Include Paths; if they decoded and now want
-		// "host", they type "host". Predictable.
-		if len(entry.Paths) > 0 {
-			filtered, err := filterByPaths(sourceJSON, entry.Paths)
-			if err != nil {
-				return nil, fmt.Errorf("filtering paths from %q: %w", sourceName, err)
-			}
-			sourceJSON = filtered
-		}
-
-		// Inject at target path if specified
-		if entry.Inject != "" {
-			injected, err := injectAtPath(sourceJSON, entry.Inject)
-			if err != nil {
-				return nil, fmt.Errorf("injecting at %q from %q: %w", entry.Inject, sourceName, err)
-			}
-			sourceJSON = injected
+		sourceJSON, err = shapeInheritedData(sourceJSON, sourceName, entry)
+		if err != nil {
+			return nil, err
 		}
 
 		// Merge: inherited data is the base, current data overrides
@@ -330,6 +217,143 @@ func (s *Service) resolveInherits(ctx context.Context, currentData []byte, entri
 	}
 
 	return currentData, nil
+}
+
+// loadInheritSource fetches one inherit entry's data as JSON. Internal
+// sources are template-rendered, converted to JSON and have their own
+// inherits resolved (with cycle detection via visiting). It also returns
+// a display name for error messages.
+func (s *Service) loadInheritSource(ctx context.Context, entry InheritEntry, visiting map[string]bool) ([]byte, string, error) {
+	var sourceData []byte
+	var sourceName string
+	var sourceMeta *FileMeta // populated for internal sources so we can recurse
+	var err error
+
+	if entry.Resource != "" {
+		// External resource: lookup by resource name and fetch with path
+		sourceName = entry.Resource + ":" + entry.Path
+		sourceData, err = s.fetchExternalConfig(ctx, entry.Resource, entry.Path)
+	} else {
+		// Internal file or legacy external (backward compat).
+		// Cycle guard: if this path is already on the current ancestor
+		// chain we'd recurse forever — fail fast with a clear error.
+		if visiting[entry.Source] {
+			return nil, entry.Source, fmt.Errorf("inheritance cycle detected at %q", entry.Source)
+		}
+		sourceName = entry.Source
+		var srcFile *File
+		srcFile, err = s.File(ctx, entry.Source, 0)
+		if err == nil {
+			sourceData = srcFile.Data
+			meta := srcFile.Meta
+			sourceMeta = &meta
+			if sourceData, err = renderConfigTemplate(sourceData, entry.Source, "", sourceMeta.Format, sourceMeta); err != nil {
+				err = fmt.Errorf("rendering template from %q: %w", sourceName, err)
+			}
+		}
+	}
+
+	if err != nil {
+		return nil, sourceName, fmt.Errorf("resolving inheritance from %q: %w", sourceName, err)
+	}
+
+	// Ensure source data is JSON for merging
+	sourceJSON := sourceData
+	if entry.Resource == "" {
+		// For internal sources, try to detect format and convert
+		if sourceMeta != nil && sourceMeta.Format != "" && sourceMeta.Format != "json" && sourceMeta.Format != "raw" {
+			converted, convErr := ConvertFormat(sourceData, sourceMeta.Format, "json")
+			if convErr == nil {
+				sourceJSON = converted
+			}
+		}
+
+		// Transitively resolve the source's own inherits before
+		// applying paths/inject/merge so e.g. A -> B -> C composes
+		// correctly: B's view of itself includes everything inherited
+		// from C, which is then what A sees.
+		if sourceMeta != nil && len(sourceMeta.Inherits) > 0 {
+			visiting[entry.Source] = true
+			resolved, recErr := s.resolveInherits(ctx, sourceJSON, sourceMeta.Inherits, visiting)
+			delete(visiting, entry.Source)
+			if recErr != nil {
+				return nil, sourceName, fmt.Errorf("resolving nested inheritance from %q: %w", sourceName, recErr)
+			}
+			sourceJSON = resolved
+		}
+	}
+
+	return sourceJSON, sourceName, nil
+}
+
+// shapeInheritedData applies an entry's format hint, path filter and
+// inject target to the source data before it is merged.
+func shapeInheritedData(sourceJSON []byte, sourceName string, entry InheritEntry) ([]byte, error) {
+	// Explicit format hint for external sources.
+	//
+	// Providers differ in what Fetch returns:
+	//   - HTTP: raw response bytes (could be YAML/TOML/anything).
+	//   - Consul/etcd/GCP: JSON-marshalled map. If the upstream
+	//     value parsed as a JSON object the map is that object;
+	//     otherwise it's the synthetic {"value":"<raw-string>"}
+	//     wrapper.
+	//   - Vault/Kubernetes/AWS/Azure: JSON-marshalled map of the
+	//     structured payload (no wrapper).
+	//
+	// When the user picks Decode As, we must handle both shapes:
+	//
+	//   1. sourceJSON is already valid JSON (Consul wrapper or
+	//      otherwise) → try decodeWrappedValue first; if a wrapper
+	//      is detected, decode the inner string with the chosen
+	//      format. Non-wrapper JSON gets the user's format
+	//      ignored (overriding a successful structured parse with
+	//      a different decoder is almost always a mistake).
+	//   2. sourceJSON is not valid JSON (HTTP returning raw YAML
+	//      bytes) → ConvertFormat the whole payload with the
+	//      chosen decoder so the merge pipeline gets real
+	//      structure.
+	//
+	if entry.Format != "" && entry.Resource != "" {
+		if decoded, ok := decodeWrappedValue(sourceJSON, entry.Format); ok {
+			sourceJSON = decoded
+		} else if !json.Valid(sourceJSON) {
+			// Raw non-JSON payload (the HTTP-provider case). Try
+			// to parse it directly with the requested decoder.
+			// Swallow errors quietly: an invalid YAML/TOML body
+			// is a user mistake the Render output will surface
+			// downstream when merge fails or returns empty.
+			if converted, convErr := ConvertFormat(sourceJSON, entry.Format, "json"); convErr == nil {
+				sourceJSON = converted
+			}
+		}
+	}
+
+	// Filter by paths if specified. The pipeline is intentionally
+	// literal here: provider output → optional Format decode →
+	// paths filter applied verbatim. No "renames" or "value"
+	// magic — the user sees exactly the keys the source produced
+	// and picks among them with names they typed themselves. If
+	// the user wants the wrapper's literal "value" key they put
+	// "value" in Include Paths; if they decoded and now want
+	// "host", they type "host". Predictable.
+	if len(entry.Paths) > 0 {
+		filtered, err := filterByPaths(sourceJSON, entry.Paths)
+		if err != nil {
+			return nil, fmt.Errorf("filtering paths from %q: %w", sourceName, err)
+		}
+		sourceJSON = filtered
+	}
+
+	// Inject at target path if specified
+	if entry.Inject != "" {
+		injected, err := injectAtPath(sourceJSON, entry.Inject)
+		if err != nil {
+			return nil, fmt.Errorf("injecting at %q from %q: %w", entry.Inject, sourceName, err)
+		}
+		sourceJSON = injected
+	}
+
+	return sourceJSON, nil
 }
 
 // fetchExternalConfig fetches configuration data from an external

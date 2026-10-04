@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
+	mcors "github.com/rakunlabs/ada/middleware/cors"
 	"github.com/rakunlabs/chu"
 	_ "github.com/rakunlabs/chu/loader/external/loaderawssecrets"
 	_ "github.com/rakunlabs/chu/loader/external/loaderawsssm"
@@ -37,6 +39,14 @@ type Config struct {
 	Encryption Encryption     `cfg:"encryption"`
 
 	Telemetry tell.Config `cfg:"telemetry"`
+
+	Audit Audit `cfg:"audit"`
+}
+
+// Audit configures the persisted audit log.
+type Audit struct {
+	// Retention is how long entries are kept; 0 keeps them forever.
+	Retention time.Duration `cfg:"retention" default:"2160h"`
 }
 
 // Encryption carries optional at-rest passphrase that the operator
@@ -72,7 +82,51 @@ type Server struct {
 
 	BasePath string `cfg:"base_path"`
 	TLS      TLS    `cfg:"tls"`
+
+	// CORS configures the global CORS middleware. Empty allow_origins
+	// keeps the middleware default ("*").
+	CORS mcors.Cors `cfg:"cors"`
+
+	Limits Limits `cfg:"limits"`
+
+	Outbound Outbound `cfg:"outbound"`
 }
+
+// Outbound restricts the addresses that webhooks and HTTP inheritance
+// sources may connect to. Allow entries win over deny entries.
+type Outbound struct {
+	// DenyCIDRs replaces the default deny list (link-local / cloud
+	// metadata: 169.254.0.0/16, fe80::/10). Set to an explicit list to
+	// block more, e.g. private ranges.
+	DenyCIDRs []string `cfg:"deny_cidrs"`
+	// AllowCIDRs re-allows addresses inside a denied range.
+	AllowCIDRs []string `cfg:"allow_cidrs"`
+	// DisableGuard turns the check off entirely.
+	DisableGuard bool `cfg:"disable_guard"`
+}
+
+// Limits bounds how much data pika buffers per request/response.
+// Values are in MiB; 0 disables the limit.
+type Limits struct {
+	// RequestBodyMB caps every incoming request body except backup restore.
+	RequestBodyMB int64 `cfg:"request_body_mb" default:"32"`
+	// BackupBodyMB caps the backup restore upload (POST /api/v1/backup).
+	BackupBodyMB int64 `cfg:"backup_body_mb" default:"1024"`
+	// ExternalResponseMB caps responses read from external backends
+	// (Vault, Consul, AWS, GCP, Azure, Kubernetes, etcd, HTTP, GitLab).
+	ExternalResponseMB int64 `cfg:"external_response_mb" default:"16"`
+}
+
+const mib = 1 << 20
+
+// RequestBodyBytes returns the request body limit in bytes (0 = unlimited).
+func (l Limits) RequestBodyBytes() int64 { return l.RequestBodyMB * mib }
+
+// BackupBodyBytes returns the backup restore body limit in bytes (0 = unlimited).
+func (l Limits) BackupBodyBytes() int64 { return l.BackupBodyMB * mib }
+
+// ExternalResponseBytes returns the external response limit in bytes (0 = unlimited).
+func (l Limits) ExternalResponseBytes() int64 { return l.ExternalResponseMB * mib }
 
 type TLS struct {
 	// Enabled controls whether the admin listener can serve HTTPS.

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { inputClass as inputClass_ } from "@/lib/ui";
+  import { apiErrorMessage } from "@/lib/api/client";
   // InheritDialog — modal editor for a single inheritance entry.
   //
   // Why a modal: the inline form inside SettingsPanel grew tall (source type
@@ -162,13 +164,7 @@
       // Surface the server message verbatim — most useful failure modes
       // here (403, 404, upstream timeout) carry an explanation in the
       // body that's worth showing instead of a generic "preview failed".
-      // axios.AxiosError typing isn't worth pulling in for one field.
-      const errObj = e as {
-        response?: { data?: { message?: string } };
-        message?: string;
-      };
-      previewError =
-        errObj?.response?.data?.message || errObj?.message || "Preview failed";
+      previewError = apiErrorMessage(e, "Preview failed");
     } finally {
       previewLoading = false;
     }
@@ -236,14 +232,7 @@
       );
     } catch (e: unknown) {
       externalPathSuggestions = [];
-      const errObj = e as {
-        response?: { data?: { message?: string } };
-        message?: string;
-      };
-      pathsError =
-        errObj?.response?.data?.message ||
-        errObj?.message ||
-        "Failed to list paths";
+      pathsError = apiErrorMessage(e, "Failed to list paths");
     } finally {
       loadingPaths = false;
     }
@@ -303,11 +292,13 @@
   }
 
   // Shared input chrome — kept in sync visually with SettingsPanel.
-  const inputClass =
-    "w-full px-2.5 py-2 text-[13px] font-mono border border-slate-200 dark:border-warm-700 bg-white dark:bg-warm-800 text-slate-700 dark:text-warm-100 placeholder:text-slate-400 dark:placeholder:text-warm-300 rounded focus:outline-none focus:border-accent-500 dark:focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20";
+  // The dialog panel is a tier-1 card (warm-800), so inputs and nested
+  // lists recess to warm-900 per the design system.
+  const inputClass = inputClass_
+    .replace("px-3 py-2 text-sm", "px-2.5 py-2 text-[13px] font-mono");
   const selectClass = inputClass;
   const cardClass =
-    "bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded";
+    "bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded";
 </script>
 
 <svelte:window onkeydown={handleKeyDown} />
@@ -325,14 +316,14 @@
     tabindex="-1"
   >
     <div
-      class="bg-white dark:bg-warm-900 rounded-lg shadow-xl w-full max-w-[560px] max-h-[90vh] flex flex-col overflow-hidden"
+      class="bg-white dark:bg-warm-800 rounded-lg shadow-xl w-full max-w-[560px] max-h-[90vh] flex flex-col overflow-hidden"
     >
       <!-- Header -->
       <div
         class="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-900 shrink-0"
       >
         <div
-          class="flex items-center gap-2.5 text-gray-700 dark:text-slate-200"
+          class="flex items-center gap-2.5 text-slate-700 dark:text-slate-200"
         >
           <GitBranch size={18} />
           <h2 id="inherit-dialog-title" class="text-base font-semibold m-0">
@@ -616,7 +607,7 @@
                       </div>
                     {:else}
                       <pre
-                        class="mt-1 max-h-40 overflow-auto px-2 py-1.5 text-[10px] font-mono leading-snug rounded border border-emerald-300 dark:border-emerald-700 bg-emerald-50/40 dark:bg-emerald-950/20 text-slate-700 dark:text-warm-100">{JSON.stringify(
+                        class="mt-1 max-h-40 overflow-auto px-2 py-1.5 text-[10px] font-mono leading-snug rounded border border-emerald-300 dark:border-emerald-700 bg-emerald-50/40 dark:bg-emerald-950/30 text-slate-700 dark:text-warm-100">{JSON.stringify(
                           previewDecoded,
                           null,
                           2,
@@ -681,7 +672,7 @@
         >
           <button
             type="button"
-            class="px-4 py-2 bg-white dark:bg-warm-900 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-warm-700 rounded text-[13px] font-medium cursor-pointer transition-all hover:bg-slate-100 dark:hover:bg-warm-700"
+            class="px-4 py-2 bg-white dark:bg-warm-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-warm-700 rounded text-[13px] font-medium cursor-pointer transition-all hover:bg-slate-100 dark:hover:bg-warm-700"
             onclick={onClose}>Cancel</button
           >
           <button

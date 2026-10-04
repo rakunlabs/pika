@@ -1,4 +1,6 @@
 <script lang="ts">
+     import { confirmDialog } from "@/lib/store/confirm.svelte";
+     import { apiServerMessage } from "@/lib/api/client";
      import AppCodeMirror from "@/lib/editor/AppCodeMirror.svelte";
      import { json, jsonParseLinter } from "@codemirror/lang-json";
      import { yaml } from "@codemirror/lang-yaml";
@@ -402,8 +404,8 @@
                     `Converted to ${targetFormat.toUpperCase()}`,
                     "success",
                );
-          } catch (error: any) {
-               const msg = error.response?.data?.message || "Conversion failed";
+          } catch (error) {
+               const msg = apiServerMessage(error, "Conversion failed");
                addToast(msg, "alert");
           } finally {
                isConverting = false;
@@ -415,9 +417,12 @@
      async function handleReload() {
           if (!activeTab || isReloading) return;
           if (activeTab.isDirty) {
-               const ok = confirm(
-                    "Unsaved changes will be discarded. Reload from server?",
-               );
+               const ok = await confirmDialog({
+                    title: "Reload from server?",
+                    message: "Unsaved changes will be discarded.",
+                    confirmLabel: "Reload",
+                    danger: true,
+               });
                if (!ok) return;
           }
           isReloading = true;
@@ -495,7 +500,7 @@
      onchange={handleFileSelected}
 />
 
-<div class="flex flex-col h-full bg-[#1e1e1e]">
+<div class="flex flex-col h-full bg-editor-bg">
      {#if activeTab}
           <!-- Editor toolbar.
       `flex-wrap` + gap-y so the left (format / convert) and right
@@ -506,7 +511,7 @@
       shows the file path, and the duplicated label was the main
       thing pushing the toolbar wide enough to overflow. -->
           <div
-               class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-3 py-1.5 bg-[#252526] border-b border-[#3c3c3c] text-xs text-gray-400 dark:text-slate-500 shrink-0"
+               class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-3 py-1.5 bg-editor-panel border-b border-editor-border text-xs text-slate-400 dark:text-slate-500 shrink-0"
           >
                <div class="flex items-center gap-2 min-w-0">
                     <span
@@ -517,11 +522,11 @@
                          <div class="flex items-center gap-1 shrink-0">
                               <ArrowRightLeft
                                    size={11}
-                                   class="text-gray-600 dark:text-slate-300"
+                                   class="text-slate-600 dark:text-slate-300"
                               />
                               {#each convertTargets as target}
                                    <button
-                                        class="px-1.5 py-0.5 text-[10px] font-medium rounded border border-[#3c3c3c] text-gray-500 dark:text-slate-400 bg-transparent cursor-pointer transition-colors hover:bg-[#333] hover:text-gray-200 hover:border-gray-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                                        class="px-1.5 py-0.5 text-[10px] font-medium rounded border border-editor-border text-slate-500 dark:text-slate-400 bg-transparent cursor-pointer transition-colors hover:bg-editor-hover hover:text-slate-200 hover:border-slate-500 disabled:opacity-40 disabled:cursor-not-allowed"
                                         onclick={() => handleConvert(target)}
                                         disabled={isConverting}
                                         title="Convert to {target.toUpperCase()}"
@@ -535,13 +540,13 @@
                <div class="flex flex-wrap items-center gap-1.5">
                     <!-- View mode toggle: Text / Hex -->
                     <div
-                         class="flex items-center rounded border border-[#3c3c3c] overflow-hidden shrink-0"
+                         class="flex items-center rounded border border-editor-border overflow-hidden shrink-0"
                     >
                          <button
                               class="flex items-center gap-1 px-2 py-1 text-[11px] cursor-pointer transition-colors
  {!isHexMode
-                                   ? 'bg-[#3c3c3c] text-gray-200'
-                                   : 'bg-transparent text-gray-500 dark:text-slate-400 hover:bg-[#333] hover:text-gray-300'}"
+                                   ? 'bg-editor-border text-slate-200'
+                                   : 'bg-transparent text-slate-500 dark:text-slate-400 hover:bg-editor-hover hover:text-slate-300'}"
                               onclick={() => !isHexMode || toggleViewMode()}
                               title="Text view"
                          >
@@ -551,8 +556,8 @@
                          <button
                               class="flex items-center gap-1 px-2 py-1 text-[11px] cursor-pointer transition-colors
  {isHexMode
-                                   ? 'bg-[#3c3c3c] text-gray-200'
-                                   : 'bg-transparent text-gray-500 dark:text-slate-400 hover:bg-[#333] hover:text-gray-300'}"
+                                   ? 'bg-editor-border text-slate-200'
+                                   : 'bg-transparent text-slate-500 dark:text-slate-400 hover:bg-editor-hover hover:text-slate-300'}"
                               onclick={() => isHexMode || toggleViewMode()}
                               title="Hex view"
                          >
@@ -563,10 +568,10 @@
 
                     {#if !isHexMode}
                          <button
-                              class="flex items-center gap-1 px-2 py-1 bg-transparent border border-[#3c3c3c] rounded text-[11px] cursor-pointer transition-colors
+                              class="flex items-center gap-1 px-2 py-1 bg-transparent border border-editor-border rounded text-[11px] cursor-pointer transition-colors
  {isLineWrapped
-                                   ? 'bg-[#3c3c3c] text-accent-300 border-accent-700 hover:text-accent-200'
-                                   : 'text-gray-400 dark:text-slate-500 hover:bg-[#333] hover:text-gray-200'}"
+                                   ? 'bg-editor-border text-accent-300 border-accent-700 hover:text-accent-200'
+                                   : 'text-slate-400 dark:text-slate-500 hover:bg-editor-hover hover:text-slate-200'}"
                               onclick={toggleLineWrap}
                               title={isLineWrapped
                                    ? "Disable line wrap"
@@ -584,10 +589,10 @@
  re-masks everything. -->
                     {#if canMask}
                          <button
-                              class="flex items-center gap-1 px-2 py-1 bg-transparent border border-[#3c3c3c] rounded text-[11px] cursor-pointer transition-colors
+                              class="flex items-center gap-1 px-2 py-1 bg-transparent border border-editor-border rounded text-[11px] cursor-pointer transition-colors
  {fullyMasked
-                                   ? 'text-amber-400 hover:bg-[#333] hover:text-amber-300'
-                                   : 'text-gray-400 dark:text-slate-500 hover:bg-[#333] hover:text-gray-200'}"
+                                   ? 'text-amber-400 hover:bg-editor-hover hover:text-amber-300'
+                                   : 'text-slate-400 dark:text-slate-500 hover:bg-editor-hover hover:text-slate-200'}"
                               onclick={toggleMask}
                               title={fullyMasked
                                    ? "Reveal all values (Ctrl+M)"
@@ -605,7 +610,7 @@
 
                     <!-- Reload button: refetch the current version from the server -->
                     <button
-                         class="flex items-center gap-1 px-2 py-1 text-gray-400 dark:text-slate-500 bg-transparent border border-[#3c3c3c] rounded text-[11px] cursor-pointer transition-colors hover:bg-[#333] hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                         class="flex items-center gap-1 px-2 py-1 text-slate-400 dark:text-slate-500 bg-transparent border border-editor-border rounded text-[11px] cursor-pointer transition-colors hover:bg-editor-hover hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed"
                          onclick={handleReload}
                          disabled={isReloading}
                          title={activeTab.isDirty
@@ -621,7 +626,7 @@
 
                     <!-- Import button -->
                     <button
-                         class="flex items-center gap-1 px-2 py-1 text-gray-400 dark:text-slate-500 bg-transparent border border-[#3c3c3c] rounded text-[11px] cursor-pointer transition-colors hover:bg-[#333] hover:text-gray-200"
+                         class="flex items-center gap-1 px-2 py-1 text-slate-400 dark:text-slate-500 bg-transparent border border-editor-border rounded text-[11px] cursor-pointer transition-colors hover:bg-editor-hover hover:text-slate-200"
                          onclick={handleImportClick}
                          title="Import file from disk"
                     >
@@ -631,7 +636,7 @@
 
                     {#if !isHexMode}
                          <button
-                              class="flex items-center gap-1 px-2 py-1 text-gray-400 dark:text-slate-500 bg-transparent border border-[#3c3c3c] rounded text-[11px] cursor-pointer transition-colors hover:bg-[#333] hover:text-gray-200"
+                              class="flex items-center gap-1 px-2 py-1 text-slate-400 dark:text-slate-500 bg-transparent border border-editor-border rounded text-[11px] cursor-pointer transition-colors hover:bg-editor-hover hover:text-slate-200"
                               onclick={handleBeautify}
                               title="Beautify (Ctrl+Shift+F)"
                          >
@@ -645,13 +650,13 @@
                               bind:value={saveConstraint}
                               placeholder="Constraint (e.g. >= 1.0.0)"
                               title="Semver constraint for this version (optional)"
-                              class="w-40 px-2 py-1 text-[11px] font-mono bg-[#1e1e1e] border border-[#3c3c3c] rounded text-gray-400 dark:text-slate-500 placeholder:text-gray-600 dark:text-slate-300 focus:outline-none focus:border-amber-500"
+                              class="w-40 px-2 py-1 text-[11px] font-mono bg-editor-bg border border-editor-border rounded text-slate-400 placeholder:text-slate-600 focus:outline-none focus:border-amber-500"
                          />
                          <button
                               class="flex items-center gap-1 px-2.5 py-1 border-none rounded text-[11px] font-medium cursor-pointer transition-colors
  {pendingSaveConfirm
                                    ? 'bg-amber-600 hover:bg-amber-500'
-                                   : 'bg-green-600 hover:bg-green-500'} text-white"
+                                   : 'bg-emerald-600 hover:bg-emerald-500'} text-white"
                               onclick={handleSave}
                               title={pendingSaveConfirm
                                    ? "Content has errors — click to save anyway"
@@ -666,7 +671,7 @@
                               {/if}
                          </button>
                     {:else}
-                         <span class="px-2 py-1 text-[11px] text-green-500"
+                         <span class="px-2 py-1 text-[11px] text-emerald-500"
                               >Saved</span
                          >
                     {/if}
@@ -703,13 +708,13 @@
  with scroll. z-index keeps it above CodeMirror's scrollbar. -->
                {#if !isHexMode}
                     <button
-                         class="absolute top-2 right-3 z-20 flex items-center gap-1 px-2 py-1 bg-[#252526]/70 border border-[#3c3c3c] rounded text-[11px] text-gray-300 cursor-pointer opacity-50 hover:opacity-100 hover:bg-[#333] hover:text-gray-100 transition-opacity duration-150"
+                         class="absolute top-2 right-3 z-20 flex items-center gap-1 px-2 py-1 bg-editor-panel/70 border border-editor-border rounded text-[11px] text-slate-300 cursor-pointer opacity-50 hover:opacity-100 hover:bg-editor-hover hover:text-slate-100 transition-opacity duration-150"
                          onclick={handleCopy}
                          title="Copy editor content"
                          aria-label="Copy editor content"
                     >
                          {#if copied}
-                              <Check size={12} class="text-green-400" />
+                              <Check size={12} class="text-emerald-400" />
                               <span>Copied</span>
                          {:else}
                               <Copy size={12} />
@@ -722,9 +727,9 @@
           <div
                class="flex items-center justify-center h-full bg-slate-50 dark:bg-warm-900"
           >
-               <div class="text-center text-gray-400 dark:text-slate-500">
+               <div class="text-center text-slate-400 dark:text-slate-500">
                     <h3
-                         class="text-base font-medium mb-1 text-gray-500 dark:text-slate-400"
+                         class="text-base font-medium mb-1 text-slate-500 dark:text-slate-400"
                     >
                          No file open
                     </h3>

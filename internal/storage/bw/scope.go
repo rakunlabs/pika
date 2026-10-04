@@ -1,7 +1,12 @@
 package bw
 
 import (
+	"cmp"
 	"context"
+	"reflect"
+	"slices"
+	"strings"
+	"time"
 
 	"github.com/rakunlabs/bw"
 	"github.com/rakunlabs/query"
@@ -88,4 +93,102 @@ func bucketCount[T any](ctx context.Context, sc scope, b *bw.Bucket[T], q *query
 	}
 	n, err := b.Count(ctx, q)
 	return n, translateErr(err)
+}
+
+// bucketFindSorted is bucketFind for buckets whose sortable fields include
+// time.Time columns, which bw's typed sort can't order (it treats structs
+// as equal). When q sorts on one of timeFields, the filtered rows are
+// fetched unsorted and sorted/paged here; otherwise bw does everything.
+func bucketFindSorted[T any](ctx context.Context, sc scope, b *bw.Bucket[T], q *query.Query, timeFields map[string]func(*T) time.Time) ([]*T, error) {
+	if q == nil || len(q.Sort) == 0 || !sortsOnAny(q.Sort, timeFields) {
+		return bucketFind(ctx, sc, b, q)
+	}
+
+	scan := *q
+	scan.Sort = nil
+	scan.Offset = nil
+	scan.Limit = nil
+	rows, err := bucketFind(ctx, sc, b, &scan)
+	if err != nil {
+		return nil, err
+	}
+
+	spec := q.Sort
+	slices.SortStableFunc(rows, func(a, c *T) int {
+		for _, s := range spec {
+			var r int
+			if get, ok := timeFields[s.Field]; ok {
+				r = get(a).Compare(get(c))
+			} else {
+				r = compareBWField(a, c, s.Field)
+			}
+			if s.Desc {
+				r = -r
+			}
+			if r != 0 {
+				return r
+			}
+		}
+		return 0
+	})
+
+	offset, limit := q.GetOffset(), q.GetLimit()
+	if offset >= uint64(len(rows)) {
+		return []*T{}, nil
+	}
+	rows = rows[offset:]
+	if limit > 0 && uint64(len(rows)) > limit {
+		rows = rows[:limit]
+	}
+	return rows, nil
+}
+
+func sortsOnAny[T any](spec []query.ExpressionSort, fields map[string]func(*T) time.Time) bool {
+	for _, s := range spec {
+		if _, ok := fields[s.Field]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func derefTime(t *time.Time) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return *t
+}
+
+// compareBWField compares the field tagged `bw:"<name>"` on two rows of
+// the same type. Only strings, ints, uints and bools are ordered; other
+// kinds compare equal.
+func compareBWField[T any](a, b *T, name string) int {
+	av, bv := reflect.ValueOf(a).Elem(), reflect.ValueOf(b).Elem()
+	t := av.Type()
+	for i := range t.NumField() {
+		tag, _, _ := strings.Cut(t.Field(i).Tag.Get("bw"), ",")
+		if tag != name {
+			continue
+		}
+		x, y := av.Field(i), bv.Field(i)
+		switch x.Kind() {
+		case reflect.String:
+			return strings.Compare(x.String(), y.String())
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			return cmp.Compare(x.Int(), y.Int())
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			return cmp.Compare(x.Uint(), y.Uint())
+		case reflect.Bool:
+			return cmp.Compare(boolInt(x.Bool()), boolInt(y.Bool()))
+		}
+		return 0
+	}
+	return 0
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

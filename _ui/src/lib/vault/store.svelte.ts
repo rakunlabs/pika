@@ -20,8 +20,10 @@ import { onMount } from 'svelte';
 
 import * as api from './api';
 import * as crypto from './crypto';
+import { clearCopiedSecret } from './clipboard';
 import type { VaultItem } from './api';
 import type { VaultItemPayload, TrustedDeviceBlob } from './crypto';
+import { apiErrorStatus, apiErrorMessage } from '@/lib/api/client';
 
 // ─── Trusted-device storage ──────────────────────────────────────
 
@@ -177,17 +179,27 @@ function createVaultStore() {
   }
 
   /**
-   * Install global listeners so any keyup/mousedown resets the
-   * auto-lock timer. Returns a teardown function — Svelte 5
-   * onMount/onDestroy callers must invoke it on unmount.
+   * Install global listeners so any keyboard, pointer, wheel, touch or
+   * scroll activity resets the auto-lock timer. Listeners use capture
+   * because `scroll` doesn't bubble from inner scroll containers.
+   * Returns a teardown function — Svelte 5 onMount/onDestroy callers
+   * must invoke it on unmount.
    */
   function installActivityWatcher(): () => void {
-    const handler = () => resetLockTimer();
-    document.addEventListener('keyup', handler, { passive: true });
-    document.addEventListener('mousedown', handler, { passive: true });
+    // Throttled: wheel/scroll fire at frame rate and each reset writes
+    // reactive state (lockDeadline).
+    let last = 0;
+    const handler = () => {
+      const now = Date.now();
+      if (now - last < 1000) return;
+      last = now;
+      resetLockTimer();
+    };
+    const events = ['keyup', 'mousedown', 'wheel', 'touchstart', 'scroll'] as const;
+    const opts: AddEventListenerOptions = { passive: true, capture: true };
+    for (const ev of events) document.addEventListener(ev, handler, opts);
     return () => {
-      document.removeEventListener('keyup', handler);
-      document.removeEventListener('mousedown', handler);
+      for (const ev of events) document.removeEventListener(ev, handler, opts);
     };
   }
 
@@ -291,16 +303,16 @@ function createVaultStore() {
   async function refreshStatus(): Promise<void> {
     try {
       status = await api.getStatus();
-    } catch (err: any) {
-      error = err?.message ?? 'failed to read vault status';
+    } catch (err) {
+      error = apiErrorMessage(err, 'failed to read vault status');
     }
   }
 
   async function refreshAccount(): Promise<void> {
     try {
       account = await api.getAccount();
-    } catch (err: any) {
-      error = err?.message ?? 'failed to read vault account';
+    } catch (err) {
+      error = apiErrorMessage(err, 'failed to read vault account');
     }
   }
 
@@ -416,8 +428,8 @@ function createVaultStore() {
       const skHash = await crypto.hashSecretKey(sk);
       try {
         await api.unlockCheck(crypto.toBase64(skHash));
-      } catch (err: any) {
-        if (err?.response?.status === 401) {
+      } catch (err) {
+        if (apiErrorStatus(err) === 401) {
           if (cameFromTrustedBlob) {
             clearTrustedBlob(userID);
             trustedFailCount = 0;
@@ -545,6 +557,7 @@ function createVaultStore() {
     vaultKey = null;
     secretKey = null;
     decrypted = new Map();
+    void clearCopiedSecret();
   }
 
   /**

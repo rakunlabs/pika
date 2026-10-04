@@ -61,7 +61,7 @@
     </div>
 
     <div
-        class="p-5 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
+        class="p-5 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
     >
         <dl class="divide-y divide-slate-100">
             <!-- Name -->
@@ -130,7 +130,7 @@
                             title="Copy commit hash"
                         >
                             {#if copied === "Commit"}
-                                <Check size={12} class="text-green-600" />
+                                <Check size={12} class="text-emerald-600 dark:text-emerald-300" />
                             {:else}
                                 <Copy size={12} />
                             {/if}

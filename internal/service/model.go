@@ -43,6 +43,7 @@ type Storage interface {
 	VaultAccounts() VaultAccountStorage
 	VaultItems() VaultItemStorage
 	VaultItemVersions() VaultItemVersionStorage
+	Audit() AuditStorage
 
 	// Tx executes a function within a transaction.
 	// If the function returns an error, the transaction is rolled back.

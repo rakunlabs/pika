@@ -67,10 +67,9 @@ func (a *api) postKeyInitialize(c *ada.Context) error {
 // supported — that's the headless / post-restart unlock path for
 // deployments that can't run a browser at restart time.
 //
-// Wrong-key brute-force is bounded by the same login-guard the
-// auth flow uses (sessions are required to reach this route), plus
-// the service-side AEAD verify is cheap enough that a per-IP rate
-// limiter isn't currently required.
+// Wrong-key brute-force is bounded per client IP by authx.UnlockGuard
+// (registered with the route), which reuses the login rate-limit
+// settings and counts 401/403 responses.
 func (a *api) postKeyUnlock(c *ada.Context) error {
 	var req struct {
 		Key string `json:"key"`

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { apiErrorMessage } from "@/lib/api/client";
   // External Resource Browser
   // ─────────────────────────────────────────────────────────────────
   // 3-pane layout for inspecting configured external backends without
@@ -357,7 +358,7 @@
       const children = await configStore.listExternalPaths(resource, prefix);
       if (generation !== treeGeneration) return;
       pathTree = { ...pathTree, [prefix]: sortChildren(prefix, children || []) };
-    } catch (err: any) {
+    } catch (err) {
       if (generation !== treeGeneration) return;
       // Deliberately leave pathTree[prefix] undefined: caching [] here
       // would make every later expand a no-op (see loadChildren's cache
@@ -377,8 +378,8 @@
   }
 
   // Normalise an axios/Error rejection into something worth showing.
-  function errorMessage(err: any, fallback: string): string {
-    return err?.response?.data?.message || err?.message || fallback;
+  function errorMessage(err: unknown, fallback: string): string {
+    return apiErrorMessage(err, fallback);
   }
 
   // Order a prefix's children folders-first, then files, each group
@@ -452,10 +453,9 @@
       }
       entry = result;
       activeVersion = version;
-    } catch (err: any) {
+    } catch (err) {
       entry = null;
-      entryError =
-        err?.response?.data?.message || err?.message || "Failed to read entry";
+      entryError = apiErrorMessage(err, "Failed to read entry");
     } finally {
       entryLoading = false;
     }
@@ -595,8 +595,8 @@
         loadEntry(selectedPath, ""),
         loadVersionsIfSupported(selectedPath),
       ]);
-    } catch (err: any) {
-      const msg = err?.response?.data?.message || err?.message || "Save failed";
+    } catch (err) {
+      const msg = apiErrorMessage(err, "Save failed");
       addToast(msg, "alert");
     } finally {
       saving = false;
@@ -625,9 +625,8 @@
         entry = null;
       }
       confirmDeletePath = null;
-    } catch (err: any) {
-      const msg =
-        err?.response?.data?.message || err?.message || "Delete failed";
+    } catch (err) {
+      const msg = apiErrorMessage(err, "Delete failed");
       addToast(msg, "alert");
     } finally {
       deleting = false;
@@ -748,9 +747,8 @@
       pathTree = { ...pathTree, [parent]: undefined };
       await loadChildren(parent, true);
       await openPath(path);
-    } catch (err: any) {
-      const msg =
-        err?.response?.data?.message || err?.message || "Create failed";
+    } catch (err) {
+      const msg = apiErrorMessage(err, "Create failed");
       addToast(msg, "alert");
     } finally {
       saving = false;
@@ -794,7 +792,7 @@
     if (kind === "etcd")
       return "bg-teal-100 text-teal-700 dark:bg-teal-950/40 dark:text-teal-300";
     if (kind === "gcp")
-      return "bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-300";
+      return "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300";
     if (kind === "gcp-parameter")
       return "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300";
     if (kind === "azure")
@@ -891,7 +889,7 @@
                 <a
                   href="/settings/external"
                   use:link
-                  class="inline-block mt-2 text-[11px] text-accent-600 hover:underline no-underline"
+                  class="inline-block mt-2 text-[11px] text-accent-600 hover:underline no-underline dark:text-accent-400"
                 >
                   Add one in Settings →
                 </a>
@@ -1244,7 +1242,7 @@
                         >
                         {#if !isF && canWrite && currentResource?.capabilities.can_delete}
                           <button
-                            class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-red-500 transition-all cursor-pointer mr-1"
+                            class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-vermilion-500 transition-all cursor-pointer mr-1"
                             onclick={(e) => {
                               e.stopPropagation();
                               confirmDeletePath = fullPath;
@@ -1298,7 +1296,7 @@
           <div
             class="px-5 py-3 border-b border-slate-200 dark:border-warm-700 shrink-0 flex items-center gap-2"
           >
-            <Plus size={14} class="text-accent-600" />
+            <Plus size={14} class="text-accent-600 dark:text-accent-400" />
             <span
               class="text-sm font-semibold text-slate-800 dark:text-slate-100"
               >New entry</span
@@ -1393,7 +1391,7 @@
                         >Delete?</span
                       >
                       <button
-                        class="px-2 py-1 text-[11px] font-medium text-white bg-red-600 rounded hover:bg-red-700 cursor-pointer disabled:opacity-50"
+                        class="px-2 py-1 text-[11px] font-medium text-white bg-vermilion-600 rounded hover:bg-vermilion-700 cursor-pointer disabled:opacity-50"
                         onclick={() => performDelete(selectedPath!)}
                         disabled={deleting}
                       >
@@ -1407,7 +1405,7 @@
                       </button>
                     {:else}
                       <button
-                        class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded transition-colors cursor-pointer"
+                        class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-vermilion-500 hover:bg-vermilion-50 dark:hover:bg-vermilion-900/40 rounded transition-colors cursor-pointer"
                         onclick={() => (confirmDeletePath = selectedPath)}
                         title="Delete"
                       >
@@ -1619,7 +1617,7 @@
            interrupt the full-bleed code surface; gets its own thin
            border + dark background to match the chrome above. -->
       <div
-        class="px-3 py-1.5 text-[10px] text-gray-400 bg-[#252526] border-t border-[#3c3c3c] shrink-0"
+        class="px-3 py-1.5 text-[10px] text-slate-400 bg-editor-panel border-t border-editor-border shrink-0"
       >
         Content-Type: <code class="font-mono">{e.content_type}</code>
         {#if e.version}· version <code class="font-mono">{e.version}</code>{/if}

@@ -1,4 +1,7 @@
 <script lang="ts">
+     import { apiErrorMessage } from "@/lib/api/client";
+     import Modal from "@/lib/components/Modal.svelte";
+  import { confirmDialog } from "@/lib/store/confirm.svelte";
      import { configStore } from "@/lib/store/config.svelte";
      import { keymgrStore } from "@/lib/store/keymgr.svelte";
      import { addToast } from "@/lib/store/toast.svelte";
@@ -19,7 +22,6 @@
      import ExternalResourceEditor from "@/lib/components/external/ExternalResourceEditor.svelte";
      import GitLabFields from "@/lib/components/external/GitLabFields.svelte";
      import AccessFields from "@/lib/components/external/AccessFields.svelte";
-     import { backdropClose } from "@/lib/actions/backdropClose";
 
      // ── External resource state ──
      let showAddExternal = $state(false);
@@ -395,7 +397,14 @@
      }
 
      async function handleRemoveExternal(name: string) {
-          if (!confirm(`Remove external resource "${name}"?`)) return;
+          if (
+               !(await confirmDialog({
+                    title: `Remove external resource "${name}"?`,
+                    confirmLabel: "Remove",
+                    danger: true,
+               }))
+          )
+               return;
           try {
                const currentExternal = { ...(settings?.external || {}) };
                delete currentExternal[name];
@@ -467,9 +476,9 @@
                 URL.revokeObjectURL(url);
 
                 addToast(`${name}: export downloaded`, "success");
-           } catch (error: any) {
+           } catch (error) {
                 addToast(
-                     `${name}: ${error?.message || "Export failed"}`,
+                     `${name}: ${apiErrorMessage(error, "Export failed")}`,
                      "alert",
                 );
            } finally {
@@ -548,7 +557,7 @@
      <!-- Add External Form -->
      {#if showAddExternal}
           <div
-               class="mb-6 p-5 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
+               class="mb-6 p-5 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
           >
                <h3
                     class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-4"
@@ -621,7 +630,7 @@
                               >
                               <button
                                    type="button"
-                                   class="flex items-center gap-1 px-2 py-1 text-[11px] text-accent-700 bg-accent-50 rounded hover:bg-accent-100 transition-colors cursor-pointer"
+                                   class="flex items-center gap-1 px-2 py-1 text-[11px] text-accent-700 bg-accent-50 rounded hover:bg-accent-100 transition-colors cursor-pointer dark:text-accent-300 dark:bg-accent-950/30 dark:hover:bg-accent-900/40"
                                    onclick={addHttpHeaderRow}
                               >
                                    <Plus size={10} /> Add header
@@ -652,7 +661,7 @@
                                              />
                                              <button
                                                   type="button"
-                                                  class="p-1 text-slate-400 dark:text-slate-500 hover:text-red-500 hover:bg-red-50 rounded transition-colors cursor-pointer shrink-0"
+                                                  class="p-1 text-slate-400 dark:text-slate-500 hover:text-vermilion-500 hover:bg-vermilion-50 dark:hover:bg-vermilion-900/40 rounded transition-colors cursor-pointer shrink-0"
                                                   onclick={() =>
                                                        removeHttpHeaderRow(i)}
                                                   title="Remove header"
@@ -822,7 +831,7 @@
                                         type="radio"
                                         bind:group={newExtK8sAuthMode}
                                         value="in-cluster"
-                                        class="text-accent-600"
+                                        class="text-accent-600 dark:text-accent-400"
                                    />
                                    In-cluster (service account)
                               </label>
@@ -833,7 +842,7 @@
                                         type="radio"
                                         bind:group={newExtK8sAuthMode}
                                         value="path"
-                                        class="text-accent-600"
+                                        class="text-accent-600 dark:text-accent-400"
                                    />
                                    Kubeconfig file path
                               </label>
@@ -844,7 +853,7 @@
                                         type="radio"
                                         bind:group={newExtK8sAuthMode}
                                         value="inline"
-                                        class="text-accent-600"
+                                        class="text-accent-600 dark:text-accent-400"
                                    />
                                    Paste kubeconfig
                               </label>
@@ -949,16 +958,16 @@
                     {/if}
 
                     <div
-                         class="mb-4 p-3 bg-accent-50 border border-brand-100 rounded-md"
+                         class="mb-4 p-3 bg-accent-50 border border-brand-100 rounded-md dark:bg-accent-950/30"
                     >
                          <p class="text-[11px] text-brand-700">
                               Inheritance path format: <code
-                                   class="px-1 py-0.5 bg-white dark:bg-warm-900 border border-accent-200 rounded"
+                                   class="px-1 py-0.5 bg-white dark:bg-warm-900 border border-accent-200 rounded dark:border-accent-700"
                                    >namespace/secret/name</code
                               >
                               or
                               <code
-                                   class="px-1 py-0.5 bg-white dark:bg-warm-900 border border-accent-200 rounded"
+                                   class="px-1 py-0.5 bg-white dark:bg-warm-900 border border-accent-200 rounded dark:border-accent-700"
                                    >namespace/configmap/name</code
                               >.
                          </p>
@@ -1051,7 +1060,7 @@
                                         type="radio"
                                         bind:group={newExtAwsService}
                                         value="secretsmanager"
-                                        class="text-accent-600"
+                                        class="text-accent-600 dark:text-accent-400"
                                    /> Secrets Manager
                               </label>
                               <label
@@ -1061,7 +1070,7 @@
                                         type="radio"
                                         bind:group={newExtAwsService}
                                         value="ssm"
-                                        class="text-accent-600"
+                                        class="text-accent-600 dark:text-accent-400"
                                    /> SSM Parameter Store
                               </label>
                          </div>
@@ -1145,7 +1154,7 @@
                               <input
                                    type="checkbox"
                                    bind:checked={newExtGcpRawValue}
-                                   class="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 focus:ring-offset-0"
+                                   class="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 focus:ring-offset-0 dark:text-accent-400"
                               />
                               <span class="flex-1">
                                    Return raw value
@@ -1347,7 +1356,7 @@
 
                 <div class="flex justify-end gap-2">
                      <button
-                          class="px-3 py-2 text-sm text-slate-600 dark:text-slate-300 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md hover:bg-slate-50 dark:bg-warm-900 transition-colors cursor-pointer"
+                          class="px-3 py-2 text-sm text-slate-600 dark:text-slate-300 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md hover:bg-slate-50 dark:hover:bg-warm-700 transition-colors cursor-pointer"
                           onclick={() => (showAddExternal = false)}
                      >
                           Cancel
@@ -1365,7 +1374,7 @@
      <!-- Resource List -->
      {#if externalResources.length === 0}
           <div
-               class="text-center py-12 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg"
+               class="text-center py-12 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg"
           >
                <Globe size={32} class="mx-auto text-slate-300 mb-3" />
                <p class="text-sm text-slate-500 dark:text-slate-400">
@@ -1379,7 +1388,7 @@
           <div class="space-y-2">
                {#each externalResources as [name, resource] (name)}
                     <div
-                         class="flex items-center gap-4 p-4 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg hover:border-slate-300 transition-colors"
+                         class="flex items-center gap-4 p-4 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg hover:border-slate-300 dark:hover:border-warm-600 transition-colors"
                     >
                          <div class="flex-1 min-w-0">
                               <div class="flex items-center gap-2">
@@ -1390,20 +1399,20 @@
                                    <span
                                         class="px-1.5 py-0.5 text-[10px] font-medium rounded
  {resource.vault
-                                             ? 'bg-amber-100 text-amber-700'
+                                             ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
                                              : resource.aws
-                                               ? 'bg-orange-100 text-orange-700'
+                                               ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'
                                                : resource.gcp
-                                                 ? 'bg-green-100 text-green-700'
+                                                 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
                                                  : resource.gcp_parameter
-                                                   ? 'bg-emerald-100 text-emerald-700'
+                                                   ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
                                                    : resource.azure
-                                                     ? 'bg-sky-100 text-sky-700'
+                                                     ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300'
                                                      : resource.consul
                                                        ? 'bg-pink-100 text-pink-700'
                                                        : resource.etcd
                                                          ? 'bg-teal-100 text-teal-700'
-                                                         : 'bg-accent-100 text-brand-700'}"
+                                                         : 'bg-accent-100 text-brand-700 dark:bg-accent-900/40'}"
                                    >
                                         {resource.http
                                              ? "HTTP"
@@ -1598,7 +1607,7 @@
                                    <Pencil size={14} />
                               </button>
                               <button
-                                   class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-red-500 hover:bg-red-50 rounded transition-colors cursor-pointer"
+                                   class="p-1.5 text-slate-400 dark:text-slate-500 hover:text-vermilion-500 hover:bg-vermilion-50 dark:hover:bg-vermilion-900/40 rounded transition-colors cursor-pointer"
                                    onclick={() => handleRemoveExternal(name)}
                                    title="Remove resource"
                               >
@@ -1617,15 +1626,12 @@
      {#if editName !== null}
           {@const editResource = settings?.external?.[editName]}
           {#if editResource}
-               <div
-                    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-                    use:backdropClose={() => (editName = null)}
-                    role="presentation"
+               <Modal
+                    open={true}
+                    onClose={() => (editName = null)}
+                    ariaLabel={`Edit external resource ${editName}`}
+                    panelClass="rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
                >
-                    <div
-                         class="bg-white dark:bg-warm-950 rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
-                         role="presentation"
-                    >
                          {#key editName}
                               <ExternalResourceEditor
                                    name={editName}
@@ -1636,8 +1642,7 @@
                                    onCancel={() => (editName = null)}
                               />
                          {/key}
-                    </div>
-               </div>
+               </Modal>
           {/if}
      {/if}
 </div>

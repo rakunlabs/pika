@@ -70,6 +70,7 @@ type Storage struct {
 	vaultAccounts     *bw.Bucket[vaultAccountRow]
 	vaultItems        *bw.Bucket[vaultItemRow]
 	vaultItemVersions *bw.Bucket[vaultItemVersionRow]
+	audit             *bw.Bucket[auditRow]
 }
 
 // New opens (or creates) a bw database at the configured path and

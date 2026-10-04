@@ -8,6 +8,7 @@
     ShieldAlert,
   } from "lucide-svelte";
   import { addToast } from "@/lib/store/toast.svelte";
+  import { copySecret } from "@/lib/vault/clipboard";
 
   interface Props {
     username: string;
@@ -81,7 +82,7 @@
 
   async function copyKey() {
     try {
-      await navigator.clipboard.writeText(secretKey);
+      await copySecret(secretKey);
       copied = true;
       didExport = true;
       setTimeout(() => {

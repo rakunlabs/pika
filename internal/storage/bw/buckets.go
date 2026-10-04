@@ -25,6 +25,7 @@ const (
 	bucketVaultAccounts     = "vault_accounts"
 	bucketVaultItems        = "vault_items"
 	bucketVaultItemVersions = "vault_item_versions"
+	bucketAudit             = "audit_log"
 )
 
 // settingsSingletonID is the only key ever written into the settings
@@ -212,6 +213,12 @@ func (s *Storage) registerBuckets() error {
 		bw.WithVersion[vaultItemVersionRow](2),
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketVaultItemVersions, err)
+	}
+
+	if s.audit, err = bw.RegisterBucket[auditRow](s.db, bucketAudit,
+		bw.WithVersion[auditRow](1),
+	); err != nil {
+		return fmt.Errorf("bw register %s: %w", bucketAudit, err)
 	}
 
 	return nil

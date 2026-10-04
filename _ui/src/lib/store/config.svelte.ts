@@ -1,12 +1,13 @@
 import type {
-  Tab, TreeNode, SearchResult, SearchMode, FileFormat, FileVersion, FileMeta,
-  Settings, TokenInfo, CreateTokenRequest, CreateTokenResponse,
-  PatchTokenRequest, ViewMode
+  Tab, TreeNode, FileFormat, FileVersion, FileMeta, ViewMode
 } from '@/lib/types/config';
 import { addToast } from '@/lib/store/toast.svelte';
-import { appStore } from '@/lib/store/store.svelte';
-import { withBasePath } from '@/lib/basepath';
 import axios from 'axios';
+import { createSettingsStore } from './config/settings.svelte';
+import { createExternalStore } from './config/external.svelte';
+import { createTokenStore } from './config/tokens.svelte';
+import { createSearchStore } from './config/search.svelte';
+import { apiServerMessage, apiErrorStatus } from '@/lib/api/client';
 
 // Helper to decode base64 data (supports Unicode)
 function decodeContent(data: string): string {
@@ -42,21 +43,28 @@ function defaultContentForFormat(format: FileFormat): string {
   }
 }
 
+// Copy only the function members of a sub-store. Spreading the store
+// object directly would snapshot its getters (e.g. `settings`) into
+// plain values and break reactivity.
+function withoutGetters<T extends object>(obj: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [k, desc] of Object.entries(Object.getOwnPropertyDescriptors(obj))) {
+    if (!desc.get) out[k] = desc.value;
+  }
+  return out as T;
+}
+
 // Create the config store
 function createConfigStore() {
+  const settingsStore = createSettingsStore();
+  const externalStore = createExternalStore(settingsStore);
+  const tokenStore = createTokenStore();
+  const searchStore = createSearchStore();
+
   // State using Svelte 5 runes
   let tree = $state<TreeNode | null>(null);
   let openTabs = $state<Tab[]>([]);
   let activeTabId = $state<string | null>(null);
-  let searchQuery = $state('');
-  let searchResults = $state<SearchResult[]>([]);
-  let isSearching = $state(false);
-  // Session-only: remembered across searches but not persisted to
-  // storage. Default 'all' keeps the existing behaviour for users who
-  // never touch the toggle.
-  let searchMode = $state<SearchMode>('all');
-  let settings = $state<Settings | null>(null);
-  let tokens = $state<TokenInfo[]>([]);
   let isLoading = $state(false);
   // Panel widths are intentionally session-only: dragging the resize
   // handles updates the layout immediately for the current tab and the
@@ -82,8 +90,8 @@ function createConfigStore() {
     try {
       const response = await axios.get(`/api/v1/folder/${path}`);
       return response.data;
-    } catch (error: any) {
-      if (error.response?.status === 404) {
+    } catch (error) {
+      if (apiErrorStatus(error) === 404) {
         return { folders: [], files: [] };
       }
       throw error;
@@ -149,15 +157,6 @@ function createConfigStore() {
       meta,
       data: encodeContent(content),
     }, { params });
-  }
-
-  async function fetchSettings(): Promise<Settings> {
-    try {
-      const response = await axios.get('/api/v1/settings');
-      return response.data;
-    } catch {
-      return { external: {} };
-    }
   }
 
   // Tree operations
@@ -374,8 +373,8 @@ function createConfigStore() {
       openTabs = [...openTabs, newTab];
       activeTabId = newTab.id;
       updateURL();
-    } catch (error: any) {
-      if (error.response?.status === 404) {
+    } catch (error) {
+      if (apiErrorStatus(error) === 404) {
         // Variant doesn't exist yet — create it
         const format: FileFormat = 'yaml';
         const defaultContent = '';
@@ -513,8 +512,8 @@ function createConfigStore() {
       }
 
       addToast(`Saved: ${tab.name}`, 'success');
-    } catch (error: any) {
-      if (error.response?.status === 409) {
+    } catch (error) {
+      if (apiErrorStatus(error) === 409) {
         addToast(`Conflict: "${tab.name}" was modified by another user. Reload to get the latest version.`, 'alert', 8000);
       } else {
         addToast(`Failed to save: ${tab.name}`, 'alert');
@@ -540,8 +539,8 @@ function createConfigStore() {
       }
 
       addToast(constraint ? `Constraint set to ${constraint}` : 'Constraint removed', 'success');
-    } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to update constraint';
+    } catch (error) {
+      const msg = apiServerMessage(error, 'Failed to update constraint');
       addToast(msg, 'alert');
       throw error;
     }
@@ -617,533 +616,6 @@ function createConfigStore() {
       addToast('Failed to reload', 'alert');
       throw error;
     }
-  }
-
-  // Search operations
-  let searchAbortController: AbortController | null = null;
-
-  function search(query: string, mode?: SearchMode): void {
-    // Cancel any ongoing search
-    cancelSearch();
-
-    searchQuery = query;
-    if (mode) searchMode = mode;
-
-    if (!query.trim()) {
-      searchResults = [];
-      isSearching = false;
-      return;
-    }
-
-    isSearching = true;
-    searchResults = [];
-
-    const controller = new AbortController();
-    searchAbortController = controller;
-
-    // Only attach mode when 'name' — omitting it keeps URLs short and
-    // makes the server-side default ('all') the source of truth.
-    const params = new URLSearchParams({ q: query.trim() });
-    if (searchMode === 'name') params.set('mode', 'name');
-
-    const eventSource = new EventSource(withBasePath(`/api/v1/search?${params.toString()}`));
-
-    // Handle abort — close the connection
-    controller.signal.addEventListener('abort', () => {
-      eventSource.close();
-      isSearching = false;
-    });
-
-    eventSource.onmessage = (event) => {
-      if (controller.signal.aborted) return;
-
-      try {
-        const result: SearchResult = JSON.parse(event.data);
-        searchResults = [...searchResults, result];
-      } catch {
-        // skip bad data
-      }
-    };
-
-    eventSource.addEventListener('done', () => {
-      eventSource.close();
-      isSearching = false;
-      searchAbortController = null;
-    });
-
-    eventSource.onerror = () => {
-      eventSource.close();
-      isSearching = false;
-      searchAbortController = null;
-    };
-  }
-
-  function cancelSearch(): void {
-    if (searchAbortController) {
-      searchAbortController.abort();
-      searchAbortController = null;
-    }
-    isSearching = false;
-  }
-
-  function clearSearch(): void {
-    cancelSearch();
-    searchQuery = '';
-    searchResults = [];
-  }
-
-  // setSearchMode updates the mode and, if a query is already active,
-  // re-runs the search immediately so the user sees the effect of the
-  // toggle without retyping. No-op if the mode didn't actually change.
-  function setSearchMode(mode: SearchMode): void {
-    if (searchMode === mode) return;
-    searchMode = mode;
-    if (searchQuery.trim()) {
-      search(searchQuery, mode);
-    }
-  }
-
-  // Settings operations
-  async function loadSettings(): Promise<void> {
-    settings = await fetchSettings();
-  }
-
-  async function saveSettings(updatedSettings: Settings): Promise<void> {
-    try {
-      const body: Record<string, any> = {
-        action: 'set',
-        external: updatedSettings.external || {}
-      };
-      await axios.post('/api/v1/settings', body);
-      settings = updatedSettings;
-      addToast('Settings saved', 'success');
-    } catch (error: any) {
-      console.error('Failed to save settings:', error);
-      const msg = error?.response?.data?.message || 'Failed to save settings';
-      addToast(msg, 'alert');
-      throw error;
-    }
-  }
-
-  // saveVaultSettings flips the deployment-level personal-vault
-  // feature flag. The server stores the value in the Settings row;
-  // the next /api/v1/info response reflects the new state and the
-  // SPA's vault link disappears (or reappears) accordingly.
-  async function saveVaultSettings(
-    patch: import('@/lib/types/config').VaultSettings,
-  ): Promise<void> {
-    try {
-      await axios.post('/api/v1/settings', {
-        action: 'set',
-        vault: patch,
-      });
-      if (settings) {
-        settings = { ...settings, vault: patch };
-      } else {
-        settings = { vault: patch };
-      }
-      // Refresh /api/v1/info so the navbar / route gate
-      // (appStore.info.vault_enabled) updates immediately.
-      await appStore.loadInfo();
-      addToast(
-        patch.disabled
-          ? 'Personal vault disabled for this deployment.'
-          : 'Personal vault enabled for this deployment.',
-        'success',
-      );
-    } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to save vault settings';
-      addToast(msg, 'alert');
-      throw error;
-    }
-  }
-
-  async function saveServerTLSSettings(
-    patch: import('@/lib/types/config').ServerTLSSettings,
-  ): Promise<void> {
-    try {
-      await axios.post('/api/v1/settings', {
-        action: 'set',
-        server_tls: patch,
-      });
-      if (settings) {
-        settings = { ...settings, server_tls: patch };
-      } else {
-        settings = { server_tls: patch };
-      }
-      addToast('HTTPS settings saved', 'success');
-    } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to save HTTPS settings';
-      addToast(msg, 'alert');
-      throw error;
-    }
-  }
-
-  async function saveMCPSettings(patch: import('@/lib/types/config').MCPSettings): Promise<void> {
-    try {
-      await axios.post('/api/v1/settings', { action: 'set', mcp: patch });
-      settings = { ...settings, mcp: patch };
-      addToast('MCP settings saved', 'success');
-    } catch (error: any) {
-      addToast(error.response?.data?.message || 'Failed to save MCP settings', 'alert');
-      throw error;
-    }
-  }
-
-  async function saveHooks(hooks: import('@/lib/types/config').Hook[]): Promise<void> {
-    try {
-      await axios.post('/api/v1/settings', {
-        action: 'set',
-        hooks: hooks
-      });
-      if (settings) {
-        settings = { ...settings, hooks: hooks };
-      } else {
-        settings = { hooks: hooks };
-      }
-      addToast('Hooks saved', 'success');
-    } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to save hooks';
-      addToast(msg, 'alert');
-      throw error;
-    }
-  }
-
-  async function saveEventLogSettings(patch: import('@/lib/types/config').EventLogSettings): Promise<void> {
-    try {
-      await axios.post('/api/v1/settings', {
-        action: 'set',
-        event_log: patch,
-      });
-      if (settings) {
-        settings = { ...settings, event_log: patch };
-      } else {
-        settings = { event_log: patch };
-      }
-      addToast(
-        patch.disabled
-          ? 'Event logging disabled.'
-          : 'Event logging enabled.',
-        'success',
-      );
-    } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to save event logging setting';
-      addToast(msg, 'alert');
-      throw error;
-    }
-  }
-
-  // savePublicEndpoints persists the desired list of extra listener
-  // compatibility / custom-modifier endpoints. Full-replace
-  // semantics: the backend takes the submitted array verbatim and
-  // reconciles its live listeners against it (Hooks-style).
-  async function savePublicEndpoints(
-    endpoints: import('@/lib/types/config').PublicEndpoint[],
-  ): Promise<void> {
-    try {
-      await axios.post('/api/v1/settings', {
-        action: 'set',
-        public_endpoints: endpoints,
-      });
-      if (settings) {
-        settings = { ...settings, public_endpoints: endpoints };
-      } else {
-        settings = { public_endpoints: endpoints };
-      }
-      addToast('Endpoints saved', 'success');
-    } catch (error: any) {
-      const msg = error.response?.data?.message || 'Failed to save endpoints';
-      addToast(msg, 'alert');
-      throw error;
-    }
-  }
-
-  // listPublicEndpointStatus polls the diagnostic surface so the UI
-  // can show "running / disabled / bind-failed" badges next to each
-  // entry. Returns [] on any error so the UI keeps rendering.
-  async function listPublicEndpointStatus(): Promise<import('@/lib/types/config').PublicEndpointStatus[]> {
-    try {
-      const response = await axios.get('/api/v1/public-endpoints/status');
-      return response.data || [];
-    } catch {
-      return [];
-    }
-  }
-
-  // testPublicEndpoint runs a synthetic probe against an endpoint
-  // through the live handler chain. The optional `headers` map is
-  // forwarded onto the synthetic request so operators can exercise
-  // both the auth chain and any request-check rules in one shot.
-  async function testPublicEndpoint(
-    id: string,
-    req: {
-      key: string;
-      variant?: string;
-      version?: string;
-      raw?: boolean;
-      format?: string;
-      headers?: Record<string, string>;
-    },
-  ): Promise<import('@/lib/types/config').PublicEndpointTestResult> {
-    const response = await axios.post(`/api/v1/public-endpoints/${id}/test`, req);
-    return response.data;
-  }
-
-  // testPublicEndpointRules dry-runs a draft request_check block
-  // through the backend's real Go evaluator. The endpoint does not
-  // need to be saved first, which keeps the modal edit loop safe.
-  async function testPublicEndpointRules(req: {
-    request_check: import('@/lib/types/config').RequestCheck;
-    method?: string;
-    path: string;
-    headers?: Record<string, string>;
-  }): Promise<import('@/lib/types/config').RequestRuleTestResult> {
-    const response = await axios.post('/api/v1/public-endpoints/test-rules', req);
-    return response.data;
-  }
-
-  // List the child paths under a prefix. This THROWS on failure instead
-  // of returning an empty array: a Vault 403 (policy doesn't cover
-  // <mount>/metadata/), an expired AppRole lease or an upstream timeout
-  // used to be indistinguishable from "this prefix is genuinely empty",
-  // so the browser silently rendered an empty tree and the operator had
-  // no idea anything went wrong. Callers own the error presentation.
-  async function listExternalPaths(resourceName: string, prefix: string = ''): Promise<string[]> {
-    try {
-      const response = await axios.get(`/api/v1/external/${encodeURIComponent(resourceName)}/paths`, {
-        params: prefix ? { prefix } : undefined
-      });
-      return response.data || [];
-    } catch (error: any) {
-      throw new Error(
-        error?.response?.data?.message || error?.message || 'Failed to list external paths',
-      );
-    }
-  }
-
-  // Search within a single external resource. Mode 'name' is a cheap
-  // BFS over List() results matching by substring; 'all' additionally
-  // Read()s each leaf and greps the value. Errors return an empty
-  // result rather than throwing so the UI can simply show "no hits"
-  // — failed search shouldn't kick the user back to a tree view.
-  async function searchExternal(
-    resourceName: string,
-    query: string,
-    mode: 'name' | 'all' = 'name',
-    limit: number = 200,
-  ): Promise<Array<{ path: string; type: 'name' | 'content'; snippet?: string }>> {
-    if (!query.trim()) return [];
-    try {
-      const response = await axios.get(
-        `/api/v1/external/${encodeURIComponent(resourceName)}/search`,
-        { params: { q: query, mode, limit } }
-      );
-      return response.data || [];
-    } catch {
-      return [];
-    }
-  }
-
-  // Live-probe an external resource using its configured credentials.
-  // Backend always returns 200 with {ok,message,sample}; an axios reject
-  // here only means the request itself never reached the handler (auth
-  // redirect, network, etc.) — surface it as a failed test result so the
-  // SPA can render a single error path.
-  async function testExternal(
-    resourceName: string
-  ): Promise<{ ok: boolean; message?: string; sample?: string[] }> {
-    try {
-      const response = await axios.post(`/api/v1/external/${encodeURIComponent(resourceName)}/test`);
-      return response.data || { ok: false, message: 'Empty response' };
-    } catch (error: any) {
-      const msg = error?.response?.data?.message || error?.message || 'Test failed';
-      return { ok: false, message: msg };
-    }
-  }
-
-  // Bulk-export one external resource as a zip archive. The backend
-  // walks the whole key space and streams the archive; the response is
-  // a Blob, so error bodies arrive as Blobs too and have to be decoded
-  // before they can be shown.
-  //
-  // Server-side this route needs settings.manage (not external.read) —
-  // one archive carries every secret the backend holds. Only Consul and
-  // Vault resources are exportable; anything else 400s.
-  //
-  // Returns the archive plus the server-chosen filename so the caller
-  // owns the anchor-click download step.
-  async function exportExternalResource(
-    name: string,
-    prefix?: string,
-  ): Promise<{ blob: Blob; filename: string }> {
-    try {
-      const response = await axios.get(
-        `/api/v1/external/${encodeURIComponent(name)}/export`,
-        { params: prefix ? { prefix } : undefined, responseType: 'blob' }
-      );
-
-      let filename = '';
-      const cd = response.headers['content-disposition'] || '';
-      const m = cd.match(/filename="([^"]+)"/);
-      if (m) filename = m[1];
-      if (!filename) {
-        const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        filename = `pika-external-${name}-${ts}.zip`;
-      }
-
-      return {
-        blob: new Blob([response.data], { type: 'application/zip' }),
-        filename,
-      };
-    } catch (error: any) {
-      let msg = error?.response?.data?.message || error?.response?.statusText || error?.message || 'Export failed';
-      if (error?.response?.data instanceof Blob) {
-        try {
-          const parsed = JSON.parse(await error.response.data.text());
-          if (parsed?.message) msg = parsed.message;
-        } catch {
-          // Non-JSON error body — keep the status-derived message.
-        }
-      }
-      throw new Error(msg);
-    }
-  }
-
-  // Replace or insert a single external resource entry while preserving the
-  // rest of settings.external. Centralised here so the new External page,
-  // the existing Settings section, and any future caller all hit the same
-  // read-modify-write path (the backend stores `external` as a full map).
-  async function saveExternalResource(
-    name: string,
-    resource: import('@/lib/types/config').ExternalResource
-  ): Promise<void> {
-    const currentExternal = { ...(settings?.external || {}) };
-    currentExternal[name] = resource;
-    await saveSettings({ ...(settings || {}), external: currentExternal });
-  }
-
-  // Rename keeps the value, drops the old key. Used by the External page's
-  // edit mode when the user changes the resource name.
-  async function renameExternalResource(oldName: string, newName: string): Promise<void> {
-    if (oldName === newName) return;
-    const currentExternal = { ...(settings?.external || {}) };
-    if (!(oldName in currentExternal)) return;
-    if (newName in currentExternal) {
-      addToast(`Resource "${newName}" already exists`, 'alert');
-      throw new Error('duplicate external resource name');
-    }
-    currentExternal[newName] = currentExternal[oldName];
-    delete currentExternal[oldName];
-    await saveSettings({ ...(settings || {}), external: currentExternal });
-  }
-
-  async function removeExternalResource(name: string): Promise<void> {
-    const currentExternal = { ...(settings?.external || {}) };
-    if (!(name in currentExternal)) return;
-    delete currentExternal[name];
-    await saveSettings({ ...(settings || {}), external: currentExternal });
-  }
-
-  // ── External resource browser ───────────────────────────────────────
-  // The new External page consumes these. They go through the
-  // /api/v1/external/* surface (separate from /api/v1/settings) so
-  // a future split could narrow the capability gate without dragging
-  // the rest of settings.manage along.
-
-  async function listExternalResourceSummaries(): Promise<import('@/lib/types/config').ExternalResourceSummary[]> {
-    try {
-      const res = await axios.get('/api/v1/external/resources');
-      return res.data || [];
-    } catch {
-      return [];
-    }
-  }
-
-  async function readExternalEntry(
-    resource: string,
-    path: string,
-  ): Promise<import('@/lib/types/config').ExternalEntry> {
-    const res = await axios.post(
-      `/api/v1/external/${encodeURIComponent(resource)}/read`,
-      { path },
-    );
-    return res.data;
-  }
-
-  async function writeExternalEntry(
-    resource: string,
-    path: string,
-    data: Record<string, unknown>,
-  ): Promise<void> {
-    await axios.post(
-      `/api/v1/external/${encodeURIComponent(resource)}/write`,
-      { path, data },
-    );
-  }
-
-  async function deleteExternalEntry(resource: string, path: string): Promise<void> {
-    await axios.post(
-      `/api/v1/external/${encodeURIComponent(resource)}/delete`,
-      { path },
-    );
-  }
-
-  async function listExternalVersions(
-    resource: string,
-    path: string,
-  ): Promise<import('@/lib/types/config').ExternalVersion[]> {
-    try {
-      const res = await axios.post(
-        `/api/v1/external/${encodeURIComponent(resource)}/versions`,
-        { path },
-      );
-      return res.data || [];
-    } catch {
-      // Versions are best-effort: a backend that doesn't support them
-      // returns 400 (ErrNotSupported translation). Treat as "no
-      // versions" — the SPA renders single-version mode.
-      return [];
-    }
-  }
-
-  async function readExternalVersion(
-    resource: string,
-    path: string,
-    version: string,
-  ): Promise<import('@/lib/types/config').ExternalEntry> {
-    const res = await axios.post(
-      `/api/v1/external/${encodeURIComponent(resource)}/version`,
-      { path, version },
-    );
-    return res.data;
-  }
-
-  // Token operations
-  async function loadTokens(): Promise<void> {
-    try {
-      const response = await axios.get('/api/v1/tokens');
-      tokens = response.data || [];
-    } catch {
-      tokens = [];
-    }
-  }
-
-  async function createToken(req: CreateTokenRequest): Promise<CreateTokenResponse> {
-    const response = await axios.post('/api/v1/tokens', req);
-    await loadTokens();
-    return response.data;
-  }
-
-  async function deleteToken(id: string): Promise<void> {
-    await axios.delete(`/api/v1/tokens/${id}`);
-    await loadTokens();
-    addToast('Token deleted', 'success');
-  }
-
-  async function patchToken(id: string, req: PatchTokenRequest): Promise<void> {
-    await axios.patch(`/api/v1/tokens/${id}`, req);
-    await loadTokens();
-    addToast('Token updated', 'success');
   }
 
   // Create operations
@@ -1392,12 +864,12 @@ function createConfigStore() {
     get openTabs() { return openTabs; },
     get activeTabId() { return activeTabId; },
     get activeTab() { return activeTab; },
-    get searchQuery() { return searchQuery; },
-    get searchResults() { return searchResults; },
-    get isSearching() { return isSearching; },
-    get searchMode() { return searchMode; },
-    get settings() { return settings; },
-    get tokens() { return tokens; },
+    get searchQuery() { return searchStore.searchQuery; },
+    get searchResults() { return searchStore.searchResults; },
+    get isSearching() { return searchStore.isSearching; },
+    get searchMode() { return searchStore.searchMode; },
+    get settings() { return settingsStore.settings; },
+    get tokens() { return tokenStore.tokens; },
     get isLoading() { return isLoading; },
     get hasUnsavedChanges() { return hasUnsavedChanges; },
     get leftPanelWidth() { return leftPanelWidth; },
@@ -1431,42 +903,13 @@ function createConfigStore() {
     importFileToTab,
 
     // Search operations
-    search,
-    cancelSearch,
-    clearSearch,
-    setSearchMode,
+    ...withoutGetters(searchStore),
 
-    // Settings operations
-    loadSettings,
-    saveSettings,
-    saveVaultSettings,
-    saveServerTLSSettings,
-    saveMCPSettings,
-    saveHooks,
-    saveEventLogSettings,
-    savePublicEndpoints,
-    listPublicEndpointStatus,
-    testPublicEndpoint,
-    testPublicEndpointRules,
-    listExternalPaths,
-    searchExternal,
-    testExternal,
-    exportExternalResource,
-    saveExternalResource,
-    renameExternalResource,
-    removeExternalResource,
-    listExternalResourceSummaries,
-    readExternalEntry,
-    writeExternalEntry,
-    deleteExternalEntry,
-    listExternalVersions,
-    readExternalVersion,
-
-    // Token operations
-    loadTokens,
-    createToken,
-    deleteToken,
-    patchToken,
+    // Settings, external-resource and token operations live in
+    // ./config/*.svelte.ts; spread here so the public API is unchanged.
+    ...withoutGetters(settingsStore),
+    ...externalStore,
+    ...withoutGetters(tokenStore),
 
     // Create operations
     createNewFolder,

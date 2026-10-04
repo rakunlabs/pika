@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -97,7 +96,7 @@ func (a *AzureKeyVaultClient) ensureToken(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBody(resp.Body)
 	if err != nil {
 		return fmt.Errorf("azure: reading token response: %w", err)
 	}
@@ -153,7 +152,7 @@ func (a *AzureKeyVaultClient) ReadSecret(ctx context.Context, name string) (map[
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("azure: reading response: %w", err)
 	}
@@ -229,7 +228,7 @@ func (a *AzureKeyVaultClient) listSecretsPage(ctx context.Context, reqURL string
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBody(resp.Body)
 	if err != nil {
 		return nil, "", fmt.Errorf("azure: reading list response: %w", err)
 	}

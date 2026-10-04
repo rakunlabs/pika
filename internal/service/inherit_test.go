@@ -18,7 +18,9 @@ func newInheritTestService(t *testing.T) *service.Service {
 		t.Fatalf("bw.New: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return service.New(store)
+	svc := service.New(store)
+	t.Cleanup(svc.Close) // registered after store.Close, so it runs first
+	return svc
 }
 
 func mustSetFile(t *testing.T, svc *service.Service, path string, body string, inherits []service.InheritEntry) {

@@ -95,6 +95,11 @@ func run(ctx context.Context) error {
 	// (e.g. Vault AppRole token renewal) survive past the request that
 	// first triggers them and are cancelled cleanly on shutdown.
 	svc.SetRootContext(ctx)
+	// Runs before store.Close (defers are LIFO) so background workers
+	// stop writing before storage goes away.
+	defer svc.Close()
+	svc.SetBackgroundWriteGate(cl.IsLeader)
+	svc.SetAuditRetention(cfg.Audit.Retention)
 
 	// Bootstrap-time hint: if the verifier is already on disk, mark
 	// the manager as initialized so the lockgate engages and the SPA

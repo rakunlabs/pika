@@ -2,19 +2,13 @@ package external
 
 import (
 	"context"
-	"crypto"
-	"crypto/rsa"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
-	"sync"
-	"time"
 )
 
 // GCPParameterManagerClient is a minimal HTTP client for GCP Parameter
@@ -31,6 +25,7 @@ import (
 // rules (clear token on 401/403, refresh at 75% of expiry) stay
 // readable next to the API calls that actually trigger them.
 type GCPParameterManagerClient struct {
+	*gcpAuth
 	projectID string
 	location  string
 	// apiHost is the service hostname to call. For "global" this is
@@ -40,15 +35,7 @@ type GCPParameterManagerClient struct {
 	// refuses cross-location queries with a misleading 403 that mimics
 	// an IAM error, so the routing decision belongs here at client
 	// construction time rather than in the per-request code paths.
-	apiHost     string
-	clientEmail string
-	privateKey  *rsa.PrivateKey
-	tokenURI    string
-	httpClient  *http.Client
-
-	mu       sync.RWMutex
-	token    string
-	tokenExp time.Time
+	apiHost string
 }
 
 // gcpRenderParameterResponse represents the Parameter Manager
@@ -93,30 +80,9 @@ type gcpListParameterVersionsResponse struct {
 // client from a service account JSON key. Location defaults to
 // "global" when empty.
 func NewGCPParameterManagerClient(serviceAccountJSON, location, proxyMode, proxy string) (*GCPParameterManagerClient, error) {
-	var key gcpServiceAccountKey
-	if err := json.Unmarshal([]byte(serviceAccountJSON), &key); err != nil {
-		return nil, fmt.Errorf("gcp-parameter: parsing service account JSON: %w", err)
-	}
-
-	if key.Type != "service_account" {
-		return nil, fmt.Errorf("gcp-parameter: expected key type \"service_account\", got %q", key.Type)
-	}
-	if key.ProjectID == "" {
-		return nil, fmt.Errorf("gcp-parameter: missing project_id in service account key")
-	}
-	if key.ClientEmail == "" {
-		return nil, fmt.Errorf("gcp-parameter: missing client_email in service account key")
-	}
-	if key.PrivateKey == "" {
-		return nil, fmt.Errorf("gcp-parameter: missing private_key in service account key")
-	}
-	if key.TokenURI == "" {
-		key.TokenURI = "https://oauth2.googleapis.com/token"
-	}
-
-	privateKey, err := parseRSAPrivateKey(key.PrivateKey)
+	auth, projectID, err := newGCPAuth("gcp-parameter", serviceAccountJSON, newHTTPClient(proxyMode, proxy, nil))
 	if err != nil {
-		return nil, fmt.Errorf("gcp-parameter: parsing private key: %w", err)
+		return nil, err
 	}
 
 	if location == "" {
@@ -124,13 +90,10 @@ func NewGCPParameterManagerClient(serviceAccountJSON, location, proxyMode, proxy
 	}
 
 	return &GCPParameterManagerClient{
-		projectID:   key.ProjectID,
-		location:    location,
-		apiHost:     parameterManagerAPIHost(location),
-		clientEmail: key.ClientEmail,
-		privateKey:  privateKey,
-		tokenURI:    key.TokenURI,
-		httpClient:  newHTTPClient(proxyMode, proxy, nil),
+		gcpAuth:   auth,
+		projectID: projectID,
+		location:  location,
+		apiHost:   parameterManagerAPIHost(location),
 	}, nil
 }
 
@@ -153,117 +116,6 @@ func parameterManagerAPIHost(location string) string {
 	return "parametermanager." + location + ".rep.googleapis.com"
 }
 
-// ensureToken ensures the client has a valid access token, refreshing
-// if needed. Mirrors GCPSecretManagerClient.ensureToken; see that
-// implementation for the rationale on the 75% refresh window.
-func (c *GCPParameterManagerClient) ensureToken(ctx context.Context) error {
-	c.mu.RLock()
-	hasToken := c.token != ""
-	expired := !c.tokenExp.IsZero() && time.Now().After(c.tokenExp)
-	c.mu.RUnlock()
-
-	if hasToken && !expired {
-		return nil
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.token != "" && (c.tokenExp.IsZero() || time.Now().Before(c.tokenExp)) {
-		return nil
-	}
-
-	now := time.Now()
-	jwtToken, err := c.createJWT(now)
-	if err != nil {
-		return fmt.Errorf("gcp-parameter: creating JWT: %w", err)
-	}
-
-	formData := url.Values{
-		"grant_type": {"urn:ietf:params:oauth:grant-type:jwt-bearer"},
-		"assertion":  {jwtToken},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.tokenURI, strings.NewReader(formData.Encode()))
-	if err != nil {
-		return fmt.Errorf("gcp-parameter: creating token request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("gcp-parameter: executing token request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("gcp-parameter: reading token response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("gcp-parameter: token request returned HTTP %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var tokenResp gcpTokenResponse
-	if err := json.Unmarshal(respBody, &tokenResp); err != nil {
-		return fmt.Errorf("gcp-parameter: parsing token response: %w", err)
-	}
-
-	if tokenResp.AccessToken == "" {
-		return fmt.Errorf("gcp-parameter: no access_token in token response")
-	}
-
-	c.token = tokenResp.AccessToken
-	if tokenResp.ExpiresIn > 0 {
-		refreshDuration := time.Duration(float64(tokenResp.ExpiresIn)*0.75) * time.Second
-		c.tokenExp = now.Add(refreshDuration)
-	} else {
-		c.tokenExp = now.Add(45 * time.Minute)
-	}
-
-	return nil
-}
-
-// createJWT builds and signs a JWT for the Google OAuth2 token
-// exchange. Same scope ("cloud-platform") as the Secret Manager
-// client — Parameter Manager doesn't need a narrower scope.
-func (c *GCPParameterManagerClient) createJWT(now time.Time) (string, error) {
-	header := map[string]string{
-		"alg": "RS256",
-		"typ": "JWT",
-	}
-	headerJSON, err := json.Marshal(header)
-	if err != nil {
-		return "", fmt.Errorf("marshaling JWT header: %w", err)
-	}
-
-	claims := map[string]any{
-		"iss":   c.clientEmail,
-		"scope": "https://www.googleapis.com/auth/cloud-platform",
-		"aud":   c.tokenURI,
-		"iat":   now.Unix(),
-		"exp":   now.Add(time.Hour).Unix(),
-	}
-	claimsJSON, err := json.Marshal(claims)
-	if err != nil {
-		return "", fmt.Errorf("marshaling JWT claims: %w", err)
-	}
-
-	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
-	claimsB64 := base64.RawURLEncoding.EncodeToString(claimsJSON)
-	signingInput := headerB64 + "." + claimsB64
-
-	hash := sha256.Sum256([]byte(signingInput))
-	signature, err := rsa.SignPKCS1v15(nil, c.privateKey, crypto.SHA256, hash[:])
-	if err != nil {
-		return "", fmt.Errorf("signing JWT: %w", err)
-	}
-
-	signatureB64 := base64.RawURLEncoding.EncodeToString(signature)
-	return signingInput + "." + signatureB64, nil
-}
-
 // ReadParameter reads a parameter from GCP Parameter Manager and
 // returns its data as a map.
 //
@@ -282,9 +134,7 @@ func (c *GCPParameterManagerClient) ReadParameter(ctx context.Context, parameter
 		return nil, err
 	}
 
-	c.mu.RLock()
-	token := c.token
-	c.mu.RUnlock()
+	token := c.accessToken()
 
 	resourceName := normalizeParameterPath(parameterPath)
 
@@ -305,16 +155,13 @@ func (c *GCPParameterManagerClient) ReadParameter(ctx context.Context, parameter
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("gcp-parameter: reading response: %w", err)
 	}
 
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
-		c.mu.Lock()
-		c.token = ""
-		c.tokenExp = time.Time{}
-		c.mu.Unlock()
+		c.invalidateToken()
 		return nil, fmt.Errorf("gcp-parameter: returned HTTP %d (token may be expired): %s", resp.StatusCode, string(respBody))
 	}
 
@@ -367,9 +214,7 @@ func (c *GCPParameterManagerClient) ListParameters(ctx context.Context) ([]strin
 		return nil, err
 	}
 
-	c.mu.RLock()
-	token := c.token
-	c.mu.RUnlock()
+	token := c.accessToken()
 
 	var allNames []string
 	pageToken := ""
@@ -394,7 +239,7 @@ func (c *GCPParameterManagerClient) ListParameters(ctx context.Context) ([]strin
 			return nil, fmt.Errorf("gcp-parameter: executing list request: %w", err)
 		}
 
-		respBody, err := io.ReadAll(resp.Body)
+		respBody, err := readBody(resp.Body)
 		resp.Body.Close()
 
 		if err != nil {
@@ -402,10 +247,7 @@ func (c *GCPParameterManagerClient) ListParameters(ctx context.Context) ([]strin
 		}
 
 		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
-			c.mu.Lock()
-			c.token = ""
-			c.tokenExp = time.Time{}
-			c.mu.Unlock()
+			c.invalidateToken()
 			return nil, fmt.Errorf("gcp-parameter: list returned HTTP %d (token may be expired): %s", resp.StatusCode, string(respBody))
 		}
 
@@ -464,9 +306,7 @@ func (c *GCPParameterManagerClient) ListParameterVersions(ctx context.Context, p
 		return nil, err
 	}
 
-	c.mu.RLock()
-	token := c.token
-	c.mu.RUnlock()
+	token := c.accessToken()
 
 	// Strip any "/versions/..." suffix the caller may have passed —
 	// callers sometimes hand us paths copied from a render request.
@@ -501,17 +341,14 @@ func (c *GCPParameterManagerClient) ListParameterVersions(ctx context.Context, p
 			return nil, fmt.Errorf("gcp-parameter: executing list-versions request: %w", err)
 		}
 
-		respBody, err := io.ReadAll(resp.Body)
+		respBody, err := readBody(resp.Body)
 		resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("gcp-parameter: reading list-versions response: %w", err)
 		}
 
 		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
-			c.mu.Lock()
-			c.token = ""
-			c.tokenExp = time.Time{}
-			c.mu.Unlock()
+			c.invalidateToken()
 			return nil, fmt.Errorf("gcp-parameter: list-versions returned HTTP %d (token may be expired): %s", resp.StatusCode, string(respBody))
 		}
 

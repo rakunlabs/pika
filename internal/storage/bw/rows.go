@@ -122,39 +122,42 @@ func userIdentityRowFromService(id *service.UserIdentity) *userIdentityRow {
 // is the index used by FindByHash for every authenticated request — and
 // duplicates would be a security bug, not an inconvenience.
 type tokenRow struct {
-	ID        string               `bw:"id,pk"`
-	Name      string               `bw:"name"`
-	HashedKey string               `bw:"hashed_key,unique"`
-	Scopes    []service.TokenScope `bw:"scopes"`
-	CreatedAt time.Time            `bw:"created_at,index"`
-	CreatedBy string               `bw:"created_by"`
-	ExpiresAt *time.Time           `bw:"expires_at"`
-	Active    bool                 `bw:"active"`
+	ID         string               `bw:"id,pk"`
+	Name       string               `bw:"name"`
+	HashedKey  string               `bw:"hashed_key,unique"`
+	Scopes     []service.TokenScope `bw:"scopes"`
+	CreatedAt  time.Time            `bw:"created_at,index"`
+	CreatedBy  string               `bw:"created_by"`
+	ExpiresAt  *time.Time           `bw:"expires_at"`
+	Active     bool                 `bw:"active"`
+	LastUsedAt *time.Time           `bw:"last_used_at"`
 }
 
 func (r *tokenRow) toService() *service.Token {
 	return &service.Token{
-		ID:        r.ID,
-		Name:      r.Name,
-		HashedKey: r.HashedKey,
-		Scopes:    r.Scopes,
-		CreatedAt: r.CreatedAt,
-		CreatedBy: r.CreatedBy,
-		ExpiresAt: r.ExpiresAt,
-		Active:    r.Active,
+		ID:         r.ID,
+		Name:       r.Name,
+		HashedKey:  r.HashedKey,
+		Scopes:     r.Scopes,
+		CreatedAt:  r.CreatedAt,
+		CreatedBy:  r.CreatedBy,
+		ExpiresAt:  r.ExpiresAt,
+		Active:     r.Active,
+		LastUsedAt: r.LastUsedAt,
 	}
 }
 
 func tokenRowFromService(t *service.Token) *tokenRow {
 	return &tokenRow{
-		ID:        t.ID,
-		Name:      t.Name,
-		HashedKey: t.HashedKey,
-		Scopes:    t.Scopes,
-		CreatedAt: t.CreatedAt,
-		CreatedBy: t.CreatedBy,
-		ExpiresAt: t.ExpiresAt,
-		Active:    t.Active,
+		ID:         t.ID,
+		Name:       t.Name,
+		HashedKey:  t.HashedKey,
+		Scopes:     t.Scopes,
+		CreatedAt:  t.CreatedAt,
+		CreatedBy:  t.CreatedBy,
+		ExpiresAt:  t.ExpiresAt,
+		Active:     t.Active,
+		LastUsedAt: t.LastUsedAt,
 	}
 }
 

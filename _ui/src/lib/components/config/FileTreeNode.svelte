@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { confirmDialog } from "@/lib/store/confirm.svelte";
   import {
     ChevronRight,
     ChevronDown,
@@ -76,9 +77,12 @@
   async function handleDeleteFolder(e: MouseEvent) {
     e.stopPropagation();
     if (
-      !confirm(
-        `Delete folder "${node.name}" and all its contents? This cannot be undone.`,
-      )
+      !(await confirmDialog({
+        title: `Delete folder "${node.name}"?`,
+        message: "All its contents will be deleted. This cannot be undone.",
+        confirmLabel: "Delete",
+        danger: true,
+      }))
     )
       return;
     await configStore.deleteFolder(node.path);
@@ -87,9 +91,12 @@
   async function handleDeleteFile(e: MouseEvent) {
     e.stopPropagation();
     if (
-      !confirm(
-        `Delete file "${node.name}" and all its versions? This cannot be undone.`,
-      )
+      !(await confirmDialog({
+        title: `Delete file "${node.name}"?`,
+        message: "All its versions will be deleted. This cannot be undone.",
+        confirmLabel: "Delete",
+        danger: true,
+      }))
     )
       return;
     await configStore.deleteFile(node.path);
@@ -99,7 +106,12 @@
     e.stopPropagation();
     if (!node.parentPath || !node.variantKey) return;
     if (
-      !confirm(`Delete variant "@${node.variantKey}"? This cannot be undone.`)
+      !(await confirmDialog({
+        title: `Delete variant "@${node.variantKey}"?`,
+        message: "This cannot be undone.",
+        confirmLabel: "Delete",
+        danger: true,
+      }))
     )
       return;
     await configStore.deleteVariant(node.parentPath, node.variantKey);
@@ -124,7 +136,7 @@
     class="flex items-center gap-1 py-0.5 pr-2 cursor-pointer text-[13px]
   {isActive
       ? 'bg-accent-600 text-white hover:bg-accent-700'
-      : 'text-gray-700 dark:text-warm-100 hover:bg-gray-200 dark:hover:bg-warm-700'}
+      : 'text-slate-700 dark:text-warm-100 hover:bg-slate-200 dark:hover:bg-warm-700'}
   {isOpen && !isActive ? 'text-brand-600 dark:text-accent-400' : ''}"
     style="padding-left: {level * 12 + 4}px"
     onclick={handleClick}
@@ -182,7 +194,7 @@
       <span
         class="flex items-center justify-center shrink-0 {isActive
           ? 'text-white'
-          : 'text-gray-500 dark:text-slate-400'}"
+          : 'text-slate-500 dark:text-slate-400'}"
       >
         <FileText size={14} />
       </span>
@@ -203,7 +215,7 @@
           class="flex items-center justify-center w-4.5 h-4.5 rounded p-0 border-none cursor-pointer
  {isActive
             ? 'text-white/70 hover:bg-white/20 hover:text-white'
-            : 'text-slate-500 dark:text-slate-400 bg-transparent hover:bg-slate-300 dark:hover:bg-warm-600 hover:text-gray-700 dark:hover:text-slate-200'}"
+            : 'text-slate-500 dark:text-slate-400 bg-transparent hover:bg-slate-300 dark:hover:bg-warm-600 hover:text-slate-700 dark:hover:text-slate-200'}"
           onclick={handleCreateFile}
           title="New File"
         >
@@ -213,7 +225,7 @@
           class="flex items-center justify-center w-4.5 h-4.5 rounded p-0 border-none cursor-pointer
  {isActive
             ? 'text-white/70 hover:bg-white/20 hover:text-white'
-            : 'text-slate-500 dark:text-slate-400 bg-transparent hover:bg-slate-300 dark:hover:bg-warm-600 hover:text-gray-700 dark:hover:text-slate-200'}"
+            : 'text-slate-500 dark:text-slate-400 bg-transparent hover:bg-slate-300 dark:hover:bg-warm-600 hover:text-slate-700 dark:hover:text-slate-200'}"
           onclick={handleCreateFolder}
           title="New Folder"
         >
@@ -223,7 +235,7 @@
           class="flex items-center justify-center w-4.5 h-4.5 rounded p-0 border-none cursor-pointer
  {isActive
             ? 'text-white/70 hover:bg-white/20 hover:text-white'
-            : 'text-slate-500 dark:text-slate-400 bg-transparent hover:bg-slate-300 dark:hover:bg-warm-600 hover:text-gray-700 dark:hover:text-slate-200'}"
+            : 'text-slate-500 dark:text-slate-400 bg-transparent hover:bg-slate-300 dark:hover:bg-warm-600 hover:text-slate-700 dark:hover:text-slate-200'}"
           onclick={handleRefresh}
           title="Refresh"
         >
@@ -232,8 +244,8 @@
         <button
           class="flex items-center justify-center w-4.5 h-4.5 rounded p-0 border-none cursor-pointer
  {isActive
-            ? 'text-white/70 hover:bg-red-500/20 hover:text-red-300'
-            : 'text-slate-400 dark:text-slate-500 bg-transparent hover:bg-red-100 hover:text-red-500'}"
+            ? 'text-white/70 hover:bg-vermilion-500/30 hover:text-vermilion-200'
+            : 'text-slate-400 dark:text-slate-500 bg-transparent hover:bg-vermilion-100 dark:hover:bg-vermilion-900/40 hover:text-vermilion-500'}"
           onclick={handleDeleteFolder}
           title="Delete Folder"
         >
@@ -245,8 +257,8 @@
         <button
           class="flex items-center justify-center w-4.5 h-4.5 rounded p-0 border-none cursor-pointer
  {isActive
-            ? 'text-white/70 hover:bg-red-500/20 hover:text-red-300'
-            : 'text-slate-400 dark:text-slate-500 bg-transparent hover:bg-red-100 hover:text-red-500'}"
+            ? 'text-white/70 hover:bg-vermilion-500/30 hover:text-vermilion-200'
+            : 'text-slate-400 dark:text-slate-500 bg-transparent hover:bg-vermilion-100 dark:hover:bg-vermilion-900/40 hover:text-vermilion-500'}"
           onclick={handleDeleteFile}
           title="Delete File"
         >
@@ -258,8 +270,8 @@
         <button
           class="flex items-center justify-center w-4.5 h-4.5 rounded p-0 border-none cursor-pointer
  {isActive
-            ? 'text-white/70 hover:bg-red-500/20 hover:text-red-300'
-            : 'text-slate-400 dark:text-slate-500 bg-transparent hover:bg-red-100 hover:text-red-500'}"
+            ? 'text-white/70 hover:bg-vermilion-500/30 hover:text-vermilion-200'
+            : 'text-slate-400 dark:text-slate-500 bg-transparent hover:bg-vermilion-100 dark:hover:bg-vermilion-900/40 hover:text-vermilion-500'}"
           onclick={handleDeleteVariant}
           title="Delete Variant"
         >

@@ -3,6 +3,8 @@ import axios from 'axios';
 import type { Capability } from '@/lib/types/config';
 import { withoutBasePath } from '@/lib/basepath';
 import { prefsStore } from '@/lib/store/prefs.svelte';
+import { vaultStore } from '@/lib/vault/store.svelte';
+import { apiErrorStatus } from '@/lib/api/client';
 
 export interface AppInfo {
   name: string;
@@ -220,8 +222,8 @@ function createAppStore() {
       }
       identity = response.data;
       authenticated = true;
-    } catch (err: any) {
-      if (err?.response?.status === 401) {
+    } catch (err) {
+      if (apiErrorStatus(err) === 401) {
         identity = null;
         authenticated = false;
       } else {
@@ -320,6 +322,9 @@ function createAppStore() {
   }
 
   async function logout(): Promise<void> {
+    // Drop unlocked vault material before the session goes away so it
+    // doesn't outlive the login on a shared device.
+    vaultStore.lock();
     try {
       await axios.post('/logout');
     } finally {

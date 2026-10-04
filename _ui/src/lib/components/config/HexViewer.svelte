@@ -114,10 +114,10 @@
     });
 </script>
 
-<div class="flex flex-col h-full bg-[#1e1e1e] font-mono text-[13px]">
+<div class="flex flex-col h-full bg-editor-bg font-mono text-[13px]">
     <!-- Header -->
     <div
-        class="px-4 py-1.5 bg-[#252526] border-b border-[#3c3c3c] text-[10px] text-gray-500 dark:text-slate-400 select-none shrink-0 whitespace-pre"
+        class="px-4 py-1.5 bg-editor-panel border-b border-editor-border text-[10px] text-slate-500 dark:text-slate-400 select-none shrink-0 whitespace-pre"
     >
         Offset 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F Decoded text
     </div>
@@ -131,7 +131,7 @@
         <div style="height: {totalHeight}px; position: relative;">
             {#each visibleRows as row (row.index)}
                 <div
-                    class="absolute left-0 right-0 px-4 leading-5 text-[#d4d4d4] hover:bg-[#2a2d2e] whitespace-pre"
+                    class="absolute left-0 right-0 px-4 leading-5 text-editor-fg hover:bg-editor-row-hover whitespace-pre"
                     style="top: {row.index *
                         ROW_HEIGHT}px; height: {ROW_HEIGHT}px;"
                 >
@@ -143,7 +143,7 @@
 
     <!-- Footer -->
     <div
-        class="flex items-center justify-between px-4 py-1 bg-[#252526] border-t border-[#3c3c3c] text-[10px] text-gray-500 dark:text-slate-400 shrink-0"
+        class="flex items-center justify-between px-4 py-1 bg-editor-panel border-t border-editor-border text-[10px] text-slate-500 dark:text-slate-400 shrink-0"
     >
         <span>{formatSize(bytes.length)}</span>
         <span>{totalRows.toLocaleString()} rows</span>

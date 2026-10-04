@@ -1,7 +1,9 @@
 <script lang="ts">
+  import { apiErrorMessage } from "@/lib/api/client";
   import { Copy, Check, AlertCircle } from "lucide-svelte";
   import { computeTOTP, type TOTPField } from "@/lib/vault/totp";
   import { addToast } from "@/lib/store/toast.svelte";
+  import { copySecret } from "@/lib/vault/clipboard";
 
   interface Props {
     field: TOTPField;
@@ -28,8 +30,8 @@
         period = r.period;
         remaining = r.remainingSeconds;
         err = "";
-      } catch (e: any) {
-        err = e?.message ?? "Invalid TOTP secret";
+      } catch (e) {
+        err = apiErrorMessage(e, "Invalid TOTP secret");
       }
     }
     tick();
@@ -43,7 +45,7 @@
   async function copy() {
     if (!code) return;
     try {
-      await navigator.clipboard.writeText(code);
+      await copySecret(code);
       copied = true;
       setTimeout(() => (copied = false), 1500);
     } catch {
@@ -72,7 +74,7 @@
     >
       {formatted}
       {#if copied}
-        <Check size={14} class="text-emerald-600" />
+        <Check size={14} class="text-emerald-600 dark:text-emerald-300" />
       {:else}
         <Copy size={14} class="text-slate-400" />
       {/if}
@@ -97,7 +99,7 @@
           stroke-width="3"
           stroke-dasharray="87.96"
           stroke-dashoffset={87.96 * (1 - pct / 100)}
-          class={remaining <= 5 ? "text-red-500" : "text-accent-600"}
+          class={remaining <= 5 ? "text-red-500" : "text-accent-600 dark:text-accent-400"}
         />
       </svg>
       <span

@@ -12,8 +12,8 @@
   //   2. Beautify — pretty-prints JSON (and trims YAML/TEXT).
   //   3. Copy to clipboard.
   //
-  // Visual chrome mirrors Editor.svelte:386-511 (bg-[#1e1e1e] /
-  // bg-[#252526] toolbar, brand-500 format pill) so this surface
+  // Visual chrome mirrors Editor.svelte:386-511 (bg-editor-bg /
+  // bg-editor-panel toolbar, brand-500 format pill) so this surface
   // feels like part of the same product.
 
   import { untrack } from "svelte";
@@ -309,7 +309,7 @@
 
 <!--
   Outer wrapper carries the dark IDE chrome that Editor.svelte uses
-  (bg-[#1e1e1e]). The choice to render as VS Code dark regardless of
+  (bg-editor-bg). The choice to render as VS Code dark regardless of
   the user's light-mode app theme is consistent with the Configuration
   page: a "code surface" reads as a code surface even when the rest
   of the app is light.
@@ -317,12 +317,12 @@
   No outer border or rounded corners — the parent in External.svelte
   places us edge-to-edge for a true full-pane look.
 -->
-<div class="external-value-editor flex flex-col h-full overflow-hidden bg-[#1e1e1e]">
+<div class="external-value-editor flex flex-col h-full overflow-hidden bg-editor-bg">
   <!-- Toolbar — left: format pill + optional title; right: optional
        Beautify, optional format dropdown, always-on Copy. Toolbar
        metrics match Editor.svelte:389 (px-3 py-1.5). -->
   <div
-    class="flex items-center justify-between px-3 py-1.5 bg-[#252526] border-b border-[#3c3c3c] text-xs shrink-0"
+    class="flex items-center justify-between px-3 py-1.5 bg-editor-panel border-b border-editor-border text-xs shrink-0"
   >
     <div class="flex items-center gap-2 min-w-0">
       <span
@@ -332,9 +332,9 @@
         {formatLabel}
       </span>
       {#if title}
-        <span class="text-gray-600 dark:text-slate-300 shrink-0">|</span>
+        <span class="text-slate-600 dark:text-slate-300 shrink-0">|</span>
         <span
-          class="text-gray-300 font-mono overflow-hidden text-ellipsis whitespace-nowrap min-w-0"
+          class="text-slate-300 font-mono overflow-hidden text-ellipsis whitespace-nowrap min-w-0"
           {title}
         >
           {title}
@@ -347,7 +347,7 @@
              beautified (handled inside handleBeautify by toast). -->
         <button
           type="button"
-          class="flex items-center gap-1 px-2 py-0.5 bg-transparent border border-[#3c3c3c] rounded text-[11px] text-gray-400 hover:bg-[#333] hover:text-gray-100 cursor-pointer transition-colors"
+          class="flex items-center gap-1 px-2 py-0.5 bg-transparent border border-editor-border rounded text-[11px] text-slate-400 hover:bg-editor-hover hover:text-slate-100 cursor-pointer transition-colors"
           onclick={handleBeautify}
           title="Beautify"
           aria-label="Beautify"
@@ -364,7 +364,7 @@
         <div class="relative" bind:this={formatMenuEl}>
           <button
             type="button"
-            class="flex items-center gap-1 px-2 py-0.5 bg-transparent border border-[#3c3c3c] rounded text-[11px] text-gray-400 hover:bg-[#333] hover:text-gray-100 cursor-pointer transition-colors"
+            class="flex items-center gap-1 px-2 py-0.5 bg-transparent border border-editor-border rounded text-[11px] text-slate-400 hover:bg-editor-hover hover:text-slate-100 cursor-pointer transition-colors"
             onclick={() => (formatMenuOpen = !formatMenuOpen)}
             title="Choose format"
             aria-haspopup="true"
@@ -377,7 +377,7 @@
           </button>
           {#if formatMenuOpen}
             <div
-              class="absolute right-0 top-full mt-1 z-10 min-w-[90px] bg-[#252526] border border-[#3c3c3c] rounded shadow-lg overflow-hidden"
+              class="absolute right-0 top-full mt-1 z-10 min-w-[90px] bg-editor-panel border border-editor-border rounded shadow-lg overflow-hidden"
             >
               {#each [{ value: "auto", label: "Auto-detect" }, { value: "json", label: "JSON" }, { value: "yaml", label: "YAML" }, { value: "text", label: "Plain text" }] as opt (opt.value)}
                 <button
@@ -385,7 +385,7 @@
                   class="w-full text-left px-2.5 py-1 text-[11px] cursor-pointer transition-colors
                          {chosenLang === opt.value
                     ? 'bg-brand-500 text-white'
-                    : 'text-gray-300 hover:bg-[#333]'}"
+                    : 'text-slate-300 hover:bg-editor-hover'}"
                   onclick={() => pickLang(opt.value as LangChoice)}
                 >
                   {opt.label}
@@ -398,10 +398,10 @@
 
       <button
         type="button"
-        class="flex items-center gap-1 px-2 py-0.5 bg-transparent border border-[#3c3c3c] rounded text-[11px] cursor-pointer transition-colors
+        class="flex items-center gap-1 px-2 py-0.5 bg-transparent border border-editor-border rounded text-[11px] cursor-pointer transition-colors
                {lineWrapping
-          ? 'text-gray-100 bg-[#333]'
-          : 'text-gray-400 hover:bg-[#333] hover:text-gray-100'}"
+          ? 'text-slate-100 bg-editor-hover'
+          : 'text-slate-400 hover:bg-editor-hover hover:text-slate-100'}"
         onclick={() => (lineWrapping = !lineWrapping)}
         title="Wrap long lines"
         aria-label="Wrap long lines"
@@ -412,13 +412,13 @@
 
       <button
         type="button"
-        class="flex items-center gap-1 px-2 py-0.5 bg-transparent border border-[#3c3c3c] rounded text-[11px] text-gray-400 hover:bg-[#333] hover:text-gray-100 cursor-pointer transition-colors"
+        class="flex items-center gap-1 px-2 py-0.5 bg-transparent border border-editor-border rounded text-[11px] text-slate-400 hover:bg-editor-hover hover:text-slate-100 cursor-pointer transition-colors"
         onclick={handleCopy}
         title="Copy value"
         aria-label="Copy value"
       >
         {#if copied}
-          <Check size={12} class="text-green-400" />
+          <Check size={12} class="text-emerald-400" />
           <span>Copied</span>
         {:else}
           <Copy size={12} />

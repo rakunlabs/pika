@@ -3,6 +3,7 @@ package bw
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/rakunlabs/bw"
 	"github.com/rakunlabs/pika/internal/service"
@@ -91,8 +92,14 @@ func (s *userStorage) GetByEmail(ctx context.Context, email string) (*service.Us
 	return row.toService(), nil
 }
 
+// userTimeFields are the time columns List can sort on.
+var userTimeFields = map[string]func(*userRow) time.Time{
+	"created_at": func(r *userRow) time.Time { return r.CreatedAt },
+	"updated_at": func(r *userRow) time.Time { return r.UpdatedAt },
+}
+
 func (s *userStorage) List(ctx context.Context, q *query.Query) ([]service.User, int64, error) {
-	rows, err := bucketFind(ctx, s.scope, s.bucket, q)
+	rows, err := bucketFindSorted(ctx, s.scope, s.bucket, q, userTimeFields)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -1,12 +1,14 @@
 {
-  "name": "_~vitesse-template~_",
+  "name": "pika-ui",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "lint": "oxlint src",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
@@ -26,7 +28,8 @@
     "svelte-spa-router": "^5.0.1",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2",
-    "vite": "^8.0.5"
+    "vite": "^8.0.5",
+    "vitest": "^5.0.3"
   },
   "dependencies": {
     "@babel/runtime": "^7.29.2",

@@ -1,4 +1,7 @@
 <script lang="ts">
+     import Modal from "@/lib/components/Modal.svelte";
+  import { confirmDialog } from "@/lib/store/confirm.svelte";
+  import { apiServerMessage, apiStatusMessage, apiBlobErrorMessage, apiErrorMessage } from "@/lib/api/client";
      import { onMount } from "svelte";
      import { configStore } from "@/lib/store/config.svelte";
      import { addToast } from "@/lib/store/toast.svelte";
@@ -81,12 +84,8 @@
           try {
                const { data } = await axios.get("/api/v1/backup/info");
                currentDBVersion = data.db_version ?? 0;
-          } catch (error: any) {
-               const msg =
-                    error.response?.data?.message ||
-                    error.response?.statusText ||
-                    "Failed to read version";
-               addToast(msg, "alert");
+          } catch (error) {
+               addToast(apiStatusMessage(error, "Failed to read version"), "alert");
           } finally {
                isLoadingVersion = false;
           }
@@ -180,20 +179,8 @@
                // Refresh the displayed DB version — exporting doesn't change it,
                // but if the user just woke the panel up this is a free win.
                refreshVersion();
-          } catch (error: any) {
-               const msg =
-                    error.response?.data?.message ||
-                    error.response?.statusText ||
-                    "Export failed";
-               if (error.response?.data instanceof Blob) {
-                    try {
-                         const text = await error.response.data.text();
-                         const parsed = JSON.parse(text);
-                         addToast(parsed.message || "Export failed", "alert");
-                         return;
-                    } catch {}
-               }
-               addToast(msg, "alert");
+          } catch (error) {
+               addToast(await apiBlobErrorMessage(error, "Export failed"), "alert");
           } finally {
                isExporting = false;
           }
@@ -233,18 +220,18 @@
                          v = hi * 0x100000000 + lo;
                     }
                     importFileDBVersion = v;
-               } catch (err: any) {
+               } catch (err) {
                     importFileIsEncrypted = false;
                     importFileDBVersion = null;
                     addToast(
-                         `Selected file is not a valid pika backup: ${err.message}`,
+                         `Selected file is not a valid pika backup: ${apiErrorMessage(err, String(err))}`,
                          "alert",
                     );
                }
           }
      }
 
-     function handleImportBackup() {
+     async function handleImportBackup() {
           if (!importFile) {
                addToast("Please select a .pikabw backup file", "alert");
                return;
@@ -259,16 +246,19 @@
 
           // Wipe path is destructive — open a dedicated confirmation modal so
           // the user has to explicitly acknowledge the consequences. The
-          // upsert path uses a softer browser confirm.
+          // upsert path uses a softer confirm dialog.
           if (wipeBeforeRestore) {
                showWipeConfirm = true;
                return;
           }
 
           if (
-               !confirm(
-                    "Restore will overwrite any keys present in the backup. Existing keys not in the backup will be left in place. Continue?",
-               )
+               !(await confirmDialog({
+                    title: "Restore backup?",
+                    message:
+                         "Restore will overwrite any keys present in the backup. Existing keys not in the backup will be left in place. Continue?",
+                    confirmLabel: "Restore",
+               }))
           ) {
                return;
           }
@@ -324,8 +314,8 @@
                // Refresh settings, tree, and the displayed DB version.
                configStore.loadSettings();
                refreshVersion();
-          } catch (error: any) {
-               const msg = error.response?.data?.message || "Restore failed";
+          } catch (error) {
+               const msg = apiServerMessage(error, "Restore failed");
                addToast(msg, "alert");
           } finally {
                isImporting = false;
@@ -352,7 +342,7 @@
       CapSettingsManage is the only auth needed to use this panel,
       and the session cookie carries that automatically. -->
      <div
-          class="mb-6 p-5 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
+          class="mb-6 p-5 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
      >
           <div
                class="flex items-center justify-between gap-3 px-3 py-2 bg-slate-50 dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md"
@@ -374,7 +364,7 @@
                </div>
                <button
                     type="button"
-                    class="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-600 dark:text-slate-300 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded hover:bg-slate-50 dark:bg-warm-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                    class="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-600 dark:text-slate-300 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded hover:bg-slate-50 dark:hover:bg-warm-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                     onclick={refreshVersion}
                     disabled={isLoadingVersion}
                     title="Read current DB version from the server"
@@ -390,7 +380,7 @@
 
      <!-- Export Section -->
      <div
-          class="mb-6 p-5 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
+          class="mb-6 p-5 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
      >
           <h3
                class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2"
@@ -419,7 +409,7 @@
                               type="radio"
                               bind:group={backupMode}
                               value="full"
-                              class="mt-0.5 text-accent-600"
+                              class="mt-0.5 text-accent-600 dark:text-accent-400"
                          />
                          <span>
                               <span
@@ -439,7 +429,7 @@
                               type="radio"
                               bind:group={backupMode}
                               value="since"
-                              class="mt-0.5 text-accent-600"
+                              class="mt-0.5 text-accent-600 dark:text-accent-400"
                          />
                          <span>
                               <span
@@ -461,7 +451,7 @@
                               type="radio"
                               bind:group={backupMode}
                               value="until"
-                              class="mt-0.5 text-accent-600"
+                              class="mt-0.5 text-accent-600 dark:text-accent-400"
                          />
                          <span>
                               <span
@@ -574,19 +564,19 @@
      </div>
 
      <!-- Unencrypted Export Warning Modal -->
-     {#if showUnencryptedWarning}
-          <div
-               class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          >
-               <div
-                    class="bg-white dark:bg-warm-900 rounded-lg shadow-xl max-w-md w-full mx-4 p-6"
-               >
+     <Modal
+          open={showUnencryptedWarning}
+          onClose={cancelUnencryptedExport}
+          labelledby="backup-unencrypted-title"
+          panelClass="rounded-lg max-w-md w-full mx-4 p-6"
+     >
                     <div class="flex items-start gap-3 mb-4">
-                         <div class="p-2 bg-amber-100 rounded-full shrink-0">
-                              <ShieldAlert size={20} class="text-amber-600" />
+                         <div class="p-2 bg-amber-100 dark:bg-amber-950/40 rounded-full shrink-0">
+                              <ShieldAlert size={20} class="text-amber-600 dark:text-amber-400" />
                          </div>
                          <div>
                               <h3
+                                   id="backup-unencrypted-title"
                                    class="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-1"
                               >
                                    Export without encryption?
@@ -609,7 +599,7 @@
                     </div>
                     <div class="flex justify-end gap-2">
                          <button
-                              class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md hover:bg-slate-50 dark:bg-warm-900 transition-colors cursor-pointer"
+                              class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-md hover:bg-slate-50 dark:hover:bg-warm-700 transition-colors cursor-pointer"
                               onclick={cancelUnencryptedExport}
                          >
                               Cancel
@@ -621,13 +611,11 @@
                               Continue without encryption
                          </button>
                     </div>
-               </div>
-          </div>
-     {/if}
+     </Modal>
 
      <!-- Import Section -->
      <div
-          class="p-5 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
+          class="p-5 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-lg shadow-sm"
      >
           <h3
                class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2"
@@ -652,7 +640,7 @@
                >
                <div class="flex items-center gap-2">
                     <label
-                         class="flex-1 flex items-center gap-2 px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md cursor-pointer hover:bg-slate-50 dark:bg-warm-900 transition-colors"
+                         class="flex-1 flex items-center gap-2 px-3 py-2 text-sm border border-slate-200 dark:border-warm-700 rounded-md cursor-pointer hover:bg-slate-50 dark:hover:bg-warm-700 transition-colors"
                     >
                          <Upload
                               size={14}
@@ -673,7 +661,7 @@
                     </label>
                     {#if importFile}
                          <button
-                              class="p-2 text-slate-400 dark:text-slate-500 hover:text-red-500 hover:bg-red-50 rounded transition-colors cursor-pointer"
+                              class="p-2 text-slate-400 dark:text-slate-500 hover:text-vermilion-500 hover:bg-vermilion-50 dark:hover:bg-vermilion-900/40 rounded transition-colors cursor-pointer"
                               onclick={() => {
                                    importFile = null;
                                    importFileName = "";
@@ -711,15 +699,15 @@
           <!-- Encrypted file indicator & password -->
           {#if importFileIsEncrypted}
                <div
-                    class="mb-4 p-3 bg-accent-50 border border-accent-200 rounded-md"
+                    class="mb-4 p-3 bg-accent-50 border border-accent-200 rounded-md dark:bg-accent-950/30 dark:border-accent-700"
                >
                     <div class="flex items-center gap-2 mb-2">
-                         <Lock size={14} class="text-accent-700 shrink-0" />
+                         <Lock size={14} class="text-accent-700 shrink-0 dark:text-accent-300" />
                          <p class="text-xs font-medium text-brand-800 m-0">
                               This backup is encrypted
                          </p>
                     </div>
-                    <p class="text-[11px] text-accent-700 mb-3">
+                    <p class="text-[11px] text-accent-700 mb-3 dark:text-accent-300">
                          An encryption password is required to restore.
                     </p>
                     <div class="relative">
@@ -730,7 +718,7 @@
                                    : "password"}
                               bind:value={importEncryptionPassword}
                               placeholder="Enter the encryption password"
-                              class="w-full px-3 py-2 pr-9 text-sm border border-accent-200 rounded-md bg-white dark:bg-warm-900 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10"
+                              class="w-full px-3 py-2 pr-9 text-sm border border-accent-200 rounded-md bg-white dark:bg-warm-900 focus:outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/10 dark:border-accent-700"
                          />
                          <button
                               type="button"
@@ -787,7 +775,7 @@
           <button
                class="flex items-center justify-center gap-2 w-full px-4 py-2.5 text-sm font-medium text-white rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed
   {wipeBeforeRestore
-                    ? 'bg-red-600 hover:bg-red-700'
+                    ? 'bg-vermilion-600 hover:bg-vermilion-700'
                     : 'bg-vermilion-500 hover:bg-vermilion-600'} cursor-pointer"
                onclick={handleImportBackup}
                disabled={isImporting ||
@@ -805,21 +793,22 @@
      </div>
 
      <!-- Wipe-and-restore confirmation modal. The lighter "merge" path
- uses a browser confirm(); this destructive path gets a real
+ uses a confirm dialog; this destructive path gets a real
  modal so it can't be dismissed by muscle memory. -->
-     {#if showWipeConfirm}
-          <div
-               class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          >
-               <div
-                    class="bg-white dark:bg-warm-900 rounded-lg shadow-xl max-w-md w-full mx-4 p-6"
-               >
+     <Modal
+          open={showWipeConfirm}
+          onClose={cancelWipeRestore}
+          closeOnBackdrop={false}
+          labelledby="backup-wipe-title"
+          panelClass="rounded-lg max-w-md w-full mx-4 p-6"
+     >
                     <div class="flex items-start gap-3 mb-4">
-                         <div class="p-2 bg-red-100 rounded-full shrink-0">
-                              <ShieldAlert size={20} class="text-red-600" />
+                         <div class="p-2 bg-vermilion-100 dark:bg-vermilion-950/40 rounded-full shrink-0">
+                              <ShieldAlert size={20} class="text-vermilion-600 dark:text-vermilion-400" />
                          </div>
                          <div>
                               <h3
+                                   id="backup-wipe-title"
                                    class="text-sm font-semibold text-slate-800 dark:text-slate-100 mb-1"
                               >
                                    Wipe and restore?
@@ -843,7 +832,7 @@
                               </p>
                               {#if importFileDBVersion !== null && currentDBVersion !== null && importFileDBVersion < currentDBVersion}
                                    <p
-                                        class="text-xs text-amber-700 leading-relaxed mt-2 p-2 bg-amber-50 border border-amber-200 rounded"
+                                        class="text-xs text-amber-700 dark:text-amber-300 leading-relaxed mt-2 p-2 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-700 rounded"
                                    >
                                         Note: this backup was taken at version
                                         <span class="font-mono"
@@ -859,19 +848,17 @@
                     </div>
                     <div class="flex justify-end gap-2">
                          <button
-                              class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300 bg-white dark:bg-warm-900 border border-slate-200 dark:border-warm-700 rounded-md hover:bg-slate-50 dark:bg-warm-900 transition-colors cursor-pointer"
+                              class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300 bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded-md hover:bg-slate-50 dark:hover:bg-warm-700 transition-colors cursor-pointer"
                               onclick={cancelWipeRestore}
                          >
                               Cancel
                          </button>
                          <button
-                              class="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors cursor-pointer"
+                              class="px-4 py-2 text-sm font-medium text-white bg-vermilion-600 rounded-md hover:bg-vermilion-700 transition-colors cursor-pointer"
                               onclick={confirmWipeRestore}
                          >
                               Wipe & Restore
                          </button>
                     </div>
-               </div>
-          </div>
-     {/if}
+     </Modal>
 </div>

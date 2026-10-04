@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -122,6 +121,19 @@ func (vc *VaultClient) startRenewal() {
 	})
 }
 
+// sleepCtx waits for d or until ctx is done; it reports whether the
+// full duration elapsed.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
 func (vc *VaultClient) renewLoop(ctx context.Context) {
 	for {
 		vc.mu.RLock()
@@ -130,12 +142,10 @@ func (vc *VaultClient) renewLoop(ctx context.Context) {
 
 		if expAt.IsZero() {
 			// No expiry known (direct token), check again later
-			select {
-			case <-ctx.Done():
+			if !sleepCtx(ctx, 5*time.Minute) {
 				return
-			case <-time.After(5 * time.Minute):
-				continue
 			}
+			continue
 		}
 
 		// Renew at 75% of the remaining time
@@ -145,10 +155,8 @@ func (vc *VaultClient) renewLoop(ctx context.Context) {
 			renewAt = 10 * time.Second
 		}
 
-		select {
-		case <-ctx.Done():
+		if !sleepCtx(ctx, renewAt) {
 			return
-		case <-time.After(renewAt):
 		}
 
 		if err := vc.renewToken(ctx); err != nil {
@@ -195,7 +203,7 @@ func (vc *VaultClient) renewToken(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readBody(resp.Body)
 	if err != nil {
 		return fmt.Errorf("reading renew response: %w", err)
 	}
@@ -261,7 +269,7 @@ func (vc *VaultClient) loginAppRole(ctx context.Context, appRole *VaultAppRole) 
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readBody(resp.Body)
 	if err != nil {
 		return "", 0, fmt.Errorf("reading login response: %w", err)
 	}
@@ -324,7 +332,7 @@ func (vc *VaultClient) ReadSecret(ctx context.Context, secretPath string) (map[s
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
@@ -411,7 +419,7 @@ func (vc *VaultClient) ListSecrets(ctx context.Context, listPath string, useList
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading list response: %w", err)
 	}
@@ -500,7 +508,7 @@ func (vc *VaultClient) WriteSecret(ctx context.Context, secretPath string, body 
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody := readErrorBody(resp.Body)
 
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
 		slog.Warn("vault: permission denied (token authenticated but policy lacks access)",
@@ -551,7 +559,7 @@ func (vc *VaultClient) DeleteSecret(ctx context.Context, secretPath string) erro
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody := readErrorBody(resp.Body)
 
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
 		slog.Warn("vault: permission denied (token authenticated but policy lacks access)",
@@ -608,7 +616,10 @@ func (vc *VaultClient) ListVersions(ctx context.Context, metadataPath string) ([
 		return nil, fmt.Errorf("executing metadata request: %w", err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := readBody(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading metadata response: %w", err)
+	}
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
@@ -684,7 +695,10 @@ func (vc *VaultClient) ReadSecretVersion(ctx context.Context, dataPath string, v
 		return nil, fmt.Errorf("executing version-read request: %w", err)
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := readBody(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading version response: %w", err)
+	}
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("vault secret version %d not found at %q", version, dataPath)
