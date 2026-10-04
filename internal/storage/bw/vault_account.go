@@ -61,3 +61,12 @@ func (s *vaultAccountStorage) Set(ctx context.Context, a *service.VaultAccount) 
 func (s *vaultAccountStorage) Delete(ctx context.Context, userID string) error {
 	return bucketDelete(ctx, s.scope, s.bucket, userID)
 }
+
+func (s *vaultAccountStorage) List(ctx context.Context) ([]service.VaultAccount, error) {
+	var out []service.VaultAccount
+	err := bucketWalk(ctx, s.scope, s.bucket, nil, func(r *vaultAccountRow) error {
+		out = append(out, *r.toService())
+		return nil
+	})
+	return out, err
+}

@@ -140,6 +140,119 @@ func (a *api) setupMyVault(c *ada.Context) error {
 	return c.SetStatus(http.StatusCreated).SendJSON((*vaultSetupResponse)(view))
 }
 
+// vaultServerSetupResponse is returned when a vault is created or
+// opened in server-managed mode. VaultKey is the raw vault key.
+type vaultServerSetupResponse struct {
+	Account  *service.VaultAccountView `json:"account"`
+	VaultKey []byte                    `json:"vault_key"`
+}
+
+// vaultServerKeyError maps the locked-server-key case to 503 so the
+// SPA can tell the user to wait for an admin to unlock the server.
+func vaultServerKeyError(c *ada.Context, err error) error {
+	if errors.Is(err, service.ErrVaultServerKeyLocked) {
+		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{
+			Message: "the server encryption key is locked; ask an administrator to unlock the server",
+		})
+	}
+	if errors.Is(err, service.ErrVaultNotInitialized) {
+		return c.SetStatus(http.StatusNotFound).SendJSON(response{Message: "vault not initialized"})
+	}
+	if errors.Is(err, service.ErrVaultAlreadyInitialized) {
+		return c.SetStatus(http.StatusConflict).SendJSON(response{Message: "vault is already initialized"})
+	}
+	return err
+}
+
+// setupMyServerVault creates a vault whose key is sealed with the
+// server encryption key (deployment key mode "server").
+func (a *api) setupMyServerVault(c *ada.Context) error {
+	ctx := c.Request.Context()
+	userID := service.UserIDFromContext(ctx)
+	if userID == "" {
+		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
+	}
+	coord := a.svc.VaultCoordFor(ctx)
+	if coord == nil {
+		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
+	}
+	var req service.VaultServerSetupRequest
+	if err := c.Bind(&req); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+	view, key, err := coord.SetupServerManaged(ctx, userID, &req)
+	if err != nil {
+		return vaultServerKeyError(c, err)
+	}
+	return c.SetStatus(http.StatusCreated).SendJSON(vaultServerSetupResponse{Account: view, VaultKey: key})
+}
+
+// getMyServerVaultKey returns the raw vault key of a server-managed
+// vault so the SPA can open it without a master password.
+func (a *api) getMyServerVaultKey(c *ada.Context) error {
+	ctx := c.Request.Context()
+	userID := service.UserIDFromContext(ctx)
+	if userID == "" {
+		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
+	}
+	coord := a.svc.VaultCoordFor(ctx)
+	if coord == nil {
+		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
+	}
+	key, err := coord.ServerVaultKey(ctx, userID)
+	if err != nil {
+		return vaultServerKeyError(c, err)
+	}
+	c.Response.Header().Set("Cache-Control", "no-store")
+	return c.SetStatus(http.StatusOK).SendJSON(service.VaultServerKeyResponse{VaultKey: key})
+}
+
+// convertMyVaultToServer hands a master-password vault over to the
+// server key. Body: vault key unwrapped in the browser + Secret Key hash.
+func (a *api) convertMyVaultToServer(c *ada.Context) error {
+	ctx := c.Request.Context()
+	userID := service.UserIDFromContext(ctx)
+	if userID == "" {
+		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
+	}
+	coord := a.svc.VaultCoordFor(ctx)
+	if coord == nil {
+		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
+	}
+	var req service.VaultConvertToServerRequest
+	if err := c.Bind(&req); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+	view, err := coord.ConvertToServer(ctx, userID, &req)
+	if err != nil {
+		return vaultServerKeyError(c, err)
+	}
+	return c.SetStatus(http.StatusOK).SendJSON((*vaultSetupResponse)(view))
+}
+
+// convertMyVaultToUser re-protects a server-managed vault with a
+// master password. Body matches the setup payload.
+func (a *api) convertMyVaultToUser(c *ada.Context) error {
+	ctx := c.Request.Context()
+	userID := service.UserIDFromContext(ctx)
+	if userID == "" {
+		return errors.Join(errors.New("no user in context"), service.ErrUnauthorized)
+	}
+	coord := a.svc.VaultCoordFor(ctx)
+	if coord == nil {
+		return c.SetStatus(http.StatusServiceUnavailable).SendJSON(response{Message: "vault not configured"})
+	}
+	var req service.VaultSetupRequest
+	if err := c.Bind(&req); err != nil {
+		return errors.Join(err, service.ErrBadRequest)
+	}
+	view, err := coord.ConvertToUser(ctx, userID, &req)
+	if err != nil {
+		return vaultServerKeyError(c, err)
+	}
+	return c.SetStatus(http.StatusOK).SendJSON((*vaultSetupResponse)(view))
+}
+
 // rotateMyVaultMasterPassword updates the KDF params and wrapped
 // vault key. The vault key itself is NOT re-keyed — only its
 // password wrapping changes, so the items don't need to be

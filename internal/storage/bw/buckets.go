@@ -202,8 +202,12 @@ func (s *Storage) registerBuckets() error {
 		return fmt.Errorf("bw register %s: %w", bucketUserTOTP, err)
 	}
 
+	// vault_accounts versions:
+	//   v1 — initial schema.
+	//   v2 — added key_mode ("user" / "server"). Existing rows decode
+	//        with an empty mode, which is treated as "user".
 	if s.vaultAccounts, err = bw.RegisterBucket[vaultAccountRow](s.db, bucketVaultAccounts,
-		bw.WithVersion[vaultAccountRow](1),
+		bw.WithVersion[vaultAccountRow](2),
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketVaultAccounts, err)
 	}

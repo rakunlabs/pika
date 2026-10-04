@@ -542,6 +542,7 @@ func userTOTPRowFromService(t *service.UserTOTP) *userTOTPRow {
 // simple.
 type vaultAccountRow struct {
 	UserID                 string    `bw:"user_id,pk"`
+	KeyMode                string    `bw:"key_mode"`
 	SecretKeyHash          []byte    `bw:"secret_key_hash"`
 	KDFAlgorithm           string    `bw:"kdf_algorithm"`
 	KDFMemory              int       `bw:"kdf_memory"`
@@ -562,6 +563,7 @@ func (r *vaultAccountRow) toService() *service.VaultAccount {
 	wrapped := append([]byte(nil), r.WrappedVaultKey...)
 	return &service.VaultAccount{
 		UserID:        r.UserID,
+		KeyMode:       service.NormalizeVaultKeyMode(r.KeyMode),
 		SecretKeyHash: hash,
 		KDF: service.VaultKDFParams{
 			Algorithm:   r.KDFAlgorithm,
@@ -585,6 +587,7 @@ func vaultAccountRowFromService(a *service.VaultAccount) *vaultAccountRow {
 	wrapped := append([]byte(nil), a.WrappedVaultKey...)
 	return &vaultAccountRow{
 		UserID:                 a.UserID,
+		KeyMode:                service.NormalizeVaultKeyMode(a.KeyMode),
 		SecretKeyHash:          hash,
 		KDFAlgorithm:           a.KDF.Algorithm,
 		KDFMemory:              a.KDF.Memory,

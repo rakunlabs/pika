@@ -144,6 +144,13 @@ type VaultSettings struct {
 	// /api/v1/me/vault/* endpoint into a 404. Existing data is
 	// preserved; this is a feature-flag, not a destructive action.
 	Disabled bool `json:"disabled"`
+	// KeyMode chooses who protects each user's vault key:
+	// VaultKeyModeUser (default, empty) requires a master password +
+	// Secret Key per user; VaultKeyModeServer seals vault keys with
+	// the server encryption key so users open their vault directly.
+	// Existing vaults are converted the next time their owner opens
+	// them.
+	KeyMode string `json:"key_mode,omitempty"`
 }
 
 // EventLogSettings controls Pika's built-in event log line. Nil settings mean
@@ -309,7 +316,17 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 	// future fields (e.g. per-deployment item-type allowlist) get
 	// the same patch-update treatment for free.
 	if patch.Vault != nil {
-		settings.Vault = patch.Vault
+		next := *patch.Vault
+		next.KeyMode = NormalizeVaultKeyMode(next.KeyMode)
+		prevMode := VaultKeyModeUser
+		if settings.Vault != nil {
+			prevMode = NormalizeVaultKeyMode(settings.Vault.KeyMode)
+		}
+		if next.KeyMode == VaultKeyModeServer && prevMode != VaultKeyModeServer &&
+			(s.keyManager == nil || !s.keyManager.IsUnlocked()) {
+			return fmt.Errorf("vault: server-managed vault keys require the server encryption key to be enabled and unlocked: %w", ErrBadRequest)
+		}
+		settings.Vault = &next
 	}
 
 	// Vault file storage. An empty S3 secret means "keep the stored

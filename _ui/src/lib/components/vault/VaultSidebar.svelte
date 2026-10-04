@@ -102,7 +102,7 @@
 </script>
 
 <nav
-  class="flex flex-col h-full w-56 shrink-0 border-r border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-800"
+  class="flex flex-col h-full w-full border-r border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-800"
   aria-label="Vault sections"
 >
   <div class="px-3 pt-3 pb-2 flex items-center gap-2">
@@ -189,6 +189,15 @@
     </div>
   </div>
 
+  {#if vaultStore.isServerManaged}
+    <div
+      class="flex items-center gap-2 px-3 py-2 border-t border-slate-200 dark:border-warm-700 text-[11px] text-slate-500 dark:text-slate-400"
+      title="Vault keys are protected by the server encryption key"
+    >
+      <ShieldCheck size={12} class="shrink-0" />
+      <span class="flex-1">Server-managed encryption</span>
+    </div>
+  {:else}
   <div
     class="flex items-center gap-2 px-3 py-2 border-t border-slate-200 dark:border-warm-700 text-[11px] text-slate-500 dark:text-slate-400"
   >
@@ -204,4 +213,5 @@
       <Lock size={11} /> Lock
     </button>
   </div>
+  {/if}
 </nav>

@@ -93,6 +93,11 @@ interface DecryptedItem {
   payload: VaultItemPayload | null;
 }
 
+/** Comparable form of a payload: an empty note and a missing note are equal. */
+function normalizePayload(p: VaultItemPayload): VaultItemPayload {
+  return { fields: p.fields ?? [], notes: p.notes || undefined };
+}
+
 function createVaultStore() {
   // Server-side state mirror.
   let status = $state<api.VaultStatus | null>(null);
@@ -144,6 +149,23 @@ function createVaultStore() {
 
   const DEFAULT_LOCK_SECONDS = 15 * 60;
 
+  // Server-managed vaults have no master password: the server hands
+  // the vault key to any signed-in session, so an idle lock would only
+  // force a pointless re-fetch. They stay open for the page lifetime.
+  function isServerManaged(): boolean {
+    return (account?.key_mode ?? status?.key_mode) === 'server';
+  }
+
+  function deploymentKeyMode(): api.VaultKeyMode {
+    return status?.deployment_key_mode ?? 'user';
+  }
+
+  /** The admin switched modes and this vault must be converted to match. */
+  function needsConversion(): boolean {
+    if (!status?.initialized || !status.key_mode) return false;
+    return status.key_mode !== deploymentKeyMode();
+  }
+
   function lockTimeoutSeconds(): number {
     const fromAccount = account?.session_lock_seconds ?? 0;
     return fromAccount > 0 ? fromAccount : DEFAULT_LOCK_SECONDS;
@@ -151,6 +173,10 @@ function createVaultStore() {
 
   function resetLockTimer() {
     if (!vaultKey) return;
+    if (isServerManaged()) {
+      stopLockTimers();
+      return;
+    }
     if (lockTimer) clearTimeout(lockTimer);
     const ttlMs = lockTimeoutSeconds() * 1000;
     lockDeadline = Date.now() + ttlMs;
@@ -268,6 +294,7 @@ function createVaultStore() {
    * when called twice in a row with the same `hidden` value.
    */
   function notifyVisibilityChange(hidden: boolean): void {
+    if (isServerManaged()) return;
     if (hidden) {
       if (!vaultKey) return;
       if (hiddenGraceSeconds < 0) {
@@ -537,6 +564,16 @@ function createVaultStore() {
    * before showing any field value again.
    */
   function lock(): void {
+    stopLockTimers();
+    crypto.zeroize(vaultKey);
+    crypto.zeroize(secretKey);
+    vaultKey = null;
+    secretKey = null;
+    decrypted = new Map();
+    void clearCopiedSecret();
+  }
+
+  function stopLockTimers(): void {
     if (lockTimer) {
       clearTimeout(lockTimer);
       lockTimer = null;
@@ -552,12 +589,85 @@ function createVaultStore() {
       tickInterval = null;
     }
     lockDeadline = 0;
-    crypto.zeroize(vaultKey);
+  }
+
+  // ─── Server-managed vaults ──────────────────────────────────
+
+  /** Create a vault whose key is generated and sealed by the server. */
+  async function setupServer(sessionLockSeconds = 0): Promise<void> {
+    loading = true;
+    error = null;
+    try {
+      const res = await api.setupServer(sessionLockSeconds);
+      account = res.account;
+      vaultKey = crypto.fromBase64(res.vault_key);
+      secretKey = null;
+      await refreshStatus();
+    } finally {
+      loading = false;
+    }
+  }
+
+  /** Fetch the vault key of a server-managed vault and open it. */
+  async function openServerManaged(): Promise<void> {
+    loading = true;
+    error = null;
+    try {
+      await crypto.ready();
+      if (!account) await refreshAccount();
+      const key = await api.getServerKey();
+      vaultKey = crypto.fromBase64(key);
+      secretKey = null;
+    } finally {
+      loading = false;
+    }
+  }
+
+  /**
+   * Hand the unlocked vault key to the server so it can be sealed
+   * with the server encryption key. Called right after a master-password
+   * unlock when the admin has switched the deployment to server mode.
+   */
+  async function convertToServer(): Promise<void> {
+    if (!vaultKey || !secretKey || !account) throw new Error('vault must be unlocked first');
+    const userID = account.user_id;
+    const skHash = await crypto.hashSecretKey(secretKey);
+    account = await api.convertToServer(crypto.toBase64(vaultKey), crypto.toBase64(skHash));
+    clearTrustedBlob(userID);
+    trustedFailCount = 0;
     crypto.zeroize(secretKey);
-    vaultKey = null;
     secretKey = null;
-    decrypted = new Map();
-    void clearCopiedSecret();
+    stopLockTimers();
+    await refreshStatus();
+  }
+
+  /**
+   * Re-protect a server-managed vault with a master password. Keeps
+   * the existing vault key so items stay readable, and surfaces the new
+   * Secret Key through pendingSecretKey like a fresh setup.
+   */
+  async function convertToUser(
+    masterPassword: string,
+    preset: crypto.KDFPreset = 'default',
+    sessionLockSeconds: number = 900,
+  ): Promise<crypto.SecretKey> {
+    loading = true;
+    error = null;
+    try {
+      if (!vaultKey) {
+        const key = await api.getServerKey();
+        vaultKey = crypto.fromBase64(key);
+      }
+      const result = await crypto.buildSetup(masterPassword, preset, sessionLockSeconds, vaultKey);
+      account = await api.convertToUser(result.payload);
+      secretKey = result.secretKey.bytes;
+      pendingSecretKey = result.secretKey;
+      await refreshStatus();
+      resetLockTimer();
+      return result.secretKey;
+    } finally {
+      loading = false;
+    }
   }
 
   /**
@@ -783,6 +893,32 @@ function createVaultStore() {
     },
   ): Promise<VaultItem> {
     if (!vaultKey) throw new Error('vault must be unlocked first');
+    patch = { ...patch };
+    const prior = decrypted.get(id);
+    const current = items.find(i => i.id === id) ?? prior?.item;
+
+    // Ciphertexts use a fresh nonce every time, so the server can't tell
+    // that a re-encrypted value is unchanged. Drop every field whose
+    // plaintext matches what we already hold; otherwise each save would
+    // record a new version and a useless history entry.
+    if (prior && current) {
+      const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+      if (patch.title !== undefined && prior.title !== null && patch.title === prior.title) patch.title = undefined;
+      if (patch.tags !== undefined && same(patch.tags, prior.tags)) patch.tags = undefined;
+      if (patch.urlHostnames !== undefined && same(patch.urlHostnames, prior.hostnames)) patch.urlHostnames = undefined;
+      if (patch.folder !== undefined && patch.folder.trim() === (prior.folder ?? '').trim()) patch.folder = undefined;
+      if (patch.payload !== undefined && prior.payload !== null && same(normalizePayload(patch.payload), normalizePayload(prior.payload))) {
+        patch.payload = undefined;
+      }
+      if (patch.type !== undefined && patch.type === current.type) patch.type = undefined;
+      if (patch.favorite !== undefined && patch.favorite === !!current.favorite) patch.favorite = undefined;
+      if (patch.archived !== undefined && patch.archived === !!current.archived) patch.archived = undefined;
+      if (Object.values(patch).every(v => v === undefined)) {
+        resetLockTimer();
+        return current;
+      }
+    }
+
     const req: api.UpdateVaultItemRequest = { expected_version: base.expected_version };
     if (patch.type !== undefined) req.type = patch.type;
     if (patch.title !== undefined) {
@@ -815,7 +951,6 @@ function createVaultStore() {
 
     const item = await api.updateItem(id, req);
     items = items.map(i => (i.id === item.id ? item : i));
-    const prior = decrypted.get(id);
     decrypted.set(id, {
       item,
       title: patch.title !== undefined ? patch.title : prior?.title ?? null,
@@ -847,6 +982,26 @@ function createVaultStore() {
     const item = await api.restoreItem(id);
     items = [item, ...items.filter(i => i.id !== id)];
     return item;
+  }
+
+  /**
+   * Record that the user just used an item (copied a value). Updates
+   * last_used_at locally right away; the server write is best-effort.
+   */
+  async function touchItem(id: string): Promise<void> {
+    const now = new Date().toISOString();
+    items = items.map(i => (i.id === id ? { ...i, last_used_at: now } : i));
+    const d = decrypted.get(id);
+    if (d) {
+      decrypted.set(id, { ...d, item: { ...d.item, last_used_at: now } });
+      decrypted = new Map(decrypted);
+    }
+    resetLockTimer();
+    try {
+      await api.touchItem(id);
+    } catch {
+      // Usage tracking only feeds the "recently used" sort.
+    }
   }
 
   function isUnlocked(): boolean {
@@ -900,6 +1055,9 @@ function createVaultStore() {
     get lockTimeoutSeconds() { return lockTimeoutSeconds(); },
     get hiddenGraceSeconds() { return hiddenGraceSeconds; },
     get pendingSecretKey() { return pendingSecretKey; },
+    get isServerManaged() { return isServerManaged(); },
+    get deploymentKeyMode() { return deploymentKeyMode(); },
+    get needsConversion() { return needsConversion(); },
     isUnlocked,
     allTags,
     allFolders,
@@ -908,6 +1066,10 @@ function createVaultStore() {
     refreshStatus,
     refreshAccount,
     setup,
+    setupServer,
+    openServerManaged,
+    convertToServer,
+    convertToUser,
     unlock,
     lock,
     reset,
@@ -918,6 +1080,7 @@ function createVaultStore() {
     softDeleteItem,
     purgeItem,
     restoreItem,
+    touchItem,
     installActivityWatcher,
     notifyVisibilityChange,
     setHiddenGraceSeconds,

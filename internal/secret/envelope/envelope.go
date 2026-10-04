@@ -34,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/rakunlabs/pika/internal/secret/crypto"
 	"github.com/rakunlabs/pika/internal/secret/keymgr"
 )
 
@@ -67,6 +68,13 @@ func Seal(mgr *keymgr.Manager, plaintext []byte) ([]byte, error) {
 	if !ok {
 		return nil, ErrLocked
 	}
+	return SealWith(enc, plaintext)
+}
+
+// SealWith is Seal with an explicit encryptor instead of the live
+// manager key. Used by key rotation, which must re-seal data under a
+// specific key.
+func SealWith(enc crypto.Encryptor, plaintext []byte) ([]byte, error) {
 	ct, err := enc.Encrypt(plaintext)
 	if err != nil {
 		return nil, fmt.Errorf("envelope: encrypt: %w", err)
@@ -94,12 +102,24 @@ func Open(mgr *keymgr.Manager, ciphertext []byte) ([]byte, error) {
 	if len(ciphertext) == 0 {
 		return nil, fmt.Errorf("envelope: empty input: %w", ErrUnknownFormat)
 	}
+	if ciphertext[0] != formatV1 {
+		return nil, fmt.Errorf("envelope: byte 0x%02x: %w", ciphertext[0], ErrUnknownFormat)
+	}
+	enc, ok := mgr.Encryptor()
+	if !ok {
+		return nil, ErrLocked
+	}
+	return OpenWith(enc, ciphertext)
+}
+
+// OpenWith is Open with an explicit encryptor instead of the live
+// manager key.
+func OpenWith(enc crypto.Encryptor, ciphertext []byte) ([]byte, error) {
+	if len(ciphertext) == 0 {
+		return nil, fmt.Errorf("envelope: empty input: %w", ErrUnknownFormat)
+	}
 	switch ciphertext[0] {
 	case formatV1:
-		enc, ok := mgr.Encryptor()
-		if !ok {
-			return nil, ErrLocked
-		}
 		pt, err := enc.Decrypt(ciphertext[1:])
 		if err != nil {
 			return nil, fmt.Errorf("envelope: decrypt: %w", err)

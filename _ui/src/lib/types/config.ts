@@ -828,6 +828,9 @@ export interface ClusterNode {
 // it accessible again without any migration.
 export interface VaultSettings {
   disabled?: boolean;
+  // "user" (default) = each user's master password + Secret Key;
+  // "server" = vault keys sealed with the server encryption key.
+  key_mode?: 'user' | 'server';
 }
 
 // VaultFilesSettings selects where personal-vault file uploads are

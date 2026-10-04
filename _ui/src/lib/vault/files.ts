@@ -80,6 +80,13 @@ export function contentUrl(id: string, download = false): string {
   return download ? `${base}?download=1` : base;
 }
 
+/** Zip download of a folder; without an id, of every file. */
+export function zipUrl(folderId = ''): string {
+  return withBasePath(
+    folderId ? `/api/v1/me/vault/files-zip/${encodeURIComponent(folderId)}` : '/api/v1/me/vault/files-zip',
+  );
+}
+
 /**
  * Fetches raw bytes. With `maxBytes`, only the first maxBytes are
  * requested (HTTP Range), so huge files can still be inspected.

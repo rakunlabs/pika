@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { Lock, ShieldOff, Loader2 } from "lucide-svelte";
   import { vaultStore } from "@/lib/vault/store.svelte";
   import { appStore } from "@/lib/store/store.svelte";
@@ -12,6 +12,12 @@
     type VaultNav,
   } from "@/lib/components/vault/VaultSidebar.svelte";
   import FileBrowser from "@/lib/components/vault/FileBrowser.svelte";
+  import ResizablePanel from "@/lib/components/config/ResizablePanel.svelte";
+  import NoteEditor from "@/lib/components/vault/NoteEditor.svelte";
+  import { UNTITLED_NOTE } from "@/lib/vault/itemSummary";
+  import { confirmDialog } from "@/lib/store/confirm.svelte";
+  import { addToast } from "@/lib/store/toast.svelte";
+  import { apiErrorMessage } from "@/lib/api/client";
 
   // Top-level state for the page. The store owns the real data; this
   // component just decides which subview renders.
@@ -22,6 +28,9 @@
   // sidebar so the new-item dialog can pre-fill that folder. Empty
   // string = no folder context.
   let newItemDefaultFolder = $state("");
+  // Session-only, like the other resizable panes.
+  let sidebarWidth = $state(224);
+  let listWidth = $state(352);
 
   // Left-nav selection: an item bucket (all / favorites / folder /
   // archive / trash) or the file browser.
@@ -31,10 +40,6 @@
     favorites: false,
     folder: null,
   });
-  function navigate(next: VaultNav) {
-    nav = next;
-    selectedId = null;
-  }
 
   // The Emergency Kit pin lives on the store now (vaultStore.pendingSecretKey).
   // Setting it on the store BEFORE refreshStatus() flips initialized=true
@@ -77,15 +82,125 @@
     selectedId ? vaultStore.decrypted.get(selectedId) : undefined,
   );
 
+  // Notes open in the writing-focused NoteEditor. "Details" swaps in
+  // the full ItemEditor (tags, extra fields, history) for that note.
+  let detailsFor = $state<string | null>(null);
+  let noteDirty = $state(false);
+  const showNoteEditor = $derived(
+    !!current &&
+      current.item.type === "secure_note" &&
+      !current.item.deleted_at &&
+      detailsFor !== current.item.id,
+  );
+
+  async function select(id: string | null) {
+    if (id === selectedId) return;
+    if (noteDirty) {
+      const ok = await confirmDialog({
+        title: "Discard unsaved changes?",
+        message: "Your edits to this note haven't been saved.",
+        confirmLabel: "Discard",
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    noteDirty = false;
+    detailsFor = null;
+    selectedId = id;
+  }
+
+  async function navigate(next: VaultNav) {
+    await select(null);
+    if (selectedId === null) nav = next;
+  }
+
+  let creatingNote = false;
+  async function newNote(folder: string) {
+    if (creatingNote) return;
+    creatingNote = true;
+    try {
+      const item = await vaultStore.createItem(
+        "secure_note",
+        UNTITLED_NOTE,
+        { fields: [], notes: "" },
+        { folder: folder || undefined },
+      );
+      await select(item.id);
+    } catch (err) {
+      addToast(apiErrorMessage(err, "Failed to create note"), "alert");
+    } finally {
+      creatingNote = false;
+    }
+  }
+
   function onCreated(id: string) {
     showNew = false;
-    selectedId = id;
+    void select(id);
   }
 
   // Vault availability gate. The /api/v1/info response carries
   // vault_enabled = (s.VaultCoord() != nil). If the server doesn't
   // expose the feature, show a fallback rather than spinning forever.
   const vaultEnabled = $derived(appStore.info?.vault_enabled ?? false);
+
+  // Server-managed vaults (admin turned per-user encryption off) open
+  // without a master password: create or fetch the key automatically.
+  let serverOpenErr = $state<string | null>(null);
+  let serverOpening = $state(false);
+
+  async function openServerVault(create: boolean) {
+    if (serverOpening) return;
+    serverOpening = true;
+    serverOpenErr = null;
+    try {
+      if (create) await vaultStore.setupServer();
+      else await vaultStore.openServerManaged();
+    } catch (err) {
+      serverOpenErr = apiErrorMessage(err, "Could not open the vault");
+    } finally {
+      serverOpening = false;
+    }
+  }
+
+  const status = $derived(vaultStore.status);
+  const autoOpen = $derived.by(() => {
+    if (!booted || !vaultEnabled || !status || vaultStore.pendingSecretKey) return null;
+    if (vaultStore.isUnlocked()) return null;
+    if (!status.initialized) return status.deployment_key_mode === "server" ? "create" : null;
+    if (status.key_mode === "server" && status.deployment_key_mode === "server") return "open";
+    return null;
+  });
+
+  $effect(() => {
+    const mode = autoOpen;
+    if (mode && !serverOpenErr) untrack(() => void openServerVault(mode === "create"));
+  });
+
+  // A server-managed vault whose deployment went back to per-user
+  // encryption must be given a master password before it can be used.
+  const convertToUser = $derived(
+    !!status?.initialized && status.key_mode === "server" && status.deployment_key_mode === "user",
+  );
+
+  // A master-password vault whose deployment switched to server keys is
+  // unlocked once more, then handed to the server.
+  const convertToServer = $derived(
+    !!status?.initialized && status.key_mode === "user" && status.deployment_key_mode === "server",
+  );
+
+  async function afterUnlock() {
+    if (convertToServer) {
+      try {
+        await vaultStore.convertToServer();
+        addToast("Vault moved to server-managed encryption", "success", 3000);
+      } catch (err) {
+        addToast(apiErrorMessage(err, "Could not convert the vault"), "alert");
+        vaultStore.lock();
+        return;
+      }
+    }
+    await vaultStore.refreshItems();
+  }
 </script>
 
 <svelte:head>
@@ -112,41 +227,96 @@
         The personal vault feature isn't configured on this server.
       </p>
     </div>
-  {:else if !vaultStore.status?.initialized || vaultStore.pendingSecretKey}
+  {:else if serverOpenErr}
+    <div class="max-w-md mx-auto py-12 px-4">
+      <div
+        class="bg-white dark:bg-warm-800 rounded-lg border border-slate-200 dark:border-warm-700 p-6 shadow-sm dark:shadow-none text-center"
+      >
+        <ShieldOff size={28} class="mx-auto text-slate-400 mb-3" />
+        <h2 class="text-base font-semibold mb-2">Vault unavailable</h2>
+        <p class="text-sm text-slate-600 dark:text-slate-300 mb-4">{serverOpenErr}</p>
+        <button
+          type="button"
+          onclick={() => {
+            serverOpenErr = null;
+          }}
+          class="px-3 py-1.5 text-xs rounded bg-accent-600 text-white font-medium hover:bg-accent-700 cursor-pointer"
+        >
+          Try again
+        </button>
+      </div>
+    </div>
+  {:else if autoOpen || serverOpening}
+    <div class="flex-1 flex items-center justify-center">
+      <Loader2 size={20} class="animate-spin text-slate-400" />
+    </div>
+  {:else if !vaultStore.status?.initialized || vaultStore.pendingSecretKey || convertToUser}
     <VaultSetup
+      convert={convertToUser}
       onComplete={async () => {
         await vaultStore.refreshItems();
       }}
     />
   {:else if !vaultStore.isUnlocked()}
     <VaultUnlock
-      onUnlocked={async () => {
-        await vaultStore.refreshItems();
-      }}
+      convertToServer={convertToServer}
+      onUnlocked={afterUnlock}
     />
   {:else}
     <!-- Unlocked: sidebar nav + list + detail -->
     <div class="flex-1 flex overflow-hidden">
-      <VaultSidebar {nav} onNavigate={navigate} />
+      <ResizablePanel
+        width={sidebarWidth}
+        minWidth={180}
+        maxWidth={420}
+        side="left"
+        onResize={(w) => (sidebarWidth = w)}
+      >
+        <VaultSidebar {nav} onNavigate={navigate} />
+      </ResizablePanel>
       {#if nav.kind === "files"}
         <FileBrowser />
       {:else}
-        <ItemList
-          {selectedId}
-          view={nav.view}
-          favoritesOnly={nav.favorites}
-          folder={nav.folder}
-          onSelect={(id) => (selectedId = id)}
-          onNew={(folder) => {
-            newItemDefaultFolder = folder;
-            showNew = true;
-          }}
-        />
+        <ResizablePanel
+          width={listWidth}
+          minWidth={280}
+          maxWidth={640}
+          side="left"
+          onResize={(w) => (listWidth = w)}
+        >
+          <ItemList
+            {selectedId}
+            view={nav.view}
+            favoritesOnly={nav.favorites}
+            folder={nav.folder}
+            onSelect={(id) => void select(id)}
+            onNew={(folder) => {
+              newItemDefaultFolder = folder;
+              showNew = true;
+            }}
+            onNewNote={newNote}
+          />
+        </ResizablePanel>
         <!-- Right pane. When an ItemEditor is mounted it provides its
              own `bg-white dark:bg-warm-950` surface; the empty state
              needs the same backdrop. -->
-        <div class="flex-1 overflow-hidden bg-white dark:bg-warm-950">
-          {#if current}
+        <div class="flex-1 min-w-0 overflow-hidden bg-white dark:bg-warm-950">
+          {#if current && showNoteEditor}
+            {#key current.item.id}
+              <NoteEditor
+                item={current.item}
+                title={current.title}
+                folder={current.folder}
+                payload={current.payload}
+                onClose={() => void select(null)}
+                onOpenDetails={() => {
+                  noteDirty = false;
+                  detailsFor = current.item.id;
+                }}
+                onDirtyChange={(d) => (noteDirty = d)}
+              />
+            {/key}
+          {:else if current}
             {#key current.item.id + ":" + current.item.version}
               <ItemEditor
                 item={current.item}
@@ -155,7 +325,8 @@
                 hostnamesCleartext={current.hostnames}
                 folderCleartext={current.folder}
                 payload={current.payload}
-                onClose={() => (selectedId = null)}
+                onClose={() => void select(null)}
+                onBackToNote={detailsFor === current.item.id ? () => (detailsFor = null) : undefined}
               />
             {/key}
           {:else}

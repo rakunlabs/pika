@@ -1,6 +1,8 @@
 <script lang="ts">
   import { configStore } from "@/lib/store/config.svelte";
   import { appStore } from "@/lib/store/store.svelte";
+  import { keymgrStore } from "@/lib/store/keymgr.svelte";
+  import { confirmDialog } from "@/lib/store/confirm.svelte";
   import { onMount } from "svelte";
   import { KeyRound, AlertTriangle } from "lucide-svelte";
 
@@ -12,11 +14,13 @@
 
   // ── Personal vault feature toggle ──
   let vaultDisabledDraft = $state(false);
+  let userEncryptionDraft = $state(true);
   let vaultBusy = $state(false);
 
   async function loadToggles() {
     await configStore.loadSettings();
     vaultDisabledDraft = configStore.settings?.vault?.disabled === true;
+    userEncryptionDraft = configStore.settings?.vault?.key_mode !== "server";
   }
 
   async function saveVaultToggle(disabled: boolean) {
@@ -31,10 +35,47 @@
     }
   }
 
+  async function saveUserEncryption(enabled: boolean) {
+    const ok = await confirmDialog({
+      title: enabled
+        ? "Require a master password for vaults?"
+        : "Turn off per-user vault encryption?",
+      message: enabled
+        ? "Each user will choose a master password and receive a Secret Key the next time they open their vault. After that, admins can no longer read vault contents."
+        : "Vault keys will be protected by the server encryption key instead of each user's master password. Users open their vault directly, and anyone with the server key can read vault contents. Existing vaults switch over the next time their owner unlocks them.",
+      confirmLabel: enabled ? "Require master password" : "Use server encryption",
+      danger: !enabled,
+    });
+    if (!ok) {
+      userEncryptionDraft = configStore.settings?.vault?.key_mode !== "server";
+      return;
+    }
+    vaultBusy = true;
+    try {
+      await configStore.saveVaultSettings(
+        { key_mode: enabled ? "user" : "server" },
+        enabled
+          ? "Vaults now require a master password."
+          : "Vaults now use the server encryption key.",
+      );
+      userEncryptionDraft = enabled;
+    } catch {
+      userEncryptionDraft = configStore.settings?.vault?.key_mode !== "server";
+    } finally {
+      vaultBusy = false;
+    }
+  }
+
   const liveVaultEnabled = $derived(appStore.info?.vault_enabled ?? true);
+  // Server-managed keys need the server encryption key to be set up
+  // and unlocked; without it the switch would leave vaults unopenable.
+  const serverKeyReady = $derived(
+    keymgrStore.status?.initialized === true && keymgrStore.status?.unlocked === true,
+  );
 
   onMount(() => {
     loadToggles();
+    keymgrStore.refreshStatus();
   });
 </script>
 
@@ -93,9 +134,9 @@
             Enable personal vault for users
           </span>
           <span class="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Each authenticated user can set up a private, end-to-end encrypted
-            vault. Disabling preserves existing data and only hides the feature
-            — re-enable any time to restore access.
+            Each authenticated user can set up a private, encrypted vault.
+            Disabling preserves existing data and only hides the feature —
+            re-enable any time to restore access.
           </span>
         </span>
       </label>
@@ -111,6 +152,52 @@
           </span>
         </div>
       {/if}
+
+      <div class="mt-5 pt-4 border-t border-slate-200 dark:border-warm-700">
+        <label class="flex items-start gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            class="mt-0.5 h-4 w-4 rounded border-slate-300 dark:border-warm-600 text-accent-600 focus:ring-accent-500 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed dark:text-accent-400"
+            checked={userEncryptionDraft}
+            disabled={vaultBusy || (userEncryptionDraft && !serverKeyReady)}
+            onchange={(e) =>
+              saveUserEncryption((e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="flex-1">
+            <span
+              class="block text-sm font-medium text-slate-800 dark:text-slate-100"
+            >
+              Require a master password for each vault
+            </span>
+            <span class="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              On: every user protects their vault with their own master
+              password and Secret Key (end-to-end, admins can't read it). Off:
+              vault keys are sealed with the server encryption key and users
+              open their vault directly.
+            </span>
+          </span>
+        </label>
+
+        {#if userEncryptionDraft && !serverKeyReady}
+          <p class="mt-2 ml-7 text-xs text-slate-500 dark:text-slate-400">
+            To turn this off, first enable and unlock the server encryption key
+            in Settings → Server encryption key.
+          </p>
+        {/if}
+
+        {#if !userEncryptionDraft}
+          <div
+            class="mt-3 p-3 rounded border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2"
+          >
+            <AlertTriangle size={13} class="shrink-0 mt-0.5" />
+            <span>
+              Vault contents can be read by anyone who has the server
+              encryption key. Vaults that still use a master password switch
+              over the next time their owner unlocks them.
+            </span>
+          </div>
+        {/if}
+      </div>
     </div>
   </section>
 </div>

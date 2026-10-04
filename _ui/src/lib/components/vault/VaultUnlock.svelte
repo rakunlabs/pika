@@ -6,6 +6,7 @@
     KeyRound,
     AlertCircle,
     ShieldCheck,
+    Info,
   } from "lucide-svelte";
   import { onMount } from "svelte";
   import { vaultStore } from "@/lib/vault/store.svelte";
@@ -14,8 +15,11 @@
 
   interface Props {
     onUnlocked?: () => void;
+    // The admin switched to server-managed keys: this unlock is the
+    // last one, after which the vault is handed to the server.
+    convertToServer?: boolean;
   }
-  let { onUnlocked }: Props = $props();
+  let { onUnlocked, convertToServer = false }: Props = $props();
 
   // The form has two modes:
   //   trusted   — a localStorage trust blob exists for this account;
@@ -154,7 +158,7 @@
           err = "Wrong password or Secret Key";
           return;
         }
-        if (trustChecked) {
+        if (trustChecked && !convertToServer) {
           try {
             await vaultStore.trustDevice(password);
             addToast("This device is now trusted", "success", 2500);
@@ -192,6 +196,18 @@
       <Lock size={18} class="text-accent-600 dark:text-accent-400" />
       <h2 class="text-lg font-semibold">Unlock your vault</h2>
     </div>
+    {#if convertToServer}
+      <div
+        class="bg-blue-50 dark:bg-blue-950/30 border border-blue-300 dark:border-blue-700 rounded p-3 text-sm mb-4 flex gap-2"
+      >
+        <Info size={16} class="text-blue-700 dark:text-blue-300 shrink-0 mt-0.5" />
+        <div class="text-blue-900 dark:text-blue-200">
+          Your administrator switched personal vaults to server-managed
+          encryption. Unlock one last time; after that the vault opens without
+          a master password or Secret Key.
+        </div>
+      </div>
+    {/if}
     {#if mode === "trusted"}
       <p
         class="text-sm text-slate-600 dark:text-slate-300 mb-2 flex items-center gap-1.5"
@@ -265,6 +281,7 @@
           </div>
         </div>
 
+        {#if !convertToServer}
         <label
           class="flex items-start gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer select-none"
         >
@@ -282,6 +299,7 @@
             Three wrong passwords automatically revoke trust.
           </span>
         </label>
+        {/if}
       {/if}
 
       {#if err}

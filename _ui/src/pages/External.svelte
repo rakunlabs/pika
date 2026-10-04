@@ -1006,8 +1006,8 @@
                       }
                     }}
                     placeholder={searchMode === "name"
-                      ? "Search paths…"
-                      : "Search paths + values…"}
+                      ? "Search path names…"
+                      : "Search names and values…"}
                     class="w-full pl-7 pr-7 py-1 text-[11px] font-mono border border-slate-200 dark:border-warm-700 rounded bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500/30"
                   />
                   {#if searchInput}
@@ -1040,26 +1040,27 @@
                 </button>
               </div>
               <div class="flex items-center justify-between text-[10px]">
-                <!-- Mode toggle. Same chip-style affordance as
-                     Configuration; clicking flips and re-runs the
-                     query so the user sees the new result set
-                     immediately rather than having to hit Enter. -->
-                <button
-                  class="px-1.5 py-0.5 rounded font-mono cursor-pointer transition-colors
-                         {searchMode === 'all'
-                    ? 'bg-accent-100 dark:bg-accent-950/40 text-accent-700 dark:text-accent-300 border border-accent-200 dark:border-accent-900'
-                    : 'bg-slate-100 dark:bg-warm-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-warm-700'}"
-                  onclick={() => {
-                    searchMode = searchMode === "name" ? "all" : "name";
-                    if (searchActive) runSearch();
-                  }}
-                  title={searchMode === "name"
-                    ? "Searching path names only. Click to also search values."
-                    : "Searching paths AND values. Click for names only."}
-                  aria-pressed={searchMode === "all"}
+                <!-- Content-search switch. Flipping it re-runs an
+                     active query so the result set updates at once. -->
+                <label
+                  class="flex items-center gap-1.5 text-slate-600 dark:text-slate-300 cursor-pointer select-none"
+                  title="Off: match path names only (fast). On: also look inside each value (slower, reads every entry)."
                 >
-                  {searchMode === "all" ? "+contents" : "names only"}
-                </button>
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    checked={searchMode === "all"}
+                    onchange={(e) => {
+                      searchMode = e.currentTarget.checked ? "all" : "name";
+                      if (searchActive) runSearch();
+                    }}
+                    class="accent-accent-600 cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent-500"
+                  />
+                  Also search inside values
+                  {#if searchMode === "all"}
+                    <span class="text-slate-400 dark:text-slate-500">(slower)</span>
+                  {/if}
+                </label>
                 {#if searchActive && !searching}
                   <span class="text-slate-400">
                     {searchResults.length}
@@ -1092,13 +1093,13 @@
                   >
                   {#if searchMode === "name"}
                     <div class="mt-2 text-[10px]">
-                      Try <button
+                      Only path names were searched. <button
                         class="underline cursor-pointer"
                         onclick={() => {
                           searchMode = "all";
                           runSearch();
-                        }}>+contents</button
-                      > mode.
+                        }}>Search inside values too</button
+                      >
                     </div>
                   {/if}
                 </div>

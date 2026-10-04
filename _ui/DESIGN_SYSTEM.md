@@ -355,11 +355,13 @@ EmergencyKit / NewItemDialog.
 
 ### Layout
 
-Unlocked vault = three columns: `VaultSidebar` (w-56, `bg-slate-50 dark:bg-warm-800`,
-same tier as the Settings sidebar) → `ItemList` (w-[22rem], `bg-white dark:bg-warm-900`)
-or `FileBrowser` → detail pane (`ItemEditor` / `FilePreview`). Sidebar rows use the
+Unlocked vault = three columns: `VaultSidebar` (resizable, default 224px, `bg-slate-50 dark:bg-warm-800`,
+same tier as the Settings sidebar) → `ItemList` (resizable, default 352px, `bg-white dark:bg-warm-900`)
+or `FileBrowser` → detail pane (`ItemEditor` / `FilePreview`). Both left columns use
+`ResizablePanel`; widths are session-only like the Configurations page. Sidebar rows use the
 active nav-item pattern from §4. Drop targets (folders, breadcrumbs) highlight with
-the same accent wash plus a dashed `accent-400` / `dark:accent-500` border.
+the same accent wash plus a dashed `accent-400` / `dark:accent-500` border. Dragged rows
+use the compact chip from `lib/vault/dragchip.ts`, never the browser's default snapshot.
 
 ### Item type → color stripe
 
@@ -387,7 +389,7 @@ left-border stripe on the editor hero.
 
 ### Item editor body
 
-- **Left-aligned**, NOT centered. The previous `mx-auto` was rolled back per user feedback ("reads as a centered card, disconnects from the list"). Use `max-w-3xl` cap without `mx-auto`.
+- **Left-aligned**, NOT centered. The previous `mx-auto` was rolled back per user feedback ("reads as a centered card, disconnects from the list"). Use `max-w-4xl` cap without `mx-auto`.
 - **Scrollbar lives on the outer `overflow-y-auto`** wrapping the content column, so it sits on the panel's right edge regardless of inner width.
 - **View vs. Edit mode**: read mode is the default; explicit `Edit` button enters edit mode. Save reverts to view mode automatically.
 
@@ -400,17 +402,39 @@ left-border stripe on the editor hero.
 
 ### Secure note rendering
 
-Notes for `type === 'secure_note'` items are rendered through the in-tree
-markdown parser (`_ui/src/lib/vault/markdown.ts`). Other types render plain
-whitespace-preserved text. The markdown parser is zero-dep and escape-safe;
-don't add `marked` or similar without a hard reason.
+Notes (`type === 'secure_note'`) open in `NoteEditor`, a writing-focused pane:
+editable title (defaults to the first line when left blank), Write / Split / Read
+modes on the shared `AppCodeMirror`, Ctrl/Cmd+S to save, and a Details button that
+swaps in the full `ItemEditor` (tags, extra fields, history) with a "Back to note"
+button. Switching items with unsaved note text asks before discarding.
+
+Markdown is rendered through the in-tree parser (`_ui/src/lib/vault/markdown.ts`).
+Other types render plain whitespace-preserved text. The markdown parser is
+zero-dep and escape-safe; don't add `marked` or similar without a hard reason.
+
+### Item list rows
+
+- Line 1: title (search terms highlighted) + favorite star + expiry badge
+  (`Expired` vermilion, `Expires soon` amber, within 30 days).
+- Line 2: a per-type summary from `itemSubtitle()` in `lib/vault/itemSummary.ts`
+  (login → `user · host`, server → `user@host`, card → `•••• 1234 · MM/YY`, …).
+  Never a sensitive value beyond the last four card digits. The type label is
+  NOT repeated there; the colored tile already says it.
+- Right edge: a muted meta label (last used / changed, depending on sort) that is
+  swapped for quick actions on hover or keyboard focus: copy username, copy
+  secret (via `copySecret`, auto-clears), open URL, and the `⋮` menu. Copying
+  calls `vaultStore.touchItem` so "Recently used" sorting stays accurate.
+- Every action reports failure with a toast; never fail silently.
 
 ### Folder grouping
 
-Item list shows folders as collapsible accordion groups. Each group is a
-`<button>` header that toggles a `collapsed` Set persisted to
-`localStorage["pika.vault.collapsed.${user_id}"]`. The header order is real
-folders alphabetically, then `(No folder)` last.
+The list is flat by default, sorted by Recently used / Recently changed / Name
+(persisted in `localStorage["pika.vault.sort"]`). The folder-tree toggle in the
+list header groups it by folder (`pika.vault.group`); group headers are sticky.
+Collapsed groups are a Set persisted to `localStorage["pika.vault.collapsed.${user_id}"]`.
+Order is real folders alphabetically, then `No folder` last. Grouping is
+unavailable when a single folder is selected in the sidebar (it would only
+repeat the heading).
 
 ### History timeline
 

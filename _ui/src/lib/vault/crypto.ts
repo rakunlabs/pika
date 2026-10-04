@@ -62,8 +62,12 @@ export interface VaultKDFParams {
  * VaultAccountView mirrors service.VaultAccountView. byte slices arrive
  * as base64-encoded strings (Go's encoding/json default for []byte).
  */
+export type VaultKeyMode = 'user' | 'server';
+
 export interface VaultAccountView {
   user_id: string;
+  /** "user" = master password + Secret Key; "server" = sealed with the server key. */
+  key_mode?: VaultKeyMode;
   kdf: VaultKDFParams;
   wrapped_vault_key: string; // base64
   wrapped_vault_key_version: number;
@@ -574,6 +578,7 @@ export async function buildSetup(
   masterPassword: string,
   preset: KDFPreset = 'default',
   sessionLockSeconds: number = 900,
+  existingVaultKey?: Uint8Array,
 ): Promise<SetupResult> {
   await ready();
   if (masterPassword.length < 8) {
@@ -585,7 +590,9 @@ export async function buildSetup(
 
   const secretKey = await generateSecretKey();
   const accountKey = await deriveAccountKey(masterPassword, secretKey.bytes, kdf);
-  const vaultKey = await generateVaultKey();
+  // Converting a server-managed vault keeps its existing vault key so
+  // items stay readable; a fresh setup generates a new one.
+  const vaultKey = existingVaultKey ?? (await generateVaultKey());
   let wrapped: Uint8Array;
   try {
     wrapped = await wrapVaultKey(vaultKey, accountKey);

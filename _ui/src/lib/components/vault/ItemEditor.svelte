@@ -63,6 +63,8 @@
     folderCleartext: string | null;
     payload: VaultItemPayload | null;
     onClose: () => void;
+    /** Set when this note was opened from NoteEditor's Details button. */
+    onBackToNote?: () => void;
   }
   let {
     item,
@@ -72,6 +74,7 @@
     folderCleartext,
     payload,
     onClose,
+    onBackToNote,
   }: Props = $props();
 
   // ─── View / Edit mode ──────────────────────────────────────────
@@ -265,6 +268,7 @@
     if (!value) return;
     try {
       await copySecret(value);
+      void vaultStore.touchItem(item.id);
       copiedField = id;
       setTimeout(() => {
         copiedField = null;
@@ -824,6 +828,15 @@
           <Trash2 size={12} /> Delete forever
         </button>
       {:else if mode === "view"}
+        {#if onBackToNote}
+          <button
+            onclick={onBackToNote}
+            class="flex items-center gap-1 px-2 py-1 text-xs rounded bg-slate-100 dark:bg-warm-800 hover:bg-slate-200 dark:hover:bg-warm-700 text-slate-700 dark:text-slate-200 cursor-pointer"
+            title="Back to the note editor"
+          >
+            <FileText size={12} /> Back to note
+          </button>
+        {/if}
         <button
           onclick={() => ((favorite = !favorite), void favoriteFlip())}
           class="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-warm-800 cursor-pointer"
@@ -918,10 +931,10 @@
        `mx-auto`) — user feedback was that mid-screen content
        reads as a centered "card", which makes the editor feel
        disconnected from the item list on the left. The
-       `max-w-3xl` cap still prevents lines from stretching too
+       `max-w-4xl` cap still prevents lines from stretching too
        wide on large monitors. ───── -->
   <div class="flex-1 overflow-y-auto">
-    <div class="max-w-3xl p-4 sm:p-6 space-y-4">
+    <div class="max-w-4xl p-4 sm:p-6 space-y-4">
       {#if !payload}
         <div
           class="bg-red-50 dark:bg-red-950/30 border border-red-300 dark:border-red-700 rounded p-3 text-sm text-red-700 dark:text-red-300"

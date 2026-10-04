@@ -426,6 +426,66 @@ func TestVault_UpdateOptimisticConcurrency(t *testing.T) {
 	}
 }
 
+func TestVault_UpdateSkipsNoopsAndMetadataSnapshots(t *testing.T) {
+	svc, vs := newTestVaultService(t)
+	uid := createUserHelper(t, svc, "alice")
+	ctx := t.Context()
+	if _, err := vs.Setup(ctx, uid, validSetupRequest(t)); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	title := fakeCiphertext(t, 24)
+	item, err := vs.CreateItem(ctx, uid, &service.CreateVaultItemRequest{
+		Type:             service.VaultItemTypeSecureNote,
+		EncryptedTitle:   title,
+		EncryptedPayload: fakeCiphertext(t, 64),
+	})
+	if err != nil {
+		t.Fatalf("CreateItem: %v", err)
+	}
+	countVersions := func() int {
+		t.Helper()
+		v, err := vs.ListItemVersions(ctx, uid, item.ID)
+		if err != nil {
+			t.Fatalf("ListItemVersions: %v", err)
+		}
+		return len(v)
+	}
+	no, yes := false, true
+
+	// Resending identical values (or nothing) changes nothing.
+	got, err := vs.UpdateItem(ctx, uid, item.ID, &service.UpdateVaultItemRequest{
+		ExpectedVersion: 1,
+		EncryptedTitle:  title,
+		Favorite:        &no,
+	})
+	if err != nil {
+		t.Fatalf("noop UpdateItem: %v", err)
+	}
+	if got.Version != 1 || countVersions() != 0 {
+		t.Fatalf("noop update bumped state: version=%d snapshots=%d", got.Version, countVersions())
+	}
+
+	// Metadata-only change bumps the version but adds no history row.
+	got, err = vs.UpdateItem(ctx, uid, item.ID, &service.UpdateVaultItemRequest{ExpectedVersion: 1, Favorite: &yes})
+	if err != nil {
+		t.Fatalf("favorite UpdateItem: %v", err)
+	}
+	if got.Version != 2 || !got.Favorite || countVersions() != 0 {
+		t.Fatalf("favorite update: version=%d favorite=%v snapshots=%d", got.Version, got.Favorite, countVersions())
+	}
+
+	// Content change snapshots the previous state.
+	if _, err := vs.UpdateItem(ctx, uid, item.ID, &service.UpdateVaultItemRequest{
+		ExpectedVersion:  2,
+		EncryptedPayload: fakeCiphertext(t, 80),
+	}); err != nil {
+		t.Fatalf("payload UpdateItem: %v", err)
+	}
+	if countVersions() != 1 {
+		t.Fatalf("payload update snapshots=%d want 1", countVersions())
+	}
+}
+
 func TestVault_SoftDeleteRestorePurge(t *testing.T) {
 	svc, vs := newTestVaultService(t)
 	uid := createUserHelper(t, svc, "alice")

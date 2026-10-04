@@ -21,6 +21,7 @@
   } from "@/lib/vault/templates";
   import type { VaultItemType } from "@/lib/vault/api";
   import { addToast } from "@/lib/store/toast.svelte";
+  import { UNTITLED_NOTE } from "@/lib/vault/itemSummary";
   import { backdropClose } from "@/lib/actions/backdropClose";
 
   interface Props {
@@ -50,7 +51,7 @@
     { t: "login", icon: KeyRound, desc: "Username, password, website" },
     { t: "card", icon: CreditCard, desc: "Credit card number, CVV, PIN" },
     { t: "identity", icon: UserSquare2, desc: "Name, address, phone" },
-    { t: "secure_note", icon: FileText, desc: "Free-form note" },
+    { t: "secure_note", icon: FileText, desc: "Markdown note, write anything" },
     { t: "ssh_key", icon: Terminal, desc: "SSH public/private key pair" },
     { t: "api_credential", icon: Plug, desc: "API key and secret" },
     { t: "database", icon: Database, desc: "DB host, port, credentials" },
@@ -60,6 +61,13 @@
   ];
 
   function pickType(t: VaultItemType) {
+    if (t === "secure_note") {
+      // Notes are titled from their first line; open the editor straight away.
+      chosenType = t;
+      title = UNTITLED_NOTE;
+      void create();
+      return;
+    }
     chosenType = t;
     step = "name";
   }

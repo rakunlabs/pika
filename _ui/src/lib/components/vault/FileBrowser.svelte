@@ -30,6 +30,12 @@
     FilePlus,
     ChevronDown,
     FileEdit,
+    ListTree,
+    RefreshCw,
+    SquarePlus,
+    SquareMinus,
+    ChevronsDownUp,
+    ChevronsUpDown,
   } from "lucide-svelte";
   import { link } from "svelte-spa-router";
   import * as files from "@/lib/vault/files";
@@ -51,6 +57,7 @@
   import { appStore } from "@/lib/store/store.svelte";
   import FilePreview from "./FilePreview.svelte";
   import FileEditor from "./FileEditor.svelte";
+  import { setDragChip } from "@/lib/vault/dragchip";
 
   const NODE_DRAG_MIME = "application/x-pika-vault-file";
   const VIEW_KEY = "pika.vault.files.view";
@@ -63,8 +70,8 @@
   let cwd = $state(""); // "" = root
   let selectedId = $state<string | null>(null);
   let q = $state("");
-  let view = $state<"grid" | "list">(
-    (localStorage.getItem(VIEW_KEY) as "grid" | "list") || "grid",
+  let view = $state<"grid" | "list" | "tree">(
+    (localStorage.getItem(VIEW_KEY) as "grid" | "list" | "tree") || "tree",
   );
   $effect(() => {
     try {
@@ -74,7 +81,9 @@
     }
   });
 
+  let refreshing = $state(false);
   async function refresh() {
+    refreshing = true;
     try {
       const info = await files.listFiles();
       enabled = info.enabled;
@@ -86,6 +95,7 @@
       addToast(apiErrorMessage(err, "Failed to load files"), "alert");
     } finally {
       loaded = true;
+      refreshing = false;
     }
   }
   onMount(refresh);
@@ -130,6 +140,52 @@
       return sortNodes(nodes.filter((n) => n.name.toLowerCase().includes(needle)));
     }
     return sortNodes(nodes.filter((n) => n.parent_id === cwd));
+  });
+
+  // ─── Tree view ──────────────────────────────────────────────────
+  let expanded = $state<Set<string>>(new Set());
+
+  function toggleExpand(id: string) {
+    const next = new Set(expanded);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    expanded = next;
+  }
+
+  function expandAll() {
+    expanded = new Set(nodes.filter((n) => n.is_dir).map((n) => n.id));
+  }
+
+  function collapseAll() {
+    expanded = new Set();
+  }
+
+  const childrenOf = $derived.by(() => {
+    const m = new Map<string, VaultFile[]>();
+    for (const n of nodes) {
+      const list = m.get(n.parent_id);
+      if (list) list.push(n);
+      else m.set(n.parent_id, [n]);
+    }
+    for (const list of m.values()) sortNodes(list);
+    return m;
+  });
+
+  const treeMode = $derived(view === "tree" && !searching);
+
+  // Rows for the table: flat in list/search mode, depth-first over
+  // expanded folders in tree mode.
+  const rows = $derived.by(() => {
+    if (!treeMode) return visible.map((n) => ({ n, depth: 0 }));
+    const out: { n: VaultFile; depth: number }[] = [];
+    const walk = (parent: string, depth: number) => {
+      for (const n of childrenOf.get(parent) ?? []) {
+        out.push({ n, depth });
+        if (n.is_dir && expanded.has(n.id)) walk(n.id, depth + 1);
+      }
+    };
+    walk(cwd, 0);
+    return out;
   });
 
   function folderStats(id: string): { count: number; size: number } {
@@ -450,6 +506,7 @@
     draggingId = n.id;
     e.dataTransfer.setData(NODE_DRAG_MIME, n.id);
     e.dataTransfer.effectAllowed = "move";
+    setDragChip(e.dataTransfer, n.name, n.is_dir ? "bg-accent-500" : "bg-slate-400");
     // Dragging a file out to the desktop downloads it (Chromium).
     if (!n.is_dir) {
       const url = new URL(files.contentUrl(n.id, true), window.location.href).href;
@@ -560,8 +617,22 @@
   function download(n: VaultFile) {
     menuFor = null;
     const a = document.createElement("a");
-    a.href = files.contentUrl(n.id, true);
-    a.download = n.name;
+    a.href = n.is_dir ? files.zipUrl(n.id) : files.contentUrl(n.id, true);
+    a.download = n.is_dir ? `${n.name}.zip` : n.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function downloadCurrentZip() {
+    const dir = cwd ? byId.get(cwd) : undefined;
+    if (dir) {
+      download(dir);
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = files.zipUrl();
+    a.download = "vault-files.zip";
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -647,6 +718,15 @@
           {totals.count} file{totals.count === 1 ? "" : "s"} · {formatBytes(totals.size)}
         </span>
         <div class="flex-1"></div>
+        <button
+          class="p-1.5 rounded text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-warm-700 hover:text-slate-800 dark:hover:text-slate-100 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          onclick={refresh}
+          disabled={refreshing}
+          title="Refresh"
+          aria-label="Refresh files"
+        >
+          <RefreshCw size={14} class={refreshing ? "animate-spin" : ""} />
+        </button>
         <div class="relative w-56">
           <Search size={13} class="absolute top-1/2 left-2.5 -translate-y-1/2 text-slate-400 pointer-events-none" />
           <input
@@ -684,6 +764,15 @@
             aria-pressed={view === "list"}
           >
             <List size={14} />
+          </button>
+          <button
+            class="p-1.5 cursor-pointer border-l border-slate-300 dark:border-warm-600 {view === 'tree' ? 'bg-accent-50 text-accent-700 dark:bg-accent-900/40 dark:text-accent-300' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-warm-700'}"
+            onclick={() => (view = "tree")}
+            title="Tree view"
+            aria-label="Tree view"
+            aria-pressed={view === "tree"}
+          >
+            <ListTree size={14} />
           </button>
         </div>
       </div>
@@ -725,6 +814,24 @@
             {/each}
           {/if}
         </nav>
+        {#if treeMode}
+          <button
+            class="p-1.5 rounded text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-warm-700 hover:text-slate-800 dark:hover:text-slate-100 cursor-pointer"
+            onclick={expandAll}
+            title="Expand all"
+            aria-label="Expand all folders"
+          >
+            <ChevronsUpDown size={14} />
+          </button>
+          <button
+            class="p-1.5 rounded text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-warm-700 hover:text-slate-800 dark:hover:text-slate-100 cursor-pointer"
+            onclick={collapseAll}
+            title="Collapse all"
+            aria-label="Collapse all folders"
+          >
+            <ChevronsDownUp size={14} />
+          </button>
+        {/if}
         <div class="relative">
           <button
             class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-slate-100 dark:bg-warm-800 hover:bg-slate-200 dark:hover:bg-warm-700 text-slate-700 dark:text-slate-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
@@ -762,6 +869,14 @@
             </div>
           {/if}
         </div>
+        <button
+          class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-slate-100 dark:bg-warm-800 hover:bg-slate-200 dark:hover:bg-warm-700 text-slate-700 dark:text-slate-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled={!enabled || totals.count === 0}
+          onclick={downloadCurrentZip}
+          title={cwd ? "Download this folder as a zip" : "Download all files as a zip"}
+        >
+          <Download size={13} /> Zip
+        </button>
         <button
           class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-slate-100 dark:bg-warm-800 hover:bg-slate-200 dark:hover:bg-warm-700 text-slate-700 dark:text-slate-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           disabled={!enabled}
@@ -984,11 +1099,12 @@
             </tr>
           </thead>
           <tbody>
-            {#each visible as n (n.id)}
+            {#each rows as { n, depth } (n.id)}
               {@const kind = kindOf(n)}
               {@const Icon = kindIcon[kind]}
               {@const isSel = selectedId === n.id}
               {@const isDrop = n.is_dir && dropFolder === n.id}
+              {@const isOpen = expanded.has(n.id)}
               <tr
                 draggable={renaming !== n.id}
                 ondragstart={(e) => nodeDragStart(e, n)}
@@ -1000,7 +1116,7 @@
                 ondragleave={n.is_dir ? (e) => folderDragLeave(e, n.id) : undefined}
                 ondrop={n.is_dir ? (e) => folderDrop(e, n.id) : undefined}
                 onclick={() => (selectedId = n.id)}
-                ondblclick={() => open(n)}
+                ondblclick={() => (treeMode && n.is_dir ? toggleExpand(n.id) : open(n))}
                 class="group border-b border-slate-100 dark:border-warm-800 cursor-pointer
                   {isDrop
                   ? 'bg-accent-50 dark:bg-accent-900/40 outline-1 outline-dashed outline-accent-400'
@@ -1010,7 +1126,30 @@
                   {draggingId === n.id ? 'opacity-50' : ''}"
               >
                 <td class="px-4 py-1.5">
-                  <div class="flex items-center gap-2.5 min-w-0">
+                  <div class="flex items-center gap-2.5 min-w-0" style={treeMode ? `padding-left: ${depth * 20}px` : ""}>
+                    {#if treeMode}
+                      {#if n.is_dir}
+                        <button
+                          class="shrink-0 -mr-1 p-0.5 rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700 cursor-pointer"
+                          onclick={(e) => {
+                            e.stopPropagation();
+                            toggleExpand(n.id);
+                          }}
+                          ondblclick={(e) => e.stopPropagation()}
+                          aria-label="{isOpen ? 'Collapse' : 'Expand'} {n.name}"
+                          aria-expanded={isOpen}
+                          title={isOpen ? "Collapse" : "Expand"}
+                        >
+                          {#if isOpen}
+                            <SquareMinus size={14} />
+                          {:else}
+                            <SquarePlus size={14} />
+                          {/if}
+                        </button>
+                      {:else}
+                        <span class="shrink-0 w-[18px] -mr-1"></span>
+                      {/if}
+                    {/if}
                     <div class="shrink-0 w-7 h-7 rounded-md flex items-center justify-center {kindTile[kind]}">
                       <Icon size={14} />
                     </div>
@@ -1166,6 +1305,9 @@
     {#if n.is_dir}
       <button role="menuitem" class="w-full flex items-center gap-2 px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700 cursor-pointer" onclick={() => { menuFor = null; open(n); }}>
         <Folder size={12} class="text-slate-400" /> Open
+      </button>
+      <button role="menuitem" class="w-full flex items-center gap-2 px-3 py-1.5 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700 cursor-pointer" onclick={() => download(n)}>
+        <FileArchive size={12} class="text-slate-400" /> Download as zip
       </button>
     {:else}
       {#if canEdit(n)}

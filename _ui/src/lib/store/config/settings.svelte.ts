@@ -62,24 +62,29 @@ export function createSettingsStore() {
   // SPA's vault link disappears (or reappears) accordingly.
   async function saveVaultSettings(
     patch: VaultSettings,
+    successMessage?: string,
   ): Promise<void> {
+    // The server replaces the whole vault object, so merge with what
+    // is stored to avoid clobbering the other flag.
+    const next: VaultSettings = { ...(settings?.vault ?? {}), ...patch };
     try {
       await axios.post('/api/v1/settings', {
         action: 'set',
-        vault: patch,
+        vault: next,
       });
       if (settings) {
-        settings = { ...settings, vault: patch };
+        settings = { ...settings, vault: next };
       } else {
-        settings = { vault: patch };
+        settings = { vault: next };
       }
       // Refresh /api/v1/info so the navbar / route gate
       // (appStore.info.vault_enabled) updates immediately.
       await appStore.loadInfo();
       addToast(
-        patch.disabled
-          ? 'Personal vault disabled for this deployment.'
-          : 'Personal vault enabled for this deployment.',
+        successMessage ??
+          (next.disabled
+            ? 'Personal vault disabled for this deployment.'
+            : 'Personal vault enabled for this deployment.'),
         'success',
       );
     } catch (error) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -234,6 +235,40 @@ func (a *api) putMyVaultFileContent(c *ada.Context) error {
 		return a.vaultFilesError(c, err)
 	}
 	return c.SetStatus(http.StatusOK).SendJSON(f)
+}
+
+// downloadMyVaultZip streams a folder (or, without an id, every file
+// the user owns) as a zip archive. Everything that can fail cleanly is
+// checked before the first byte is written; after that the status is
+// committed and a truncated archive is the only failure signal.
+func (a *api) downloadMyVaultZip(c *ada.Context) error {
+	userID, err := a.vaultFilesUser(c)
+	if err != nil {
+		return a.vaultFilesError(c, err)
+	}
+	ctx := c.Request.Context()
+	id := strings.Trim(c.Request.PathValue("*"), "/")
+	z, err := a.svc.PrepareVaultZip(ctx, userID, id)
+	if err != nil {
+		return a.vaultFilesError(c, err)
+	}
+
+	h := c.Response.Header()
+	h.Set("Content-Type", "application/zip")
+	h.Set("Content-Disposition", contentDisposition("attachment", z.Name+".zip"))
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Cache-Control", "private, no-store")
+	c.Response.WriteHeader(http.StatusOK)
+
+	stats, err := z.WriteTo(ctx, c.Response)
+	if err != nil {
+		slog.Error("vault zip download failed", "user", userID, "folder", id, "files", stats.Files, "error", err)
+		return nil
+	}
+	if stats.Failed > 0 {
+		slog.Warn("vault zip download incomplete", "user", userID, "folder", id, "files", stats.Files, "failed", stats.Failed)
+	}
+	return nil
 }
 
 func (a *api) updateMyVaultFile(c *ada.Context) error {

@@ -11,8 +11,12 @@
   interface Props {
     // Fired when the user clicks "Continue to vault" on the kit.
     onComplete?: () => void;
+    // The vault already exists and is server-managed; the admin turned
+    // per-user encryption back on, so the user picks a master password
+    // for the existing vault key instead of creating a new vault.
+    convert?: boolean;
   }
-  let { onComplete }: Props = $props();
+  let { onComplete, convert = false }: Props = $props();
 
   let password = $state("");
   let confirm = $state("");
@@ -52,7 +56,11 @@
       // BEFORE flipping status.initialized, so by the time setup()
       // resolves the EmergencyKit branch below is already what the
       // parent's switch is rendering.
-      await vaultStore.setup(password, preset, lockMinutes * 60);
+      if (convert) {
+        await vaultStore.convertToUser(password, preset, lockMinutes * 60);
+      } else {
+        await vaultStore.setup(password, preset, lockMinutes * 60);
+      }
       // Wipe the password from local state — the live vault key is
       // already in vaultStore. The user must save the Secret Key
       // before clicking Continue.
@@ -95,13 +103,22 @@
       >
         <h2 class="text-lg font-semibold mb-2 flex items-center gap-2">
           <Lock size={18} class="text-accent-600 dark:text-accent-400" />
-          Create your personal vault
+          {convert ? "Protect your vault with a master password" : "Create your personal vault"}
         </h2>
-        <p class="text-sm text-slate-600 dark:text-slate-300 mb-6">
-          Your vault stores passwords and other secrets end-to-end encrypted in
-          your browser. The server never sees the unencrypted contents — not
-          even an admin can read them.
-        </p>
+        {#if convert}
+          <p class="text-sm text-slate-600 dark:text-slate-300 mb-6">
+            Your administrator turned on end-to-end encryption for personal
+            vaults. Choose a master password to keep using your existing
+            items. After this step, only you can open the vault — not even an
+            admin can read it.
+          </p>
+        {:else}
+          <p class="text-sm text-slate-600 dark:text-slate-300 mb-6">
+            Your vault stores passwords and other secrets end-to-end encrypted in
+            your browser. The server never sees the unencrypted contents — not
+            even an admin can read them.
+          </p>
+        {/if}
 
         <div
           class="bg-blue-50 dark:bg-blue-950/30 border border-blue-300 dark:border-blue-700 rounded p-3 text-sm mb-4 flex gap-2"
@@ -266,7 +283,7 @@
             class="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm rounded bg-accent-600 text-white font-medium hover:bg-accent-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >
             {#if busy}<Loader2 size={14} class="animate-spin" />{/if}
-            Create vault & show Secret Key
+            {convert ? "Set master password & show Secret Key" : "Create vault & show Secret Key"}
           </button>
           <p class="text-xs text-center text-slate-500 dark:text-slate-400">
             The next screen will display your Secret Key. Save it before

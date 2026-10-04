@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -153,7 +154,11 @@ type VaultSetupRequest struct {
 //     locally to obtain the vault key. The wrapped form is useless
 //     without the master password + Secret Key.
 type VaultAccountView struct {
-	UserID                 string         `json:"user_id"`
+	UserID string `json:"user_id"`
+	// KeyMode is "user" (master password) or "server" (sealed with the
+	// server encryption key). In server mode KDF and WrappedVaultKey are
+	// empty; the SPA fetches the key from /me/vault/server-key.
+	KeyMode                string         `json:"key_mode"`
 	KDF                    VaultKDFParams `json:"kdf"`
 	WrappedVaultKey        []byte         `json:"wrapped_vault_key"`
 	WrappedVaultKeyVersion int            `json:"wrapped_vault_key_version"`
@@ -171,6 +176,11 @@ type VaultAccountView struct {
 type VaultStatus struct {
 	Initialized bool  `json:"initialized"`
 	ItemCount   int64 `json:"item_count"`
+	// KeyMode is the mode of the user's vault ("" when not set up).
+	KeyMode string `json:"key_mode,omitempty"`
+	// DeploymentKeyMode is the mode the admin selected. When it
+	// differs from KeyMode the SPA converts the vault on next open.
+	DeploymentKeyMode string `json:"deployment_key_mode"`
 }
 
 // CreateVaultItemRequest is the payload to create a new item. Every
@@ -222,6 +232,26 @@ type UpdateVaultItemRequest struct {
 	Archived         *bool  `json:"archived,omitempty"`
 }
 
+// hasChanges reports whether applying r to cur would change anything.
+// A patch that resends identical values (or nothing at all) must not
+// bump the version or add a history snapshot.
+func (r *UpdateVaultItemRequest) hasChanges(cur *VaultItem) bool {
+	changed := func(next, prev []byte) bool { return len(next) > 0 && !bytes.Equal(next, prev) }
+	switch {
+	case r.Type != nil && *r.Type != cur.Type,
+		changed(r.EncryptedTitle, cur.EncryptedTitle),
+		changed(r.EncryptedTags, cur.EncryptedTags),
+		changed(r.EncryptedHostnames, cur.EncryptedHostnames),
+		changed(r.EncryptedFolder, cur.EncryptedFolder),
+		r.ClearFolder && len(cur.EncryptedFolder) > 0,
+		changed(r.EncryptedPayload, cur.EncryptedPayload),
+		r.Favorite != nil && *r.Favorite != cur.Favorite,
+		r.Archived != nil && *r.Archived != cur.Archived:
+		return true
+	}
+	return false
+}
+
 // vault returned by *Service.VaultCoord is the read-side handle on
 // the coordinator. The field lives on *Service for the same reason
 // totp / passkeys do — keeps the wiring single-source.
@@ -241,9 +271,11 @@ func (vs *VaultService) Status(ctx context.Context, userID string) (*VaultStatus
 	if vs == nil || userID == "" {
 		return &VaultStatus{}, nil
 	}
-	if _, err := vs.svc.store.VaultAccounts().Get(ctx, userID); err != nil {
+	deploymentMode := vs.svc.VaultKeyMode(ctx)
+	row, err := vs.svc.store.VaultAccounts().Get(ctx, userID)
+	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return &VaultStatus{Initialized: false}, nil
+			return &VaultStatus{Initialized: false, DeploymentKeyMode: deploymentMode}, nil
 		}
 		return nil, err
 	}
@@ -251,7 +283,12 @@ func (vs *VaultService) Status(ctx context.Context, userID string) (*VaultStatus
 	if err != nil {
 		return nil, err
 	}
-	return &VaultStatus{Initialized: true, ItemCount: count}, nil
+	return &VaultStatus{
+		Initialized:       true,
+		ItemCount:         count,
+		KeyMode:           NormalizeVaultKeyMode(row.KeyMode),
+		DeploymentKeyMode: deploymentMode,
+	}, nil
 }
 
 // Account returns the unlock-time view of the calling user's vault.
@@ -277,17 +314,7 @@ func (vs *VaultService) Account(ctx context.Context, userID string) (*VaultAccou
 	if err != nil {
 		return nil, err
 	}
-	return &VaultAccountView{
-		UserID:                 row.UserID,
-		KDF:                    row.KDF,
-		WrappedVaultKey:        row.WrappedVaultKey,
-		WrappedVaultKeyVersion: row.WrappedVaultKeyVersion,
-		RecoveryKitID:          row.RecoveryKitID,
-		SessionLockSeconds:     row.SessionLockSeconds,
-		ItemCount:              count,
-		CreatedAt:              row.CreatedAt,
-		UpdatedAt:              row.UpdatedAt,
-	}, nil
+	return newVaultAccountView(row, count), nil
 }
 
 // Setup initializes the vault for a user. The wire payload is fully
@@ -303,6 +330,9 @@ func (vs *VaultService) Setup(ctx context.Context, userID string, req *VaultSetu
 	}
 	if userID == "" || req == nil {
 		return nil, fmt.Errorf("vault: user id and request required: %w", ErrBadRequest)
+	}
+	if err := vs.requireKeyMode(ctx, VaultKeyModeUser); err != nil {
+		return nil, err
 	}
 	if err := validateKDF(req.KDF); err != nil {
 		return nil, err
@@ -335,6 +365,7 @@ func (vs *VaultService) Setup(ctx context.Context, userID string, req *VaultSetu
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	row := &VaultAccount{
 		UserID:                 userID,
+		KeyMode:                VaultKeyModeUser,
 		SecretKeyHash:          append([]byte(nil), req.SecretKeyHash...),
 		KDF:                    req.KDF,
 		WrappedVaultKey:        append([]byte(nil), req.WrappedVaultKey...),
@@ -349,17 +380,7 @@ func (vs *VaultService) Setup(ctx context.Context, userID string, req *VaultSetu
 		return nil, err
 	}
 
-	return &VaultAccountView{
-		UserID:                 row.UserID,
-		KDF:                    row.KDF,
-		WrappedVaultKey:        row.WrappedVaultKey,
-		WrappedVaultKeyVersion: row.WrappedVaultKeyVersion,
-		RecoveryKitID:          row.RecoveryKitID,
-		SessionLockSeconds:     row.SessionLockSeconds,
-		ItemCount:              0,
-		CreatedAt:              row.CreatedAt,
-		UpdatedAt:              row.UpdatedAt,
-	}, nil
+	return newVaultAccountView(row, 0), nil
 }
 
 // UnlockCheckRequest is the payload posted to UnlockCheck. The SPA
@@ -457,6 +478,9 @@ func (vs *VaultService) RotateMasterPassword(ctx context.Context, userID string,
 		}
 		return nil, err
 	}
+	if NormalizeVaultKeyMode(row.KeyMode) != VaultKeyModeUser {
+		return nil, fmt.Errorf("vault: vault is managed by the server key and has no master password: %w", ErrBadRequest)
+	}
 
 	row.KDF = req.KDF
 	row.WrappedVaultKey = append([]byte(nil), req.WrappedVaultKey...)
@@ -472,17 +496,7 @@ func (vs *VaultService) RotateMasterPassword(ctx context.Context, userID string,
 	}
 
 	count, _ := vs.svc.store.VaultItems().Count(ctx, userID)
-	return &VaultAccountView{
-		UserID:                 row.UserID,
-		KDF:                    row.KDF,
-		WrappedVaultKey:        row.WrappedVaultKey,
-		WrappedVaultKeyVersion: row.WrappedVaultKeyVersion,
-		RecoveryKitID:          row.RecoveryKitID,
-		SessionLockSeconds:     row.SessionLockSeconds,
-		ItemCount:              count,
-		CreatedAt:              row.CreatedAt,
-		UpdatedAt:              row.UpdatedAt,
-	}, nil
+	return newVaultAccountView(row, count), nil
 }
 
 // RegenerateRecoveryKitID produces a fresh kit ID. Callers re-render
@@ -691,6 +705,7 @@ func (vs *VaultService) UpdateItem(ctx context.Context, userID, itemID string, r
 	}
 
 	var updated *VaultItem
+	noop := false
 	err := vs.svc.store.Tx(ctx, func(ctx context.Context, tx Storage) error {
 		existing, err := tx.VaultItems().Get(ctx, userID, itemID)
 		if err != nil {
@@ -699,22 +714,32 @@ func (vs *VaultService) UpdateItem(ctx context.Context, userID, itemID string, r
 		if existing.Version != req.ExpectedVersion {
 			return ErrVaultVersionConflict
 		}
+		if !req.hasChanges(existing) {
+			updated = existing
+			noop = true
+			return nil
+		}
 
 		// Snapshot before mutation. The snapshot row carries the
 		// PREVIOUS state — that's what's useful for "show me what
 		// this looked like before the last edit". EncryptedTitle
 		// follows the same encryption posture as the live row, so a
-		// snapshot never reveals the readable title.
-		snapshot := &VaultItemVersion{
-			ItemID:           existing.ID,
-			Version:          existing.Version,
-			EncryptedTitle:   append([]byte(nil), existing.EncryptedTitle...),
-			EncryptedPayload: append([]byte(nil), existing.EncryptedPayload...),
-			UpdatedAt:        existing.UpdatedAt,
-			Author:           AuditUserFromContext(ctx),
-		}
-		if err := tx.VaultItemVersions().Append(ctx, snapshot); err != nil {
-			return err
+		// snapshot never reveals the readable title. Only title and
+		// payload are snapshotted, so metadata-only edits (favorite,
+		// archive, folder, tags) would produce a copy identical to
+		// the next one and are skipped.
+		if len(req.EncryptedTitle) > 0 || len(req.EncryptedPayload) > 0 {
+			snapshot := &VaultItemVersion{
+				ItemID:           existing.ID,
+				Version:          existing.Version,
+				EncryptedTitle:   append([]byte(nil), existing.EncryptedTitle...),
+				EncryptedPayload: append([]byte(nil), existing.EncryptedPayload...),
+				UpdatedAt:        existing.UpdatedAt,
+				Author:           AuditUserFromContext(ctx),
+			}
+			if err := tx.VaultItemVersions().Append(ctx, snapshot); err != nil {
+				return err
+			}
 		}
 
 		// Apply the patch. Empty-byte-slice = skip for ciphertext
@@ -784,6 +809,9 @@ func (vs *VaultService) UpdateItem(ctx context.Context, userID, itemID string, r
 	})
 	if err != nil {
 		return nil, err
+	}
+	if noop {
+		return updated, nil
 	}
 
 	vs.svc.emitHook(hook.Event{

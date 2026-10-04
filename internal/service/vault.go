@@ -32,7 +32,34 @@ var (
 	// values. The server keeps a fixed vocabulary so the UI can render
 	// type-specific icons / labels; unknown types would break that.
 	ErrVaultUnknownItemType = errors.New("vault: unknown item type")
+	// ErrVaultServerKeyLocked is returned when a server-managed vault
+	// key has to be sealed or opened but the server encryption key is
+	// not loaded. The HTTP layer maps it to 503.
+	ErrVaultServerKeyLocked = errors.New("vault: server encryption key is locked")
 )
+
+// Vault key-management modes. The mode decides who protects the
+// per-user vault key; items are encrypted with that vault key in the
+// browser either way, so switching modes never re-encrypts items.
+//
+//   - VaultKeyModeUser: the vault key is wrapped with a key derived
+//     from the user's master password + Secret Key (end-to-end).
+//   - VaultKeyModeServer: the vault key is sealed with the server
+//     encryption key (keymgr). Users open their vault without a
+//     master password; anyone holding the server key can read it.
+const (
+	VaultKeyModeUser   = "user"
+	VaultKeyModeServer = "server"
+)
+
+// NormalizeVaultKeyMode maps a stored / requested mode onto one of the
+// known constants. Empty (legacy rows, old clients) means user mode.
+func NormalizeVaultKeyMode(mode string) string {
+	if mode == VaultKeyModeServer {
+		return VaultKeyModeServer
+	}
+	return VaultKeyModeUser
+}
 
 // VaultItemType identifies the kind of item stored in a personal vault.
 // The server treats the vocabulary as a fixed enum (rather than free
@@ -165,8 +192,14 @@ type VaultKDFParams struct {
 //     many seconds of inactivity. Stored on the account (not on
 //     user_preferences) so it travels with the vault on backup.
 //     Zero means "use the SPA default" (15 minutes today).
+//
+//   - KeyMode records how WrappedVaultKey is protected (see
+//     VaultKeyModeUser / VaultKeyModeServer). In server mode
+//     WrappedVaultKey is an envelope sealed with the server key and
+//     SecretKeyHash / KDF are empty.
 type VaultAccount struct {
 	UserID                 string         `json:"user_id"`
+	KeyMode                string         `json:"key_mode,omitempty"`
 	SecretKeyHash          []byte         `json:"-"` // never expose over API
 	KDF                    VaultKDFParams `json:"kdf"`
 	WrappedVaultKey        []byte         `json:"-"` // bytes are sensitive; surfaced only via Account()
@@ -273,6 +306,9 @@ type VaultAccountStorage interface {
 	Get(ctx context.Context, userID string) (*VaultAccount, error)
 	Set(ctx context.Context, a *VaultAccount) error
 	Delete(ctx context.Context, userID string) error
+	// List returns every vault account. Used by server-key rotation
+	// to re-seal server-managed vault keys.
+	List(ctx context.Context) ([]VaultAccount, error)
 }
 
 // VaultItemFilter narrows ListItems queries. Zero-value means "every

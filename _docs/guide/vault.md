@@ -54,6 +54,22 @@ What the server admin **cannot** see:
 
 The kit can be printed, downloaded as HTML, or copied to a password-manager-of-last-resort. Anyone with both the kit and your master password can read your vault, so keep them separate (master password in your head; kit in a fireproof safe or a deposit box).
 
+## Server-managed encryption (optional)
+
+Admins can turn off per-user encryption in **Settings → Features → Personal vault** by unchecking **Require a master password for each vault**. This requires the server encryption key (**Settings → Server encryption key**) to be initialized and unlocked.
+
+When it is off:
+
+- Each user's vault key is sealed with the server encryption key instead of their master password. Users open **Vault** directly — no master password, Secret Key, Emergency Kit or auto-lock.
+- Items are still encrypted at rest with the vault key, but **anyone holding the server key can read them**. Choose this mode only when that trade-off is acceptable.
+- While the server key is locked, server-managed vaults can't be opened (`503`).
+- Rotating the server key re-seals every server-managed vault key.
+
+Switching modes never re-encrypts items; only the protection of the vault key changes:
+
+- **Master password → server:** an existing vault is converted the next time its owner unlocks it with their master password and Secret Key.
+- **Server → master password:** the next time a user opens their vault, they choose a master password and receive a new Secret Key for the same vault.
+
 ## Unlocking on another device
 
 To unlock the vault on a different browser or after the auto-lock fired:
@@ -160,6 +176,10 @@ All endpoints live under `/api/v1/me/vault/*` and require an authenticated sessi
 | GET | `/me/vault/status` | Lightweight check: initialized? item count? |
 | GET | `/me/vault/account` | KDF params + wrapped vault key |
 | POST | `/me/vault/setup` | First-time initialization (409 on re-init) |
+| POST | `/me/vault/setup-server` | Create a server-managed vault (server key mode only) |
+| GET | `/me/vault/server-key` | Raw vault key of a server-managed vault (`503` while the server key is locked) |
+| POST | `/me/vault/convert-to-server` | Hand an unlocked master-password vault to the server key |
+| POST | `/me/vault/convert-to-user` | Re-protect a server-managed vault with a master password |
 | POST | `/me/vault/unlock-check` | Rate-limited Secret Key verifier |
 | POST | `/me/vault/rotate-password` | Re-wrap the vault key with a new master password |
 | POST | `/me/vault/recovery-kit` | Regenerate the kit ID |

@@ -376,6 +376,14 @@ func (s *Service) RotateServerKey(ctx context.Context, oldPassphrase, newPassphr
 	}
 
 	plaintextSettings.EncryptionVerifier = newVerifier
+
+	// Server-managed vault keys are sealed with the server key too;
+	// decrypt them under the old key before it is swapped out.
+	vaultKeys, err := s.openServerVaultKeys(ctx, oldEnc)
+	if err != nil {
+		return fmt.Errorf("read server-managed vault keys: %w", err)
+	}
+
 	if err := s.keyManager.Unlock(newEnc); err != nil {
 		return fmt.Errorf("install new encryptor: %w", err)
 	}
@@ -390,6 +398,9 @@ func (s *Service) RotateServerKey(ctx context.Context, oldPassphrase, newPassphr
 		// sides; that path is supported because the verifier now
 		// matches the new key.
 		return fmt.Errorf("rewrap secrets failed: %w", err)
+	}
+	if err := s.resealServerVaultKeys(ctx, newEnc, vaultKeys); err != nil {
+		return fmt.Errorf("rewrap server-managed vault keys failed: %w", err)
 	}
 	return nil
 }

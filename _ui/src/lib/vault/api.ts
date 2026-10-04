@@ -5,11 +5,11 @@
 
 import axios from 'axios';
 
-import type { VaultAccountView, VaultSetupPayload } from './crypto';
+import type { VaultAccountView, VaultKeyMode, VaultSetupPayload } from './crypto';
 
 // Re-export so callers can `import type { ... } from '.../api'`
 // without crossing module boundaries for the same shape.
-export type { VaultAccountView, VaultSetupPayload };
+export type { VaultAccountView, VaultKeyMode, VaultSetupPayload };
 
 export type VaultItemType =
   | 'login'
@@ -26,6 +26,10 @@ export type VaultItemType =
 export interface VaultStatus {
   initialized: boolean;
   item_count: number;
+  /** Mode of this user's vault; absent until the vault is set up. */
+  key_mode?: VaultKeyMode;
+  /** Mode chosen by the admin. A mismatch converts the vault on next open. */
+  deployment_key_mode?: VaultKeyMode;
 }
 
 export interface VaultItem {
@@ -124,6 +128,38 @@ export async function setup(payload: VaultSetupPayload): Promise<VaultAccountVie
 
 export async function unlockCheck(secretKeyHash: string): Promise<void> {
   await axios.post('/api/v1/me/vault/unlock-check', { secret_key_hash: secretKeyHash });
+}
+
+// ─── Server-managed vault keys ───────────────────────────────────
+
+export interface ServerVaultSetupResponse {
+  account: VaultAccountView;
+  /** base64 raw vault key */
+  vault_key: string;
+}
+
+export async function setupServer(sessionLockSeconds = 0): Promise<ServerVaultSetupResponse> {
+  const res = await axios.post('/api/v1/me/vault/setup-server', { session_lock_seconds: sessionLockSeconds });
+  return res.data as ServerVaultSetupResponse;
+}
+
+/** Returns the base64 raw vault key of a server-managed vault. */
+export async function getServerKey(): Promise<string> {
+  const res = await axios.get('/api/v1/me/vault/server-key');
+  return (res.data as { vault_key: string }).vault_key;
+}
+
+export async function convertToServer(vaultKey: string, secretKeyHash: string): Promise<VaultAccountView> {
+  const res = await axios.post('/api/v1/me/vault/convert-to-server', {
+    vault_key: vaultKey,
+    secret_key_hash: secretKeyHash,
+  });
+  return res.data as VaultAccountView;
+}
+
+export async function convertToUser(payload: VaultSetupPayload): Promise<VaultAccountView> {
+  const res = await axios.post('/api/v1/me/vault/convert-to-user', payload);
+  return res.data as VaultAccountView;
 }
 
 export async function rotatePassword(payload: VaultSetupPayload): Promise<VaultAccountView> {

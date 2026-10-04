@@ -226,6 +226,7 @@
   }
 
   const vaultEnabled = $derived(appStore.info?.vault_enabled ?? false);
+  const serverManaged = $derived(status?.key_mode === "server");
 </script>
 
 <div>
@@ -259,6 +260,19 @@
     </div>
   {:else}
     <div class="space-y-6">
+      {#if serverManaged}
+        <div
+          class="bg-blue-50 dark:bg-blue-950/30 border border-blue-300 dark:border-blue-700 rounded p-3 text-sm flex gap-2"
+        >
+          <ShieldCheck size={16} class="text-blue-700 dark:text-blue-300 shrink-0 mt-0.5" />
+          <div class="text-blue-900 dark:text-blue-200">
+            Your administrator manages vault encryption with the server key, so
+            your vault opens without a master password or Secret Key. Items are
+            still encrypted at rest, but anyone holding the server key can read
+            them.
+          </div>
+        </div>
+      {:else}
       <!-- Auto-lock -->
       <div
         class="bg-white dark:bg-warm-800 border border-slate-200 dark:border-warm-700 rounded p-4"
@@ -558,6 +572,7 @@
           </form>
         {/if}
       </div>
+      {/if}
 
       <!-- Reset / destroy. The `/40` opacity on the dark surface
            keeps the red tint legible without screaming — the
@@ -645,6 +660,11 @@
           <dd class="text-slate-700 dark:text-slate-200">
             {status.item_count}
           </dd>
+          <dt class="text-slate-500 dark:text-slate-400">Encryption</dt>
+          <dd class="text-slate-700 dark:text-slate-200">
+            {serverManaged ? "Server-managed" : "Master password (end-to-end)"}
+          </dd>
+          {#if !serverManaged}
           <dt class="text-slate-500 dark:text-slate-400">KDF</dt>
           <dd class="text-slate-700 dark:text-slate-200">
             argon2id, {account?.kdf.memory
@@ -655,6 +675,7 @@
           <dd class="text-slate-700 dark:text-slate-200">
             v{account?.wrapped_vault_key_version ?? "?"}
           </dd>
+          {/if}
           <dt class="text-slate-500 dark:text-slate-400">Created</dt>
           <dd class="text-slate-700 dark:text-slate-200">
             {account?.created_at
@@ -669,7 +690,7 @@
           </dd>
           <dt class="text-slate-500 dark:text-slate-400">Kit ID</dt>
           <dd class="font-mono break-all text-slate-700 dark:text-slate-200">
-            {account?.recovery_kit_id ?? ""}
+            {serverManaged ? "—" : (account?.recovery_kit_id ?? "")}
           </dd>
         </dl>
       </div>

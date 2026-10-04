@@ -173,6 +173,14 @@
       <button class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-accent-600 text-white font-medium hover:bg-accent-700 cursor-pointer" onclick={onOpen}>
         <FolderOpen size={12} /> Open
       </button>
+      <button
+        class="p-1.5 rounded hover:bg-slate-100 dark:hover:bg-warm-700 text-slate-500 dark:text-slate-400 cursor-pointer"
+        onclick={onDownload}
+        aria-label="Download as zip"
+        title="Download as zip"
+      >
+        <Download size={14} />
+      </button>
     {:else if editable}
       <button class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-accent-600 text-white font-medium hover:bg-accent-700 cursor-pointer" onclick={onEdit}>
         <FileEdit size={12} /> Edit
