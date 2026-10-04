@@ -126,7 +126,7 @@
 </script>
 
 <div class="h-full overflow-auto p-6">
-  <div class="max-w-3xl mx-auto">
+  <div class="max-w-4xl mx-auto">
     {#if !infoLoaded || activeTab === null}
       <!-- Wait for /api/v1/info before deciding what to render. Without
        this gate the page briefly shows the "No access" stub or the

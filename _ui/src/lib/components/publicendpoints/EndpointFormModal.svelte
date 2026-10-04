@@ -297,7 +297,7 @@
     open={true}
     {onClose}
     labelledby="endpoint-form-title"
-    panelClass="rounded-lg max-w-3xl w-full max-h-[90vh] overflow-y-auto"
+    panelClass="rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto"
 >
     <div
         class="p-4 border-b border-slate-200 dark:border-warm-700 flex items-center justify-between"

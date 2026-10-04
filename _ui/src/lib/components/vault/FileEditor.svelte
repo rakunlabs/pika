@@ -375,7 +375,7 @@
           <div class="min-w-0 h-full overflow-y-auto {mode === 'split' ? 'w-1/2' : 'flex-1'}">
             {#if text.trim()}
               <!-- renderMarkdown escapes all input; see lib/vault/markdown.ts -->
-              <article class="prose-vault max-w-3xl px-8 py-6 text-sm text-slate-700 dark:text-slate-100">
+              <article class="prose-vault max-w-4xl px-8 py-6 text-sm text-slate-700 dark:text-slate-100">
                 {@html html}
               </article>
             {:else}

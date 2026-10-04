@@ -1630,7 +1630,7 @@
                     open={true}
                     onClose={() => (editName = null)}
                     ariaLabel={`Edit external resource ${editName}`}
-                    panelClass="rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
+                    panelClass="rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col"
                >
                          {#key editName}
                               <ExternalResourceEditor

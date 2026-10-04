@@ -302,7 +302,7 @@
           {#if text.trim()}
             <!-- renderMarkdown escapes all input; see lib/vault/markdown.ts -->
             <article
-              class="prose-vault max-w-3xl px-8 py-6 text-sm text-slate-700 dark:text-slate-100"
+              class="prose-vault max-w-4xl px-8 py-6 text-sm text-slate-700 dark:text-slate-100"
               style="font-size: {Math.max(13, prefsStore.editor.font_size + 1)}px"
             >
               {@html html}

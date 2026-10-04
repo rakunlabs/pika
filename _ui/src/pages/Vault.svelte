@@ -251,17 +251,21 @@
       <Loader2 size={20} class="animate-spin text-slate-400" />
     </div>
   {:else if !vaultStore.status?.initialized || vaultStore.pendingSecretKey || convertToUser}
-    <VaultSetup
-      convert={convertToUser}
-      onComplete={async () => {
-        await vaultStore.refreshItems();
-      }}
-    />
+    <div class="flex-1 min-h-0 overflow-y-auto">
+      <VaultSetup
+        convert={convertToUser}
+        onComplete={async () => {
+          await vaultStore.refreshItems();
+        }}
+      />
+    </div>
   {:else if !vaultStore.isUnlocked()}
-    <VaultUnlock
-      convertToServer={convertToServer}
-      onUnlocked={afterUnlock}
-    />
+    <div class="flex-1 min-h-0 overflow-y-auto">
+      <VaultUnlock
+        convertToServer={convertToServer}
+        onUnlocked={afterUnlock}
+      />
+    </div>
   {:else}
     <!-- Unlocked: sidebar nav + list + detail -->
     <div class="flex-1 flex overflow-hidden">

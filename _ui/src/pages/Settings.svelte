@@ -175,7 +175,7 @@
 
     <!-- Right Content Area -->
     <div class="flex-1 overflow-y-auto">
-        <div class="max-w-3xl p-6">
+        <div class="max-w-4xl p-6">
             {#if activeSection === "appearance"}
                 <AppearanceSection />
             {:else if activeSection === "account_security"}
