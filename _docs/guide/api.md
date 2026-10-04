@@ -133,7 +133,9 @@ Every state-changing request on the admin API (any method other than `GET`/`HEAD
 
 `GET /api/v1/audit` returns `{ "entries": [...], "total": N }`, newest first. It accepts `_limit` (default 50), `_offset`, `_sort` (`time` or `-time`), and filters such as `actor=alice` or `action=login.failed`.
 
-Entries are kept for `audit.retention` (default `2160h`, 90 days; `0` keeps them forever). The UI view is **Settings → Audit Log**.
+Entries are kept for `audit.retention` (default `2160h`, 90 days; `0` keeps them forever). The UI view is **Settings → Audit Log**, where the retention can also be overridden at runtime; the override is stored in settings (`POST /api/v1/settings` with `{"action":"set","audit":{"retention":"720h"}}`) and wins over the config value. Send an empty `retention` to fall back to the config value. The minimum is `1h`.
+
+`GET /api/v1/audit/retention` returns the retention in effect: `{ "retention": "720h0m0s", "source": "settings", "config_retention": "2160h0m0s" }`.
 
 ## Per-user endpoints
 

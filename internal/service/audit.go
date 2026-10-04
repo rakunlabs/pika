@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"sync"
@@ -36,6 +37,41 @@ type AuditStorage interface {
 // DefaultAuditRetention is how long audit entries are kept when the
 // operator doesn't configure a value.
 const DefaultAuditRetention = 90 * 24 * time.Hour
+
+// minAuditRetention guards against a typo pruning the whole log.
+const minAuditRetention = time.Hour
+
+// AuditSettings is the runtime override for the audit log, stored in the
+// settings row. Retention is a Go duration string ("2160h"); "0" keeps
+// entries forever and an empty value falls back to audit.retention from
+// the config file.
+type AuditSettings struct {
+	Retention string `json:"retention,omitempty"`
+}
+
+func (a *AuditSettings) Validate() error {
+	if a == nil || a.Retention == "" {
+		return nil
+	}
+	d, err := time.ParseDuration(a.Retention)
+	if err != nil {
+		return fmt.Errorf("audit.retention: %w: %w", err, ErrBadRequest)
+	}
+	if d < 0 || (d > 0 && d < minAuditRetention) {
+		return fmt.Errorf("audit.retention: must be 0 or at least %s: %w", minAuditRetention, ErrBadRequest)
+	}
+	return nil
+}
+
+// AuditRetentionInfo describes the retention currently in effect.
+type AuditRetentionInfo struct {
+	// Retention is the effective window as a Go duration string.
+	Retention string `json:"retention"`
+	// Source is "settings" when overridden from the UI, else "config".
+	Source string `json:"source"`
+	// ConfigRetention is the value from the config file / env.
+	ConfigRetention string `json:"config_retention"`
+}
 
 const (
 	auditFlushInterval = 2 * time.Second
@@ -89,7 +125,8 @@ func (s *Service) Audit(e AuditEntry) {
 	s.auditLog.mu.Unlock()
 }
 
-// SetAuditRetention sets how long entries are kept; <= 0 keeps them forever.
+// SetAuditRetention sets the config-level retention used when settings
+// don't override it; <= 0 keeps entries forever.
 func (s *Service) SetAuditRetention(d time.Duration) {
 	if s.auditLog == nil {
 		return
@@ -97,6 +134,43 @@ func (s *Service) SetAuditRetention(d time.Duration) {
 	s.auditLog.mu.Lock()
 	s.auditLog.retention = d
 	s.auditLog.mu.Unlock()
+}
+
+// AuditRetention returns the effective retention: the settings override
+// when present, otherwise the config value.
+func (s *Service) AuditRetention(ctx context.Context) AuditRetentionInfo {
+	cfg := s.configAuditRetention()
+	d, source := s.effectiveAuditRetention(ctx)
+	return AuditRetentionInfo{
+		Retention:       d.String(),
+		Source:          source,
+		ConfigRetention: cfg.String(),
+	}
+}
+
+func (s *Service) configAuditRetention() time.Duration {
+	if s.auditLog == nil {
+		return 0
+	}
+	s.auditLog.mu.Lock()
+	defer s.auditLog.mu.Unlock()
+	return s.auditLog.retention
+}
+
+// effectiveAuditRetention reads the override from settings on every call
+// so a change saved on any cluster node applies without a reload.
+func (s *Service) effectiveAuditRetention(ctx context.Context) (time.Duration, string) {
+	cfg := s.configAuditRetention()
+	settings, err := s.Settings(ctx)
+	if err != nil || settings == nil || settings.Audit == nil || settings.Audit.Retention == "" {
+		return cfg, "config"
+	}
+	d, err := time.ParseDuration(settings.Audit.Retention)
+	if err != nil {
+		slog.Warn("audit: ignoring invalid retention in settings", "retention", settings.Audit.Retention, "error", err)
+		return cfg, "config"
+	}
+	return d, "settings"
 }
 
 // FlushAudit writes buffered entries to storage.
@@ -142,9 +216,7 @@ func (s *Service) PruneAudit(ctx context.Context) {
 	if s.canWriteBackground != nil && !s.canWriteBackground() {
 		return
 	}
-	s.auditLog.mu.Lock()
-	retention := s.auditLog.retention
-	s.auditLog.mu.Unlock()
+	retention, _ := s.effectiveAuditRetention(ctx)
 	if retention <= 0 {
 		return
 	}

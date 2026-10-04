@@ -3,6 +3,7 @@
 // public endpoints). Re-exported via configStore in config.svelte.ts.
 
 import type {
+  AuditSettings,
   EventLogSettings,
   Hook,
   MCPSettings,
@@ -104,6 +105,20 @@ export function createSettingsStore() {
     } catch (error) {
       const msg = apiServerMessage(error, 'Failed to save HTTPS settings');
       addToast(msg, 'alert');
+      throw error;
+    }
+  }
+
+  // saveAuditSettings stores the audit retention override. An empty
+  // retention clears the override so the config value applies again.
+  async function saveAuditSettings(patch: AuditSettings): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', { action: 'set', audit: patch });
+      const audit = patch.retention ? patch : undefined;
+      settings = { ...settings, audit };
+      addToast('Audit settings saved', 'success');
+    } catch (error) {
+      addToast(apiServerMessage(error, 'Failed to save audit settings'), 'alert');
       throw error;
     }
   }
@@ -237,6 +252,7 @@ export function createSettingsStore() {
     saveSettings,
     saveVaultSettings,
     saveServerTLSSettings,
+    saveAuditSettings,
     saveMCPSettings,
     saveHooks,
     saveEventLogSettings,

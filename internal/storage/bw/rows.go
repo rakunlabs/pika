@@ -744,6 +744,8 @@ type settingsRow struct {
 	Auth                *service.AuthSettings                `bw:"auth"`
 	Vault               *service.VaultSettings               `bw:"vault"`
 	ServerTLS           *service.ServerTLSSettings           `bw:"server_tls"`
+	Audit               *service.AuditSettings               `bw:"audit"`
+	EventLog            *service.EventLogSettings            `bw:"event_log"`
 	MCP                 *service.MCPSettings                 `bw:"mcp"`
 	// PublicEndpoints carries the operator-defined public-port
 	// compatibility / custom-modifier endpoints. Sealed token slots

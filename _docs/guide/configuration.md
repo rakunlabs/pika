@@ -59,7 +59,7 @@ The most common variables. All `PIKA_*` env vars use the `PIKA_` prefix and `_` 
 | `PIKA_SERVER_OUTBOUND_DENY_CIDRS` | `169.254.0.0/16,fe80::/10` | Addresses webhooks and HTTP inheritance sources may not reach (default blocks cloud metadata). |
 | `PIKA_SERVER_OUTBOUND_ALLOW_CIDRS` |               | Exceptions inside the deny list.                      |
 | `PIKA_SERVER_OUTBOUND_DISABLE_GUARD` | `false`     | Turn the outbound address check off.                  |
-| `PIKA_AUDIT_RETENTION`       | `2160h`            | How long audit log entries are kept (`0` = forever). |
+| `PIKA_AUDIT_RETENTION`       | `2160h`            | How long audit log entries are kept (`0` = forever). Can be overridden under **Settings → Audit Log**. |
 | `PIKA_ENCRYPTION_PASSWORD`   |                    | Optional at-rest passphrase for auto-unlock/auto-initialize. See [Encryption](./encryption). |
 | `PIKA_CLUSTER_ENABLED`       | `false`            | Enable clustering.                                   |
 | `PIKA_CLUSTER_DNS_ADDR`      |                    | DNS name resolving to all peer IPs.                  |

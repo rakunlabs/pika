@@ -157,8 +157,13 @@ func (s *Storage) registerBuckets() error {
 	//   v6 — removed the retired external-directory authentication and
 	//        reconciliation settings. Existing rows are rewritten with
 	//        the current shape, dropping those configuration fields.
+	//   v9 — added Audit *service.AuditSettings (UI override for
+	//        audit.retention). Existing rows decode with Audit == nil,
+	//        which falls back to the config value. Also persists
+	//        EventLog *service.EventLogSettings, which was previously
+	//        dropped on write; nil keeps the default (enabled).
 	if s.settings, err = bw.RegisterBucket[settingsRow](s.db, bucketSettings,
-		bw.WithVersion[settingsRow](8), // v8 adds a list of independent MCP endpoints.
+		bw.WithVersion[settingsRow](9),
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketSettings, err)
 	}

@@ -509,7 +509,15 @@ export interface Settings {
   forward_auth?: ForwardAuthSettings;
   vault?: VaultSettings;
   server_tls?: ServerTLSSettings;
+  audit?: AuditSettings;
   public_endpoints?: PublicEndpoint[];
+}
+
+// AuditSettings overrides audit.retention from the config file. Retention
+// is a Go duration string ("2160h"); "0" keeps entries forever and an
+// empty/missing value falls back to the config value.
+export interface AuditSettings {
+  retention?: string;
 }
 
 export interface ServerTLSSettings {
@@ -890,4 +898,11 @@ export interface AuditEntry {
 export interface AuditPage {
   entries: AuditEntry[];
   total: number;
+}
+
+// Effective audit retention from GET /api/v1/audit/retention.
+export interface AuditRetentionInfo {
+  retention: string;
+  source: 'settings' | 'config';
+  config_retention: string;
 }

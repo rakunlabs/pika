@@ -55,3 +55,53 @@ func TestAuditGateKeepsBufferBounded(t *testing.T) {
 		t.Fatalf("entry recorded while gated should flush once allowed: total=%d", total)
 	}
 }
+
+func TestAuditRetentionSettingsOverride(t *testing.T) {
+	svc := newServiceOn(t, newTokenTestStore(t))
+	ctx := t.Context()
+	svc.SetAuditRetention(0)
+
+	svc.Audit(service.AuditEntry{Time: time.Now().Add(-48 * time.Hour).UTC(), Action: "old"})
+	svc.Audit(service.AuditEntry{Action: "new"})
+	svc.FlushAudit(ctx)
+
+	if info := svc.AuditRetention(ctx); info.Source != "config" || info.Retention != "0s" {
+		t.Fatalf("default info = %+v", info)
+	}
+
+	for _, bad := range []string{"abc", "-1h", "5m"} {
+		err := svc.PatchSettings(ctx, &service.PatchSettings{
+			Action: service.ActionKeySet,
+			Audit:  &service.AuditSettings{Retention: bad},
+		})
+		if err == nil {
+			t.Fatalf("retention %q accepted", bad)
+		}
+	}
+
+	if err := svc.PatchSettings(ctx, &service.PatchSettings{
+		Action: service.ActionKeySet,
+		Audit:  &service.AuditSettings{Retention: "24h"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if info := svc.AuditRetention(ctx); info.Source != "settings" || info.Retention != "24h0m0s" || info.ConfigRetention != "0s" {
+		t.Fatalf("override info = %+v", info)
+	}
+
+	svc.PruneAudit(ctx)
+	if _, total, _ := svc.ListAudit(ctx, nil); total != 1 {
+		t.Fatalf("settings retention not applied: total=%d", total)
+	}
+
+	// Empty retention clears the override.
+	if err := svc.PatchSettings(ctx, &service.PatchSettings{
+		Action: service.ActionKeySet,
+		Audit:  &service.AuditSettings{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if info := svc.AuditRetention(ctx); info.Source != "config" {
+		t.Fatalf("override not cleared: %+v", info)
+	}
+}

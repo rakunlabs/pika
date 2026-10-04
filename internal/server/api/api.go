@@ -283,6 +283,7 @@ func Handle(mux Muxes, deps Deps) error {
 
 	// Audit log (persisted record of state-changing requests).
 	m.GET("/api/v1/audit", m.Wrap(api.withPerm(service.CapSettingsManage, api.listAudit)))
+	m.GET("/api/v1/audit/retention", m.Wrap(api.withPerm(service.CapSettingsManage, api.getAuditRetention)))
 
 	// Settings
 	m.GET("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.getSettings)))

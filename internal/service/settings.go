@@ -86,6 +86,9 @@ type Settings struct {
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 	Auth                *AuthSettings                `json:"auth,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
+	// Audit overrides the config-file audit settings. Nil means the
+	// config value (audit.retention) applies.
+	Audit *AuditSettings `json:"audit,omitempty"`
 	// ServerTLS controls runtime transport policy for the main admin
 	// listener. The certificate itself stays on disk so HTTPS is
 	// available before the settings DB is unlocked.
@@ -161,6 +164,9 @@ type PatchSettings struct {
 	Auth                *AuthSettings                `json:"auth,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
 	ServerTLS           *ServerTLSSettings           `json:"server_tls,omitempty"`
+	// Audit replaces the stored audit settings. Send an empty object
+	// with retention unset to fall back to the config value.
+	Audit *AuditSettings `json:"audit,omitempty"`
 	// PublicEndpoints is a full-replace patch — pointer-to-slice so
 	// nil ("don't touch") is distinguishable from empty ("clear the
 	// list"). Matches the Hooks shape exactly.
@@ -307,6 +313,17 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 			return err
 		}
 		settings.ServerTLS = patch.ServerTLS
+	}
+
+	if patch.Audit != nil {
+		if err := patch.Audit.Validate(); err != nil {
+			return err
+		}
+		if patch.Audit.Retention == "" {
+			settings.Audit = nil
+		} else {
+			settings.Audit = patch.Audit
+		}
 	}
 
 	// Handle public-endpoints update (if provided). Full-replace

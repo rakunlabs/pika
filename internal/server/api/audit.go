@@ -94,3 +94,9 @@ func (a *api) listAudit(c *ada.Context) error {
 		Total   int64                `json:"total"`
 	}{Entries: entries, Total: total})
 }
+
+// getAuditRetention reports the retention in effect and whether it comes
+// from settings or the config file.
+func (a *api) getAuditRetention(c *ada.Context) error {
+	return c.SetStatus(http.StatusOK).SendJSON(a.svc.AuditRetention(c.Request.Context()))
+}
