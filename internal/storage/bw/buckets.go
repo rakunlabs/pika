@@ -90,8 +90,14 @@ func (s *Storage) registerBuckets() error {
 		return fmt.Errorf("bw register %s: %w", bucketUserIdentities, err)
 	}
 
+	// Version bumps for the tokens bucket:
+	//
+	//   v1 — initial schema.
+	//   v2 — added optional external Resource to scopes.
+	//   v3 — added LastUsedAt *time.Time (batched usage tracking).
+	//        Non-indexed new field; existing rows decode with nil.
 	if s.tokens, err = bw.RegisterBucket[tokenRow](s.db, bucketTokens,
-		bw.WithVersion[tokenRow](2), // v2 adds optional external resource to scopes.
+		bw.WithVersion[tokenRow](3),
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketTokens, err)
 	}
