@@ -17,10 +17,15 @@
   let userEncryptionDraft = $state(true);
   let vaultBusy = $state(false);
 
+  function vaultUsesUserKeys(): boolean {
+    const v = configStore.settings?.vault;
+    return (v?.key_mode ?? v?.effective_key_mode) !== "server";
+  }
+
   async function loadToggles() {
     await configStore.loadSettings();
     vaultDisabledDraft = configStore.settings?.vault?.disabled === true;
-    userEncryptionDraft = configStore.settings?.vault?.key_mode !== "server";
+    userEncryptionDraft = vaultUsesUserKeys();
   }
 
   async function saveVaultToggle(disabled: boolean) {
@@ -47,7 +52,7 @@
       danger: !enabled,
     });
     if (!ok) {
-      userEncryptionDraft = configStore.settings?.vault?.key_mode !== "server";
+      userEncryptionDraft = vaultUsesUserKeys();
       return;
     }
     vaultBusy = true;
@@ -60,7 +65,7 @@
       );
       userEncryptionDraft = enabled;
     } catch {
-      userEncryptionDraft = configStore.settings?.vault?.key_mode !== "server";
+      userEncryptionDraft = vaultUsesUserKeys();
     } finally {
       vaultBusy = false;
     }

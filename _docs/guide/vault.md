@@ -58,6 +58,8 @@ The kit can be printed, downloaded as HTML, or copied to a password-manager-of-l
 
 Admins can turn off per-user encryption in **Settings → Features → Personal vault** by unchecking **Require a master password for each vault**. This requires the server encryption key (**Settings → Server encryption key**) to be initialized and unlocked.
 
+On new deployments where the server encryption key is set up, this option is off by default. Deployments that already have master-password vaults keep requiring a master password until an admin changes the setting.
+
 When it is off:
 
 - Each user's vault key is sealed with the server encryption key instead of their master password. Users open **Vault** directly — no master password, Secret Key, Emergency Kit or auto-lock.

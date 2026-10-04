@@ -145,12 +145,16 @@ type VaultSettings struct {
 	// preserved; this is a feature-flag, not a destructive action.
 	Disabled bool `json:"disabled"`
 	// KeyMode chooses who protects each user's vault key:
-	// VaultKeyModeUser (default, empty) requires a master password +
-	// Secret Key per user; VaultKeyModeServer seals vault keys with
-	// the server encryption key so users open their vault directly.
-	// Existing vaults are converted the next time their owner opens
-	// them.
+	// VaultKeyModeUser requires a master password + Secret Key per
+	// user; VaultKeyModeServer seals vault keys with the server
+	// encryption key so users open their vault directly. Empty means
+	// the admin has not chosen; see Service.VaultKeyMode for the
+	// default. Existing vaults are converted the next time their
+	// owner opens them.
 	KeyMode string `json:"key_mode,omitempty"`
+	// EffectiveKeyMode is the mode actually in force, filled in only
+	// on GET responses. Ignored on writes.
+	EffectiveKeyMode string `json:"effective_key_mode,omitempty"`
 }
 
 // EventLogSettings controls Pika's built-in event log line. Nil settings mean
@@ -317,11 +321,13 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 	// the same patch-update treatment for free.
 	if patch.Vault != nil {
 		next := *patch.Vault
-		next.KeyMode = NormalizeVaultKeyMode(next.KeyMode)
-		prevMode := VaultKeyModeUser
-		if settings.Vault != nil {
-			prevMode = NormalizeVaultKeyMode(settings.Vault.KeyMode)
+		next.EffectiveKeyMode = ""
+		// An empty mode means "not chosen": keep it empty so the
+		// deployment default (see VaultKeyMode) keeps applying.
+		if next.KeyMode != "" {
+			next.KeyMode = NormalizeVaultKeyMode(next.KeyMode)
 		}
+		prevMode := s.VaultKeyMode(ctx)
 		if next.KeyMode == VaultKeyModeServer && prevMode != VaultKeyModeServer &&
 			(s.keyManager == nil || !s.keyManager.IsUnlocked()) {
 			return fmt.Errorf("vault: server-managed vault keys require the server encryption key to be enabled and unlocked: %w", ErrBadRequest)

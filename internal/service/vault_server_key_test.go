@@ -42,6 +42,49 @@ func TestVaultServerMode_RequiresUnlockedServerKey(t *testing.T) {
 	}
 }
 
+func TestVaultKeyMode_DefaultWithoutServerKey(t *testing.T) {
+	svc, _ := newKeyopsService(t)
+	if got := svc.VaultKeyMode(t.Context()); got != service.VaultKeyModeUser {
+		t.Fatalf("default mode without server key = %q, want user", got)
+	}
+}
+
+func TestVaultKeyMode_DefaultsToServerOnFreshDeployment(t *testing.T) {
+	svc, _ := newServerModeVault(t)
+	if got := svc.VaultKeyMode(t.Context()); got != service.VaultKeyModeServer {
+		t.Fatalf("default mode = %q, want server", got)
+	}
+	// Saving an unrelated vault flag must not pin the mode.
+	if err := svc.PatchSettings(t.Context(), &service.PatchSettings{
+		Action: service.ActionKeySet,
+		Vault:  &service.VaultSettings{Disabled: false},
+	}); err != nil {
+		t.Fatalf("PatchSettings: %v", err)
+	}
+	if got := svc.VaultKeyMode(t.Context()); got != service.VaultKeyModeServer {
+		t.Fatalf("mode after unrelated save = %q, want server", got)
+	}
+}
+
+func TestVaultKeyMode_ExistingUserVaultKeepsUserDefault(t *testing.T) {
+	svc, vs := newServerModeVault(t)
+	uid := createUserHelper(t, svc, "alice")
+	setVaultKeyMode(t, svc, service.VaultKeyModeUser)
+	if _, err := vs.Setup(t.Context(), uid, validSetupRequest(t)); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	// Simulate a legacy install where the mode was never stored.
+	if err := svc.PatchSettings(t.Context(), &service.PatchSettings{
+		Action: service.ActionKeySet,
+		Vault:  &service.VaultSettings{},
+	}); err != nil {
+		t.Fatalf("PatchSettings: %v", err)
+	}
+	if got := svc.VaultKeyMode(t.Context()); got != service.VaultKeyModeUser {
+		t.Fatalf("default mode with an existing user vault = %q, want user", got)
+	}
+}
+
 func TestVaultServerMode_SetupAndOpen(t *testing.T) {
 	svc, vs := newServerModeVault(t)
 	uid := createUserHelper(t, svc, "alice")
@@ -96,6 +139,7 @@ func TestVaultServerMode_LockedServerKey(t *testing.T) {
 func TestVaultServerMode_ConvertRoundTrip(t *testing.T) {
 	svc, vs := newServerModeVault(t)
 	uid := createUserHelper(t, svc, "alice")
+	setVaultKeyMode(t, svc, service.VaultKeyModeUser)
 
 	req := validSetupRequest(t)
 	if _, err := vs.Setup(t.Context(), uid, req); err != nil {

@@ -31,6 +31,12 @@ func (a *api) getSettings(c *ada.Context) error {
 		// keep" / offer an explicit clear without ever holding the value.
 		maskAuthSecrets(settings.Auth)
 		settings.VaultFiles.MaskSecrets()
+		vault := service.VaultSettings{}
+		if settings.Vault != nil {
+			vault = *settings.Vault
+		}
+		vault.EffectiveKeyMode = a.svc.VaultKeyMode(c.Request.Context())
+		settings.Vault = &vault
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(settings)

@@ -46,13 +46,43 @@ type VaultServerKeyResponse struct {
 
 // VaultKeyMode returns the deployment-wide key mode chosen by the
 // admin. Settings read errors fall back to user mode, the stricter
-// option.
+// option. When the admin never chose a mode, defaultVaultKeyMode
+// decides.
 func (s *Service) VaultKeyMode(ctx context.Context) string {
 	settings, err := s.Settings(ctx)
-	if err != nil || settings == nil || settings.Vault == nil {
+	if err != nil || settings == nil {
 		return VaultKeyModeUser
 	}
+	if settings.Vault == nil || settings.Vault.KeyMode == "" {
+		return s.defaultVaultKeyMode(ctx)
+	}
 	return NormalizeVaultKeyMode(settings.Vault.KeyMode)
+}
+
+// defaultVaultKeyMode picks the key mode for deployments where the
+// admin has not chosen one. Existing vaults keep the mode they were
+// created with (user mode wins so legacy installs never get converted
+// silently). Fresh deployments default to server-managed keys when
+// the server encryption key is set up, and to user mode otherwise.
+func (s *Service) defaultVaultKeyMode(ctx context.Context) string {
+	accounts, err := s.store.VaultAccounts().List(ctx)
+	if err != nil {
+		return VaultKeyModeUser
+	}
+	hasServer := false
+	for _, a := range accounts {
+		if NormalizeVaultKeyMode(a.KeyMode) == VaultKeyModeUser {
+			return VaultKeyModeUser
+		}
+		hasServer = true
+	}
+	if hasServer {
+		return VaultKeyModeServer
+	}
+	if s.keyManager != nil && s.keyManager.Initialized() {
+		return VaultKeyModeServer
+	}
+	return VaultKeyModeUser
 }
 
 func newVaultAccountView(row *VaultAccount, count int64) *VaultAccountView {
