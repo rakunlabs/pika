@@ -376,6 +376,11 @@ func (s *Service) KickUser(ctx context.Context, id string) error {
 
 // DeleteUser deletes a user by ID.
 func (s *Service) DeleteUser(ctx context.Context, id string) error {
+	// Remove vault file blobs while their metadata still exists; the
+	// user-delete cascade below drops the metadata rows.
+	if files, err := s.store.VaultFiles().ListByUser(ctx, id); err == nil {
+		s.deleteVaultBlobs(ctx, files)
+	}
 	return s.store.Users().Delete(ctx, id)
 }
 

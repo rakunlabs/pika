@@ -106,3 +106,26 @@ describe('renderMarkdown', () => {
     expect(html).not.toContain('<strong>');
   });
 });
+
+describe('renderMarkdown tables and tasks', () => {
+  it('renders a GFM table with alignment and escapes cells', () => {
+    const html = renderMarkdown('| a | b |\n|:--|--:|\n| <x> | 2 |');
+    expect(html).toContain('<table');
+    expect(html).toContain('text-align:left');
+    expect(html).toContain('text-align:right');
+    expect(html).toContain('&lt;x&gt;');
+    expect(html).not.toContain('<x>');
+  });
+
+  it('does not treat a lone rule under a pipe line as a table', () => {
+    const html = renderMarkdown('a | b\n---');
+    expect(html).not.toContain('<table');
+  });
+
+  it('renders task lists', () => {
+    const html = renderMarkdown('- [x] done\n- [ ] todo');
+    expect(html).toContain('checked');
+    expect(html).toContain('line-through');
+    expect(html.match(/type="checkbox"/g)?.length).toBe(2);
+  });
+});

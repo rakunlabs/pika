@@ -319,3 +319,19 @@ textarea:-webkit-autofill:active {
 .cm-mask--copied {
   background: #facc15; /* yellow-400 */
 }
+
+/* Rendered markdown (vault secure notes, vault file preview). The
+   renderer emits Tailwind classes per element; these rules only add
+   the polish that's awkward to express per tag. */
+.prose-vault :is(h1, h2, h3, h4, h5, h6) {
+  color: inherit;
+}
+.prose-vault > :first-child {
+  margin-top: 0;
+}
+.prose-vault > :last-child {
+  margin-bottom: 0;
+}
+.prose-vault :is(ul, ol) li {
+  margin: 0.15rem 0;
+}

@@ -110,6 +110,30 @@ If you lose your master password, your vault is unrecoverable. There is no admin
 
 A user can also reset their own vault from **Settings → Vault → Delete vault**. This destroys every item irreversibly. You can then run Setup again with a fresh master password and Secret Key.
 
+## Files
+
+The vault also has a **Files** area (left navigation → Files) where you can keep any binary or text file — documents, key files, archives, binaries. Drag files or whole folders from your desktop onto the page (folder structure is preserved), drag items between folders or onto breadcrumbs to move them, and preview images, video, audio, PDFs and text in the side pane.
+
+Text files (Markdown, plain text, JSON/YAML/TOML, shell, code, `.env`, …) up to 5 MB open in a built-in editor with syntax highlighting: double-click a file or use **Edit**. Save with **Ctrl/⌘+S**; if the file changed since you opened it you are asked before overwriting. Markdown files open in a rendered preview (headings, lists, task lists, tables, code blocks; raw HTML is never rendered) with **Edit / Split / Preview** modes and a **Raw** switch to see the source. **New → Folder / Markdown file / Text file** creates items in the current folder; a name like `notes/todo.md` creates the folders too.
+
+Any other file can be opened with **Open as text** (row menu or the details pane). Files that look binary or aren't valid UTF-8 open read-only, because saving them as text would change their bytes; **Edit anyway** unlocks editing after a warning. Files over 5 MB show only their first 5 MB, read-only.
+
+::: warning Files are not end-to-end encrypted
+Unlike vault items, file contents and names are stored as-is on the server-side storage backend. Protect the backend accordingly: keep S3 buckets private, use an `https` endpoint, and enable server-side encryption on the bucket.
+:::
+
+An administrator chooses the backend under **Settings → Vault Storage**:
+
+| Backend | Notes |
+|---|---|
+| Disabled (default) | The Files area is shown but uploads are refused. |
+| Local disk | A directory on the server, created with owner-only permissions. It is **not** included in Pika's database backup — back it up separately. |
+| S3 bucket | Any S3-compatible service (AWS S3, MinIO, Cloudflare R2, …). Supports a key prefix and path-style URLs. The secret access key is sealed with the server encryption key, so the key must be initialized and unlocked before it can be saved. **Test connection** probes unsaved values. |
+
+Objects are written under `vault/<user id>/<file id>` (after the optional S3 prefix). Names and folders live in Pika's database, so renaming and moving never touch the backend. Switching backends does not migrate existing files: they stay listed but return `409` on download until you switch back.
+
+Uploads are streamed straight to the backend without buffering, so there is no size limit by default. Set `PIKA_SERVER_LIMITS_VAULT_FILE_BODY_MB` to cap them. Deleting a user or resetting a vault also deletes that user's files.
+
 ## Sharing
 
 Sharing between users is **not implemented** in this release. Each vault is private to a single user. Cross-user share links with expiry are on the roadmap (Dalga 3).
@@ -149,6 +173,13 @@ All endpoints live under `/api/v1/me/vault/*` and require an authenticated sessi
 | POST | `/me/vault/items-restore/{id}` | Restore from trash |
 | POST | `/me/vault/items-use/{id}` | Bump `last_used_at` for "recently used" sorting |
 | GET | `/me/vault/items-versions/{id}` | Item edit history (newest first) |
+| GET | `/me/vault/files` | Storage status plus every file and folder node |
+| POST | `/me/vault/files-folder` | Create a folder (`{parent_id, name}`; `/` in name creates nested folders) |
+| PUT | `/me/vault/files-upload?name=&parent_id=&path=&replace=` | Stream the raw request body as a file; `path` creates relative folders on demand |
+| GET | `/me/vault/files-content/{id}` | Download (supports `Range`); `?download=1` forces attachment |
+| PUT | `/me/vault/files-content/{id}?if_updated_at=` | Replace the file's content with the raw body; `409` if it changed since `if_updated_at` |
+| PATCH | `/me/vault/files/{id}` | Rename and/or move (`{name, parent_id}`) |
+| DELETE | `/me/vault/files/{id}` | Delete a file, or a folder recursively |
 
 The list filter parameters:
 

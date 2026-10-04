@@ -15,11 +15,8 @@
     FileBadge,
     ShieldCheck,
     Plus,
-    Lock,
-    Clock,
     Folder,
     FolderOpen,
-    Inbox,
     ChevronRight,
     ChevronDown,
     X,
@@ -30,6 +27,9 @@
     Check,
   } from "lucide-svelte";
   import { vaultStore } from "@/lib/vault/store.svelte";
+  import { addToast } from "@/lib/store/toast.svelte";
+  import { apiErrorMessage } from "@/lib/api/client";
+  import { ITEM_DRAG_MIME } from "./VaultSidebar.svelte";
   import { typeLabel, vaultItemAccent } from "@/lib/vault/templates";
   import type {
     VaultItem,
@@ -44,16 +44,32 @@
      *  dialog can default the folder field. Empty string = no
      *  folder context. */
     onNew: (defaultFolder: string) => void;
+    /** Which bucket the sidebar selected. */
+    view: "active" | "archived" | "trash";
+    favoritesOnly: boolean;
+    /** Restrict to one folder (case-insensitive); null shows every folder grouped. */
+    folder: string | null;
   }
-  let { selectedId, onSelect, onNew }: Props = $props();
+  let { selectedId, onSelect, onNew, view, favoritesOnly, folder }: Props =
+    $props();
 
-  // View tab. The server-evaluable filters (type, favorite, archived,
-  // trash) live here; the rest run client-side because tags / titles
-  // / folders are encrypted at rest.
-  let view = $state<"active" | "archived" | "trash">("active");
+  // The server-evaluable filters (type, favorite, archived, trash) are
+  // sent with the list request; the rest run client-side because tags /
+  // titles / folders are encrypted at rest.
   let typeFilter = $state<VaultItemType | "">("");
   let q = $state("");
-  let favoritesOnly = $state(false);
+
+  const heading = $derived(
+    folder !== null
+      ? folder
+      : view === "trash"
+        ? "Trash"
+        : view === "archived"
+          ? "Archive"
+          : favoritesOnly
+            ? "Favorites"
+            : "All items",
+  );
 
   // Sentinel keys for the two pseudo-buckets in the grouped view.
   // Real folder names are stored verbatim. We keep them constants
@@ -220,6 +236,7 @@
 
   const grouped = $derived.by<{ groups: Group[]; totalMatched: number }>(() => {
     const needle = q.trim().toLowerCase();
+    const onlyFolder = folder !== null ? folder.trim().toLowerCase() : null;
     const byFolder = new Map<string, { display: string; items: VaultItem[] }>();
     const none: VaultItem[] = [];
     let totalMatched = 0;
@@ -236,6 +253,8 @@
       }
       if (favoritesOnly && !i.favorite) continue;
       if (typeFilter && i.type !== typeFilter) continue;
+      if (onlyFolder !== null && decryptedFolder(i).toLowerCase() !== onlyFolder)
+        continue;
       if (needle) {
         const t = decryptedTitle(i).toLowerCase();
         const tags = decryptedTags(i).map((x) => x.toLowerCase());
@@ -298,13 +317,37 @@
   // All group keys, used by the Collapse All button.
   const allGroupKeys = $derived(grouped.groups.map((g) => g.key));
 
-  // ─── Lock countdown footer ──────────────────────────────────────
+  // ─── Drag & drop between folders ────────────────────────────────
+  //
+  // Rows are draggable; dropping onto a folder header here (or a folder
+  // in the sidebar) moves the item. The "(No folder)" header clears it.
+  let dropGroup = $state<string | null>(null);
 
-  function formatCountdown(total: number): string {
-    if (total <= 0) return "0:00";
-    const m = Math.floor(total / 60);
-    const s = total % 60;
-    return `${m}:${s.toString().padStart(2, "0")}`;
+  function onRowDragStart(e: DragEvent, item: VaultItem) {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData(ITEM_DRAG_MIME, item.id);
+    e.dataTransfer.setData("text/plain", decryptedTitle(item));
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function acceptsItem(e: DragEvent): boolean {
+    return Array.from(e.dataTransfer?.types ?? []).includes(ITEM_DRAG_MIME);
+  }
+
+  async function onGroupDrop(e: DragEvent, group: { key: string; name: string; pseudo: boolean }) {
+    e.preventDefault();
+    dropGroup = null;
+    const id = e.dataTransfer?.getData(ITEM_DRAG_MIME);
+    const item = id ? vaultStore.items.find((i) => i.id === id) : undefined;
+    if (!item) return;
+    const target = group.pseudo ? "" : group.name;
+    if (decryptedFolder(item).toLowerCase() === target.toLowerCase()) return;
+    try {
+      await vaultStore.updateItem(item.id, { expected_version: item.version }, { folder: target });
+      addToast(target ? `Moved to ${target}` : "Removed from folder", "success", 2000);
+    } catch (err) {
+      addToast(apiErrorMessage(err, "Failed to move item"), "alert");
+    }
   }
 
   // ─── Item row helpers ───────────────────────────────────────────
@@ -471,80 +514,56 @@
   }}
 />
 
-<!-- Sidebar surface mirrors Settings.svelte's sidebar tier
-     (`bg-slate-50 dark:bg-warm-800`) so navigating from Settings
-     into Vault feels like the same shell. Previously we used
-     warm-950 here to read as a "deep app canvas" against the
-     warm-900 page bg, but that diverged from Settings and the
-     contrast against the editor (`warm-950`) was actually
-     stronger when sidebar = warm-800. -->
+<!-- Middle column: item list for the bucket chosen in VaultSidebar. -->
 <div
-  class="flex flex-col h-full w-80 border-r border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-800"
+  class="flex flex-col h-full w-[22rem] shrink-0 border-r border-slate-200 dark:border-warm-700 bg-white dark:bg-warm-900"
 >
-  <!-- View tabs. Tab buttons sit on the warm-800 sidebar; the
-       hover surface goes one step lighter (warm-700) to match
-       Settings.svelte's pattern. Active tab keeps the solid
-       accent-600 fill since it's a high-emphasis "current view"
-       indicator rather than a soft nav highlight. -->
-  <div class="flex border-b border-slate-200 dark:border-warm-700 text-xs">
-    <button
-      class="flex-1 py-2 cursor-pointer flex items-center justify-center gap-1.5
-        {view === 'active'
-        ? 'bg-accent-600 text-white'
-        : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700'}"
-      onclick={() => (view = "active")}
-    >
-      <Inbox size={12} /> Items
-    </button>
-    <button
-      class="flex-1 py-2 cursor-pointer flex items-center justify-center gap-1.5
-        {view === 'archived'
-        ? 'bg-accent-600 text-white'
-        : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700'}"
-      onclick={() => (view = "archived")}
-    >
-      <Archive size={12} /> Archive
-    </button>
-    <button
-      class="flex-1 py-2 cursor-pointer flex items-center justify-center gap-1.5
-        {view === 'trash'
-        ? 'bg-accent-600 text-white'
-        : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-warm-700'}"
-      onclick={() => (view = "trash")}
-    >
-      <Trash2 size={12} /> Trash
-    </button>
-  </div>
-
-  <!-- Search + filters -->
-  <div class="p-2.5 space-y-2 border-b border-slate-200 dark:border-warm-700">
-    <div class="relative">
-      <Search
-        size={14}
-        class="absolute top-1/2 left-2.5 -translate-y-1/2 text-slate-400 pointer-events-none"
-      />
-      <input
-        type="text"
-        bind:value={q}
-        placeholder="Search title, tag, folder..."
-        class="w-full pl-8 pr-7 py-1.5 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500"
-      />
-      {#if q}
+  <div class="px-3 pt-3 pb-2.5 space-y-2.5 border-b border-slate-200 dark:border-warm-700">
+    <div class="flex items-center gap-2">
+      <h2 class="flex-1 min-w-0 truncate text-base font-semibold text-slate-800 dark:text-slate-100">
+        {heading}
+      </h2>
+      <span class="text-[11px] tabular-nums text-slate-400 dark:text-slate-500">
+        {grouped.totalMatched}
+      </span>
+      {#if view === "active"}
         <button
-          onclick={() => (q = "")}
-          class="absolute top-1/2 right-1.5 -translate-y-1/2 p-0.5 rounded hover:bg-slate-100 dark:hover:bg-warm-700 cursor-pointer"
-          title="Clear search"
-          aria-label="Clear search"
+          onclick={() => onNew(folder ?? "")}
+          class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded bg-accent-600 text-white font-medium hover:bg-accent-700 cursor-pointer"
+          title="New item"
         >
-          <X size={11} class="text-slate-400" />
+          <Plus size={12} /> New
         </button>
       {/if}
     </div>
 
     <div class="flex items-center gap-1.5">
+      <div class="relative flex-1">
+        <Search
+          size={14}
+          class="absolute top-1/2 left-2.5 -translate-y-1/2 text-slate-400 pointer-events-none"
+        />
+        <input
+          type="text"
+          bind:value={q}
+          placeholder="Search title, tag, folder..."
+          class="w-full pl-8 pr-7 py-1.5 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-500"
+        />
+        {#if q}
+          <button
+            onclick={() => (q = "")}
+            class="absolute top-1/2 right-1.5 -translate-y-1/2 p-0.5 rounded hover:bg-slate-100 dark:hover:bg-warm-700 cursor-pointer"
+            title="Clear search"
+            aria-label="Clear search"
+          >
+            <X size={11} class="text-slate-400" />
+          </button>
+        {/if}
+      </div>
       <select
         bind:value={typeFilter}
-        class="flex-1 px-2 py-1 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-accent-500"
+        aria-label="Filter by type"
+        class="w-28 px-2 py-1.5 text-xs rounded border border-slate-300 dark:border-warm-600 bg-white dark:bg-warm-800 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-accent-500"
       >
         <option value="">All types</option>
         <option value="login">Login</option>
@@ -558,31 +577,12 @@
         <option value="license">License</option>
         <option value="tls_cert">TLS</option>
       </select>
-      <button
-        onclick={() => (favoritesOnly = !favoritesOnly)}
-        class="p-1.5 rounded border cursor-pointer {favoritesOnly
-          ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300'
-          : 'border-slate-300 dark:border-warm-600 hover:bg-slate-100 dark:hover:bg-warm-700 text-slate-400'}"
-        title="Favorites only"
-        aria-pressed={favoritesOnly}
-      >
-        <Star size={13} fill={favoritesOnly ? "currentColor" : "none"} />
-      </button>
     </div>
-
-    {#if view === "active"}
-      <button
-        onclick={() => onNew("")}
-        class="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs rounded bg-accent-600 text-white font-medium hover:bg-accent-700 cursor-pointer"
-      >
-        <Plus size={12} /> New item
-      </button>
-    {/if}
   </div>
 
   <!-- Group control strip (expand/collapse all) — only shown when
        there's more than one group to act on, otherwise it's noise. -->
-  {#if view === "active" && grouped.groups.length > 1}
+  {#if view === "active" && folder === null && grouped.groups.length > 1}
     <div
       class="flex items-center justify-between px-3 py-1 border-b border-slate-100 dark:border-warm-800 text-[10px] uppercase tracking-wider text-slate-400"
     >
@@ -644,7 +644,7 @@
           <div class="text-xs">
             Archived items stay in your vault but out of the active list.
           </div>
-        {:else if q || typeFilter || favoritesOnly}
+        {:else if q || typeFilter || favoritesOnly || folder !== null}
           <Search size={28} class="mb-3 opacity-40" />
           <div
             class="text-sm font-medium text-slate-600 dark:text-slate-300 mb-1"
@@ -652,7 +652,8 @@
             No items match
           </div>
           <div class="text-xs">
-            Try a different search, type, or clear the favorites filter.
+            Try a different search or type filter, or drag items here from
+            another folder.
           </div>
         {:else}
           <KeyRound size={28} class="mb-3 opacity-40" />
@@ -666,7 +667,7 @@
             your browser before it reaches the server.
           </div>
           <button
-            onclick={() => onNew("")}
+            onclick={() => onNew(folder ?? "")}
             class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-accent-600 text-white font-medium hover:bg-accent-700 cursor-pointer"
           >
             <Plus size={12} /> Create your first item
@@ -745,7 +746,24 @@
             </form>
           {:else}
             <div
-              class="relative flex items-center hover:bg-slate-100 dark:hover:bg-warm-700 group/folder"
+              role="group"
+              aria-label="Folder {group.name}"
+              class="relative flex items-center group/folder border border-transparent
+                {dropGroup === group.key
+                ? 'bg-accent-50 dark:bg-accent-900/40 border-dashed !border-accent-400 dark:!border-accent-500'
+                : 'hover:bg-slate-100 dark:hover:bg-warm-700'}"
+              ondragover={(e) => {
+                if (view !== "active" || !acceptsItem(e)) return;
+                e.preventDefault();
+                if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                dropGroup = group.key;
+              }}
+              ondragleave={(e) => {
+                const next = e.relatedTarget as Node | null;
+                if (next && (e.currentTarget as HTMLElement).contains(next)) return;
+                if (dropGroup === group.key) dropGroup = null;
+              }}
+              ondrop={(e) => onGroupDrop(e, group)}
             >
               <button
                 class="flex-1 min-w-0 flex items-center gap-1.5 px-2.5 py-2 text-xs cursor-pointer"
@@ -840,6 +858,10 @@
                      can sit on top without nesting interactive
                      elements. The kebab fades in on row hover. -->
                 <div
+                  role="listitem"
+                  draggable={view === "active"}
+                  ondragstart={(e) => onRowDragStart(e, item)}
+                  ondragend={() => (dropGroup = null)}
                   class="relative flex items-stretch border-l-2 group/row
                   {selectedId === item.id
                     ? 'bg-accent-50 border-accent-500 dark:bg-accent-900/40'
@@ -1042,25 +1064,4 @@
     {/if}
   </div>
 
-  <!-- Idle-lock status footer. Countdown re-derives every second
-       from the store; the Lock button gives the user an explicit
-       escape hatch when stepping away. -->
-  <div
-    class="flex items-center gap-2 px-3 py-2 border-t border-slate-200 dark:border-warm-700 text-[11px] text-slate-500 dark:text-slate-400"
-  >
-    <Clock size={12} class="shrink-0" />
-    <span
-      class="flex-1 tabular-nums"
-      title="Vault auto-locks after this time without activity"
-    >
-      Locks in {formatCountdown(vaultStore.remainingLockSeconds)}
-    </span>
-    <button
-      onclick={() => vaultStore.lock()}
-      class="flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-100 dark:hover:bg-warm-700 cursor-pointer"
-      title="Lock the vault now"
-    >
-      <Lock size={11} /> Lock
-    </button>
-  </div>
 </div>

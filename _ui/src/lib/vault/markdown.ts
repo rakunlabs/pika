@@ -130,8 +130,32 @@ interface HeadingBlock {
 interface RuleBlock {
   kind: 'rule';
 }
+interface TableBlock {
+  kind: 'table';
+  head: string[];
+  align: ('left' | 'center' | 'right' | '')[];
+  rows: string[][];
+}
 
-type Block = CodeBlock | ListBlock | QuoteBlock | ParaBlock | HeadingBlock | RuleBlock;
+type Block = CodeBlock | ListBlock | QuoteBlock | ParaBlock | HeadingBlock | RuleBlock | TableBlock;
+
+// GFM table: a pipe row followed by a delimiter row (|---|:--:|).
+const TABLE_DELIM = /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/;
+
+function splitRow(line: string): string[] {
+  let t = line.trim();
+  if (t.startsWith('|')) t = t.slice(1);
+  if (t.endsWith('|') && !t.endsWith('\\|')) t = t.slice(0, -1);
+  return t.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
+}
+
+function isTableStart(lines: string[], i: number): boolean {
+  const t = lines[i].trim();
+  if (!t.includes('|') || i + 1 >= lines.length) return false;
+  const d = lines[i + 1].trim();
+  if (!d.includes('|') || !TABLE_DELIM.test(d)) return false;
+  return splitRow(t).length === splitRow(d).length;
+}
 
 // Opening fence. Must stay in sync between the block detector and the
 // paragraph collector — a mismatch (e.g. "```c++") previously left the
@@ -174,6 +198,24 @@ function tokenize(src: string): Block[] {
     if (head) {
       blocks.push({ kind: 'heading', level: head[1].length, text: head[2] });
       i++;
+      continue;
+    }
+
+    // Table.
+    if (isTableStart(lines, i)) {
+      const head = splitRow(trimmed);
+      const align = splitRow(lines[i + 1]).map((c) => {
+        const l = c.startsWith(':');
+        const r = c.endsWith(':');
+        return l && r ? 'center' : r ? 'right' : l ? 'left' : '';
+      }) as TableBlock['align'];
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].trim() !== '' && lines[i].includes('|')) {
+        rows.push(splitRow(lines[i]));
+        i++;
+      }
+      blocks.push({ kind: 'table', head, align, rows });
       continue;
     }
 
@@ -224,6 +266,7 @@ function tokenize(src: string): Block[] {
       if (/^[-*+]\s+/.test(t)) break;
       if (/^\d+\.\s+/.test(t)) break;
       if (/^-{3,}\s*$/.test(t) || /^\*{3,}\s*$/.test(t)) break;
+      if (isTableStart(lines, i)) break;
       buf.push(lines[i]);
       i++;
     }
@@ -283,8 +326,37 @@ export function renderMarkdown(src: string): string {
       case 'list': {
         const tag = b.ordered ? 'ol' : 'ul';
         const cls = b.ordered ? 'list-decimal' : 'list-disc';
-        const items = b.items.map((it) => `<li>${renderInline(it)}</li>`).join('');
-        out.push(`<${tag} class="${cls} pl-5 my-2 space-y-0.5">${items}</${tag}>`);
+        const isTask = (it: string) => /^\[( |x|X)\]\s+/.test(it);
+        const allTasks = !b.ordered && b.items.length > 0 && b.items.every(isTask);
+        const items = b.items
+          .map((it) => {
+            const m = /^\[( |x|X)\]\s+(.*)$/.exec(it);
+            if (!m) return `<li>${renderInline(it)}</li>`;
+            const done = m[1] !== ' ';
+            const box = `<input type="checkbox" disabled${done ? ' checked' : ''} class="mr-1.5 align-middle accent-accent-600" />`;
+            return `<li${allTasks ? ' class="list-none"' : ''}>${box}<span${done ? ' class="line-through text-slate-400"' : ''}>${renderInline(m[2])}</span></li>`;
+          })
+          .join('');
+        out.push(`<${tag} class="${allTasks ? '' : cls} ${allTasks ? 'pl-1' : 'pl-5'} my-2 space-y-0.5">${items}</${tag}>`);
+        break;
+      }
+      case 'table': {
+        const cell = (tag: 'th' | 'td', text: string, idx: number) => {
+          const a = b.align[idx];
+          const style = a ? ` style="text-align:${a}"` : '';
+          const cls =
+            tag === 'th'
+              ? 'px-3 py-1.5 font-semibold border border-slate-200 dark:border-warm-700 bg-slate-50 dark:bg-warm-800'
+              : 'px-3 py-1.5 border border-slate-200 dark:border-warm-700';
+          return `<${tag} class="${cls}"${style}>${renderInline(text)}</${tag}>`;
+        };
+        const head = b.head.map((h, idx) => cell('th', h, idx)).join('');
+        const rows = b.rows
+          .map((r) => `<tr>${b.head.map((_, idx) => cell('td', r[idx] ?? '', idx)).join('')}</tr>`)
+          .join('');
+        out.push(
+          `<div class="my-2 overflow-x-auto"><table class="text-sm border-collapse"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`,
+        );
         break;
       }
       case 'para': {

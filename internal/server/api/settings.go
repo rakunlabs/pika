@@ -30,6 +30,7 @@ func (a *api) getSettings(c *ada.Context) error {
 		// boolean "is set" indicator so the SPA can render "leave blank to
 		// keep" / offer an explicit clear without ever holding the value.
 		maskAuthSecrets(settings.Auth)
+		settings.VaultFiles.MaskSecrets()
 	}
 
 	return c.SetStatus(http.StatusOK).SendJSON(settings)

@@ -269,6 +269,9 @@ func (a *api) resetMyVault(c *ada.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := a.svc.PurgeUserVaultFiles(ctx, userID); err != nil {
+		return err
+	}
 	return c.SetStatus(http.StatusOK).SendJSON(vaultResetResponse{ItemsDeleted: n})
 }
 

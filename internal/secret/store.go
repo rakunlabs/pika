@@ -124,6 +124,10 @@ func (s *Storage) VaultItemVersions() service.VaultItemVersionStorage {
 	return s.backend.VaultItemVersions()
 }
 
+func (s *Storage) VaultFiles() service.VaultFileStorage {
+	return s.backend.VaultFiles()
+}
+
 // Tx executes a function within a transaction. The inner Storage
 // shares the same Manager pointer so any Encrypt/Decrypt call inside
 // a transaction sees the same key state as the outer scope.

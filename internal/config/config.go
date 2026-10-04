@@ -112,6 +112,10 @@ type Limits struct {
 	RequestBodyMB int64 `cfg:"request_body_mb" default:"32"`
 	// BackupBodyMB caps the backup restore upload (POST /api/v1/backup).
 	BackupBodyMB int64 `cfg:"backup_body_mb" default:"1024"`
+	// VaultFileBodyMB caps personal-vault file uploads
+	// (PUT /api/v1/me/vault/files-upload). Uploads are streamed to the
+	// storage backend, so the default is unlimited.
+	VaultFileBodyMB int64 `cfg:"vault_file_body_mb" default:"0"`
 	// ExternalResponseMB caps responses read from external backends
 	// (Vault, Consul, AWS, GCP, Azure, Kubernetes, etcd, HTTP, GitLab).
 	ExternalResponseMB int64 `cfg:"external_response_mb" default:"16"`
@@ -124,6 +128,9 @@ func (l Limits) RequestBodyBytes() int64 { return l.RequestBodyMB * mib }
 
 // BackupBodyBytes returns the backup restore body limit in bytes (0 = unlimited).
 func (l Limits) BackupBodyBytes() int64 { return l.BackupBodyMB * mib }
+
+// VaultFileBodyBytes returns the vault upload body limit in bytes (0 = unlimited).
+func (l Limits) VaultFileBodyBytes() int64 { return l.VaultFileBodyMB * mib }
 
 // ExternalResponseBytes returns the external response limit in bytes (0 = unlimited).
 func (l Limits) ExternalResponseBytes() int64 { return l.ExternalResponseMB * mib }

@@ -206,6 +206,11 @@ func (s *userStorage) cascadeDelete(ctx context.Context, userID string) error {
 	if err := s.store.vaultAccountsAt(s.scope).Delete(ctx, userID); err != nil {
 		return err
 	}
+	// Vault file metadata. Blob content is removed by the service
+	// layer (PurgeUserVaultFiles) before the user row is deleted.
+	if err := s.store.vaultFilesAt(s.scope).DeleteAllByUser(ctx, userID); err != nil {
+		return err
+	}
 	return s.store.sessionsAt(s.scope).DeleteByUserID(ctx, userID)
 }
 

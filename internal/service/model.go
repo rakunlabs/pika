@@ -43,6 +43,7 @@ type Storage interface {
 	VaultAccounts() VaultAccountStorage
 	VaultItems() VaultItemStorage
 	VaultItemVersions() VaultItemVersionStorage
+	VaultFiles() VaultFileStorage
 	Audit() AuditStorage
 
 	// Tx executes a function within a transaction.

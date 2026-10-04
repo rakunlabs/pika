@@ -25,6 +25,7 @@ const (
 	bucketVaultAccounts     = "vault_accounts"
 	bucketVaultItems        = "vault_items"
 	bucketVaultItemVersions = "vault_item_versions"
+	bucketVaultFiles        = "vault_files"
 	bucketAudit             = "audit_log"
 )
 
@@ -162,8 +163,11 @@ func (s *Storage) registerBuckets() error {
 	//        which falls back to the config value. Also persists
 	//        EventLog *service.EventLogSettings, which was previously
 	//        dropped on write; nil keeps the default (enabled).
+	//   v10 — added VaultFiles *service.VaultFilesSettings (personal
+	//        vault file storage backend). Existing rows decode with nil,
+	//        which keeps the file area disabled.
 	if s.settings, err = bw.RegisterBucket[settingsRow](s.db, bucketSettings,
-		bw.WithVersion[settingsRow](9),
+		bw.WithVersion[settingsRow](10),
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketSettings, err)
 	}
@@ -218,6 +222,12 @@ func (s *Storage) registerBuckets() error {
 		bw.WithVersion[vaultItemVersionRow](2),
 	); err != nil {
 		return fmt.Errorf("bw register %s: %w", bucketVaultItemVersions, err)
+	}
+
+	if s.vaultFiles, err = bw.RegisterBucket[vaultFileRow](s.db, bucketVaultFiles,
+		bw.WithVersion[vaultFileRow](1),
+	); err != nil {
+		return fmt.Errorf("bw register %s: %w", bucketVaultFiles, err)
 	}
 
 	if s.audit, err = bw.RegisterBucket[auditRow](s.db, bucketAudit,

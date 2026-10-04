@@ -508,6 +508,7 @@ export interface Settings {
   external_permissions?: ExternalPermissionsSettings;
   forward_auth?: ForwardAuthSettings;
   vault?: VaultSettings;
+  vault_files?: VaultFilesSettings;
   server_tls?: ServerTLSSettings;
   audit?: AuditSettings;
   public_endpoints?: PublicEndpoint[];
@@ -827,6 +828,26 @@ export interface ClusterNode {
 // it accessible again without any migration.
 export interface VaultSettings {
   disabled?: boolean;
+}
+
+// VaultFilesSettings selects where personal-vault file uploads are
+// stored. backend "" disables the file area. The S3 secret is never
+// returned; secret_access_key_set reports whether one is stored and an
+// empty secret on save keeps it.
+export interface VaultFilesSettings {
+  backend: '' | 'local' | 's3';
+  local: { path: string };
+  s3: {
+    endpoint: string;
+    region?: string;
+    bucket: string;
+    prefix?: string;
+    access_key_id: string;
+    use_path_style?: boolean;
+    secret_access_key?: string;
+    secret_access_key_set?: boolean;
+    clear_secret_access_key?: boolean;
+  };
 }
 
 // Capability descriptor returned by /api/v1/info

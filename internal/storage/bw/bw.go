@@ -70,6 +70,7 @@ type Storage struct {
 	vaultAccounts     *bw.Bucket[vaultAccountRow]
 	vaultItems        *bw.Bucket[vaultItemRow]
 	vaultItemVersions *bw.Bucket[vaultItemVersionRow]
+	vaultFiles        *bw.Bucket[vaultFileRow]
 	audit             *bw.Bucket[auditRow]
 }
 

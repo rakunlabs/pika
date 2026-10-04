@@ -15,6 +15,7 @@
         Plug,
         Lock,
         ScrollText,
+        Database,
     } from "lucide-svelte";
     import { appStore } from "@/lib/store/store.svelte";
     import { link, replace, router } from "svelte-spa-router";
@@ -24,6 +25,7 @@
     import AppearanceSection from "@/pages/settings/AppearanceSection.svelte";
     import AccountSecuritySection from "@/pages/settings/AccountSecuritySection.svelte";
     import VaultSection from "@/pages/settings/VaultSection.svelte";
+    import VaultStorageSection from "@/pages/settings/VaultStorageSection.svelte";
     import TokensSection from "@/pages/settings/TokensSection.svelte";
     import MCPSection from "@/pages/settings/MCPSection.svelte";
     import ExternalResourcesSection from "@/pages/settings/ExternalResourcesSection.svelte";
@@ -42,6 +44,7 @@
         | "appearance"
         | "account_security"
         | "vault"
+        | "vault_files"
         | "tokens"
         | "mcp"
         | "external"
@@ -63,6 +66,7 @@
         appearance: null,
         account_security: null,
         vault: null,
+        vault_files: "settings.manage",
         tokens: "tokens.manage",
         mcp: "settings.manage",
         external: "settings.manage",
@@ -82,6 +86,7 @@
         { key: "appearance", label: "Appearance", icon: Palette },
         { key: "account_security", label: "Account Security", icon: KeyRound },
         { key: "vault", label: "Personal Vault", icon: Vault },
+        { key: "vault_files", label: "Vault Storage", icon: Database },
         { key: "tokens", label: "Access Tokens", icon: Key },
         { key: "mcp", label: "MCP", icon: Plug },
         { key: "external", label: "External Resources", icon: Globe },
@@ -110,7 +115,10 @@
             ) {
                 return false;
             }
-            if (s.key === "vault" && !(appStore.info?.vault_enabled ?? false)) {
+            if (
+                (s.key === "vault" || s.key === "vault_files") &&
+                !(appStore.info?.vault_enabled ?? false)
+            ) {
                 return false;
             }
             if (s.key === "certificates" && appStore.info?.managed_tls_enabled !== true) {
@@ -174,6 +182,8 @@
                 <AccountSecuritySection />
             {:else if activeSection === "vault"}
                 <VaultSection />
+            {:else if activeSection === "vault_files"}
+                <VaultStorageSection />
             {:else if activeSection === "tokens"}
                 <TokensSection />
             {:else if activeSection === "mcp"}

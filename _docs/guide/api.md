@@ -148,6 +148,7 @@ Reserved under `/api/v1/me/*`. Every authenticated user can read and modify thei
 | **TOTP**            | `GET /me/totp`; `POST /me/totp/begin`, `/finish`, `/recovery-codes`; `DELETE /me/totp`                                              |
 | **Personal vault**  | `GET /me/vault/status`, `/account`; `POST /me/vault/setup`, `/unlock-check`, `/rotate-password`, `/recovery-kit`; `PUT /me/vault/session-lock`; `DELETE /me/vault` |
 | **Vault items**     | `GET / POST /me/vault/items`; `GET / PUT / DELETE /me/vault/items/*`; `POST /me/vault/items-restore/*`, `/items-use/*`; `GET /me/vault/items-versions/*` |
+| **Vault files**     | `GET /me/vault/files`; `POST /me/vault/files-folder`; `PUT /me/vault/files-upload`; `GET / PUT /me/vault/files-content/*`; `PATCH / DELETE /me/vault/files/*` |
 
 ## Authentication endpoints
 

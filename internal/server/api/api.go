@@ -171,6 +171,17 @@ func Handle(mux Muxes, deps Deps) error {
 	m.POST("/api/v1/me/vault/items-use/*", m.Wrap(api.touchMyVaultItem))
 	m.GET("/api/v1/me/vault/items-versions/*", m.Wrap(api.listMyVaultItemVersions))
 
+	// Vault file browser. Uploads stream the raw body (no multipart);
+	// content is served with a sandbox CSP and forced download for any
+	// type that could execute in the browser.
+	m.GET("/api/v1/me/vault/files", m.Wrap(api.listMyVaultFiles))
+	m.POST("/api/v1/me/vault/files-folder", m.Wrap(api.createMyVaultFolder))
+	m.PUT("/api/v1/me/vault/files-upload", m.Wrap(api.uploadMyVaultFile))
+	m.GET("/api/v1/me/vault/files-content/*", m.Wrap(api.getMyVaultFileContent))
+	m.PUT("/api/v1/me/vault/files-content/*", m.Wrap(api.putMyVaultFileContent))
+	m.PATCH("/api/v1/me/vault/files/*", m.Wrap(api.updateMyVaultFile))
+	m.DELETE("/api/v1/me/vault/files/*", m.Wrap(api.deleteMyVaultFile))
+
 	// User management endpoints.
 	m.GET("/api/v1/users", m.Wrap(api.withPerm(service.CapUsersManage, api.listUsers)))
 	m.POST("/api/v1/users", m.Wrap(api.withPerm(service.CapUsersManage, api.createUser)))
@@ -288,6 +299,7 @@ func Handle(mux Muxes, deps Deps) error {
 	// Settings
 	m.GET("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.getSettings)))
 	m.POST("/api/v1/settings", m.Wrap(api.withPerm(service.CapSettingsManage, api.postSettings)))
+	m.POST("/api/v1/settings-vault-files/test", m.Wrap(api.withPerm(service.CapSettingsManage, api.testVaultFilesSettings)))
 	m.GET("/api/v1/cluster/status", m.Wrap(api.withPerm(service.CapSettingsManage, api.getClusterStatus)))
 
 	// Public endpoints diagnostics. The endpoint configurations

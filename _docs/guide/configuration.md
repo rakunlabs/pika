@@ -53,6 +53,7 @@ The most common variables. All `PIKA_*` env vars use the `PIKA_` prefix and `_` 
 | `PIKA_STORAGE_BW_PATH`       | `data/pika`        | Embedded BadgerDB directory.                         |
 | `PIKA_STORAGE_BW_IN_MEMORY`  | `false`            | Run the BadgerDB backend entirely in memory (tests/CI). |
 | `PIKA_SERVER_LIMITS_REQUEST_BODY_MB` | `32`       | Max request body size in MiB (`0` = unlimited).       |
+| `PIKA_SERVER_LIMITS_VAULT_FILE_BODY_MB` | `0`  | Max personal-vault file upload size in MiB (`0` = unlimited). |
 | `PIKA_SERVER_LIMITS_BACKUP_BODY_MB`  | `1024`     | Max backup restore upload size in MiB (`0` = unlimited). |
 | `PIKA_SERVER_LIMITS_EXTERNAL_RESPONSE_MB` | `16`  | Max response size read from external backends in MiB (`0` = unlimited). |
 | `PIKA_SERVER_CORS_ALLOW_ORIGINS` | `*`            | Allowed CORS origins (comma-separated, `*` wildcards supported). |

@@ -14,6 +14,7 @@ import type {
   RequestRuleTestResult,
   ServerTLSSettings,
   Settings,
+  VaultFilesSettings,
   VaultSettings,
 } from '@/lib/types/config';
 import { addToast } from '@/lib/store/toast.svelte';
@@ -86,6 +87,29 @@ export function createSettingsStore() {
       addToast(msg, 'alert');
       throw error;
     }
+  }
+
+  // saveVaultFilesSettings stores the vault file storage backend. The
+  // response never echoes the S3 secret, so reload the masked view.
+  async function saveVaultFilesSettings(patch: VaultFilesSettings): Promise<void> {
+    try {
+      await axios.post('/api/v1/settings', { action: 'set', vault_files: patch });
+      settings = await fetchSettings();
+      addToast('Vault storage settings saved.', 'success');
+    } catch (error) {
+      addToast(apiServerMessage(error, 'Failed to save vault storage settings'), 'alert');
+      throw error;
+    }
+  }
+
+  async function testVaultFilesSettings(
+    cfg: VaultFilesSettings,
+  ): Promise<{ ok: boolean; message?: string }> {
+    const response = await axios.post<{ ok: boolean; message?: string }>(
+      '/api/v1/settings-vault-files/test',
+      cfg,
+    );
+    return response.data;
   }
 
   async function saveServerTLSSettings(
@@ -251,6 +275,8 @@ export function createSettingsStore() {
     loadSettings,
     saveSettings,
     saveVaultSettings,
+    saveVaultFilesSettings,
+    testVaultFilesSettings,
     saveServerTLSSettings,
     saveAuditSettings,
     saveMCPSettings,

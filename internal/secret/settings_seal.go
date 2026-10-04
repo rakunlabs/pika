@@ -48,6 +48,9 @@ type sensitivePayload struct {
 	// endpoint's ID so re-ordering the list (which the UI does on
 	// every save) doesn't shuffle secrets onto the wrong endpoint.
 	PublicEndpointStaticTokens map[string][]string `json:"public_endpoint_static_tokens,omitempty"`
+
+	// VaultFilesS3Secret is Settings.VaultFiles.S3.SecretAccessKey.
+	VaultFilesS3Secret string `json:"vault_files_s3_secret,omitempty"`
 }
 
 // sealedHook carries any hook-target secret. We capture secrets
@@ -175,6 +178,11 @@ func extractSecrets(s *service.Settings) *sensitivePayload {
 		}
 	}
 
+	if s.VaultFiles != nil && s.VaultFiles.S3.SecretAccessKey != "" {
+		p.VaultFilesS3Secret = s.VaultFiles.S3.SecretAccessKey
+		s.VaultFiles.S3.SecretAccessKey = ""
+	}
+
 	return p
 }
 
@@ -296,6 +304,10 @@ func injectSecrets(s *service.Settings, p *sensitivePayload) {
 			copy(cp, tokens)
 			ep.Auth.StaticTokens = cp
 		}
+	}
+
+	if s.VaultFiles != nil && p.VaultFilesS3Secret != "" {
+		s.VaultFiles.S3.SecretAccessKey = p.VaultFilesS3Secret
 	}
 }
 
@@ -457,6 +469,9 @@ func isEmptyPayload(p *sensitivePayload) bool {
 				}
 			}
 		}
+	}
+	if p.VaultFilesS3Secret != "" {
+		return false
 	}
 	return true
 }

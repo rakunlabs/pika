@@ -743,6 +743,7 @@ type settingsRow struct {
 	ForwardAuth         *service.ForwardAuthSettings         `bw:"forward_auth"`
 	Auth                *service.AuthSettings                `bw:"auth"`
 	Vault               *service.VaultSettings               `bw:"vault"`
+	VaultFiles          *service.VaultFilesSettings          `bw:"vault_files"`
 	ServerTLS           *service.ServerTLSSettings           `bw:"server_tls"`
 	Audit               *service.AuditSettings               `bw:"audit"`
 	EventLog            *service.EventLogSettings            `bw:"event_log"`

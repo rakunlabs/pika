@@ -86,6 +86,9 @@ type Settings struct {
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 	Auth                *AuthSettings                `json:"auth,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
+	// VaultFiles selects where personal-vault file uploads are stored
+	// (local disk or S3). Nil / empty backend disables the file area.
+	VaultFiles *VaultFilesSettings `json:"vault_files,omitempty"`
 	// Audit overrides the config-file audit settings. Nil means the
 	// config value (audit.retention) applies.
 	Audit *AuditSettings `json:"audit,omitempty"`
@@ -163,6 +166,7 @@ type PatchSettings struct {
 	ForwardAuth         *ForwardAuthSettings         `json:"forward_auth,omitempty"`
 	Auth                *AuthSettings                `json:"auth,omitempty"`
 	Vault               *VaultSettings               `json:"vault,omitempty"`
+	VaultFiles          *VaultFilesSettings          `json:"vault_files,omitempty"`
 	ServerTLS           *ServerTLSSettings           `json:"server_tls,omitempty"`
 	// Audit replaces the stored audit settings. Send an empty object
 	// with retention unset to fall back to the config value.
@@ -306,6 +310,17 @@ func (s *Service) PatchSettings(ctx context.Context, patch *PatchSettings) error
 	// the same patch-update treatment for free.
 	if patch.Vault != nil {
 		settings.Vault = patch.Vault
+	}
+
+	// Vault file storage. An empty S3 secret means "keep the stored
+	// one" because the SPA never receives the stored value back.
+	if patch.VaultFiles != nil {
+		next := patch.VaultFiles.Normalized()
+		next.preserveSecret(settings.VaultFiles)
+		if err := next.Validate(); err != nil {
+			return err
+		}
+		settings.VaultFiles = &next
 	}
 
 	if patch.ServerTLS != nil {

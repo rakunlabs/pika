@@ -353,6 +353,14 @@ Every "no content" surface should communicate **what would be here** and
 These rules cover ItemList / ItemEditor / VaultSetup / VaultUnlock /
 EmergencyKit / NewItemDialog.
 
+### Layout
+
+Unlocked vault = three columns: `VaultSidebar` (w-56, `bg-slate-50 dark:bg-warm-800`,
+same tier as the Settings sidebar) → `ItemList` (w-[22rem], `bg-white dark:bg-warm-900`)
+or `FileBrowser` → detail pane (`ItemEditor` / `FilePreview`). Sidebar rows use the
+active nav-item pattern from §4. Drop targets (folders, breadcrumbs) highlight with
+the same accent wash plus a dashed `accent-400` / `dark:accent-500` border.
+
 ### Item type → color stripe
 
 Every vault item has a `type`. The item-list row and the item-editor hero use

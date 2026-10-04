@@ -8,6 +8,10 @@
   import ItemList from "@/lib/components/vault/ItemList.svelte";
   import ItemEditor from "@/lib/components/vault/ItemEditor.svelte";
   import NewItemDialog from "@/lib/components/vault/NewItemDialog.svelte";
+  import VaultSidebar, {
+    type VaultNav,
+  } from "@/lib/components/vault/VaultSidebar.svelte";
+  import FileBrowser from "@/lib/components/vault/FileBrowser.svelte";
 
   // Top-level state for the page. The store owns the real data; this
   // component just decides which subview renders.
@@ -18,6 +22,19 @@
   // sidebar so the new-item dialog can pre-fill that folder. Empty
   // string = no folder context.
   let newItemDefaultFolder = $state("");
+
+  // Left-nav selection: an item bucket (all / favorites / folder /
+  // archive / trash) or the file browser.
+  let nav = $state<VaultNav>({
+    kind: "items",
+    view: "active",
+    favorites: false,
+    folder: null,
+  });
+  function navigate(next: VaultNav) {
+    nav = next;
+    selectedId = null;
+  }
 
   // The Emergency Kit pin lives on the store now (vaultStore.pendingSecretKey).
   // Setting it on the store BEFORE refreshStatus() flips initialized=true
@@ -108,59 +125,61 @@
       }}
     />
   {:else}
-    <!-- Unlocked: split layout -->
+    <!-- Unlocked: sidebar nav + list + detail -->
     <div class="flex-1 flex overflow-hidden">
-      <ItemList
-        {selectedId}
-        onSelect={(id) => (selectedId = id)}
-        onNew={(folder) => {
-          newItemDefaultFolder = folder;
-          showNew = true;
-        }}
-      />
-      <!-- Right pane. When an ItemEditor is mounted it provides its
-           own `bg-white dark:bg-warm-950` surface; when nothing is
-           selected, this empty-state surface needs the same dark
-           backdrop so the right half doesn't blast white into the
-           dark UI. -->
-      <div class="flex-1 overflow-hidden bg-white dark:bg-warm-950">
-        {#if current}
-          {#key current.item.id + ":" + current.item.version}
-            <ItemEditor
-              item={current.item}
-              title={current.title}
-              tagsCleartext={current.tags}
-              hostnamesCleartext={current.hostnames}
-              folderCleartext={current.folder}
-              payload={current.payload}
-              onClose={() => (selectedId = null)}
-            />
-          {/key}
-        {:else}
-          <!-- Right-pane empty state. Picked up from the same
-               visual vocabulary as the list's empty states so the
-               vault feels like one coherent surface even when
-               nothing is selected. -->
-          <div
-            class="h-full flex flex-col items-center justify-center text-center px-6"
-          >
+      <VaultSidebar {nav} onNavigate={navigate} />
+      {#if nav.kind === "files"}
+        <FileBrowser />
+      {:else}
+        <ItemList
+          {selectedId}
+          view={nav.view}
+          favoritesOnly={nav.favorites}
+          folder={nav.folder}
+          onSelect={(id) => (selectedId = id)}
+          onNew={(folder) => {
+            newItemDefaultFolder = folder;
+            showNew = true;
+          }}
+        />
+        <!-- Right pane. When an ItemEditor is mounted it provides its
+             own `bg-white dark:bg-warm-950` surface; the empty state
+             needs the same backdrop. -->
+        <div class="flex-1 overflow-hidden bg-white dark:bg-warm-950">
+          {#if current}
+            {#key current.item.id + ":" + current.item.version}
+              <ItemEditor
+                item={current.item}
+                title={current.title}
+                tagsCleartext={current.tags}
+                hostnamesCleartext={current.hostnames}
+                folderCleartext={current.folder}
+                payload={current.payload}
+                onClose={() => (selectedId = null)}
+              />
+            {/key}
+          {:else}
             <div
-              class="w-16 h-16 rounded-full bg-slate-100 dark:bg-warm-900 flex items-center justify-center mb-4"
+              class="h-full flex flex-col items-center justify-center text-center px-6"
             >
-              <Lock size={28} class="text-slate-400 opacity-70" />
+              <div
+                class="w-16 h-16 rounded-full bg-slate-100 dark:bg-warm-900 flex items-center justify-center mb-4"
+              >
+                <Lock size={28} class="text-slate-400 opacity-70" />
+              </div>
+              <div
+                class="text-sm font-medium text-slate-700 dark:text-slate-200 mb-1"
+              >
+                Select an item to view it
+              </div>
+              <div class="text-xs text-slate-500 dark:text-slate-400 max-w-sm">
+                Items are decrypted in your browser when you open them. Drag an
+                item onto a folder to file it.
+              </div>
             </div>
-            <div
-              class="text-sm font-medium text-slate-700 dark:text-slate-200 mb-1"
-            >
-              Select an item to view it
-            </div>
-            <div class="text-xs text-slate-500 dark:text-slate-400 max-w-sm">
-              Items are decrypted in your browser when you open them. The server
-              only sees opaque ciphertext.
-            </div>
-          </div>
-        {/if}
-      </div>
+          {/if}
+        </div>
+      {/if}
     </div>
   {/if}
 

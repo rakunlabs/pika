@@ -1607,28 +1607,3 @@
     </div>
   </div>
 {/if}
-
-<style>
-  /* Lightweight typographic polish for the rendered markdown in
-     secure notes. We don't pull in @tailwindcss/typography to keep
-     bundle weight down; this gets us most of the way. */
-  :global(
-      .prose-vault h1,
-      .prose-vault h2,
-      .prose-vault h3,
-      .prose-vault h4,
-      .prose-vault h5,
-      .prose-vault h6
-    ) {
-    color: inherit;
-  }
-  :global(.prose-vault p:first-child) {
-    margin-top: 0;
-  }
-  :global(.prose-vault p:last-child) {
-    margin-bottom: 0;
-  }
-  :global(.prose-vault ul li, .prose-vault ol li) {
-    margin: 0.15rem 0;
-  }
-</style>
