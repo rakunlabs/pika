@@ -1,0 +1,29 @@
+/* Sidebar scrollbar stays hidden until the sidebar is hovered or focused. */
+.VPSidebar {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.2s;
+}
+
+.VPSidebar:hover,
+.VPSidebar:focus-within {
+  scrollbar-color: var(--vp-c-divider) transparent;
+}
+
+.VPSidebar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.VPSidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.VPSidebar::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 4px;
+}
+
+.VPSidebar:hover::-webkit-scrollbar-thumb,
+.VPSidebar:focus-within::-webkit-scrollbar-thumb {
+  background-color: var(--vp-c-divider);
+}
